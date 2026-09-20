@@ -1,0 +1,405 @@
+'use client';
+
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import {
+  Table as TableIcon,
+  Plus,
+  Users,
+  Clock,
+  IndianRupee,
+  ShoppingBag,
+  Receipt,
+  X,
+  RefreshCw,
+  Sparkles,
+  ArrowRight,
+  Utensils,
+  CheckCircle2,
+} from 'lucide-react';
+import { AuthGuard } from '@/components/auth/AuthGuard';
+import { AppShell } from '@/components/layout/AppShell';
+import { useAuthStore } from '@shared/presentation/state/useAuthStore';
+import { TableRemoteDataSource } from '@shared/data/datasources/TableRemoteDataSource';
+import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
+import { TableMaster } from '@shared/domain/models/Table';
+import { OrderMaster } from '@shared/domain/models/Order';
+
+const tableDataSource = new TableRemoteDataSource();
+const orderDataSource = new OrderRemoteDataSource();
+
+export default function TablesPage() {
+  const router = useRouter();
+  const { activeRestaurant, restaurants } = useAuthStore();
+  const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
+
+  const [tables, setTables] = useState<TableMaster[]>([]);
+  const [activeOrders, setActiveOrders] = useState<OrderMaster[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedSection, setSelectedSection] = useState<string>('ALL');
+
+  // Add Table Modal
+  const [addModalOpen, setAddModalOpen] = useState(false);
+  const [tableNumber, setTableNumber] = useState('');
+  const [seatingCapacity, setSeatingCapacity] = useState('4');
+  const [sectionName, setSectionName] = useState('Main Dining');
+  const [savingTable, setSavingTable] = useState(false);
+
+  // Table Detail Action Sheet Modal
+  const [actionTable, setActionTable] = useState<TableMaster | null>(null);
+
+  const loadData = useCallback(async () => {
+    if (!currentRestId) return;
+    try {
+      setLoading(true);
+      const [tablesRes, ordersRes] = await Promise.allSettled([
+        tableDataSource.getTables(currentRestId),
+        orderDataSource.getTodayOrders(currentRestId, 'ALL', 1, 50),
+      ]);
+
+      if (tablesRes.status === 'fulfilled' && Array.isArray(tablesRes.value)) {
+        setTables(tablesRes.value);
+      }
+      if (ordersRes.status === 'fulfilled' && ordersRes.value?.items) {
+        setActiveOrders(ordersRes.value.items);
+      }
+    } catch (err) {
+      console.warn('Failed to load table floor', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [currentRestId]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  // Unique sections list
+  const sections = useMemo(() => {
+    const list = Array.from(new Set(tables.map((t) => t.sectionName || 'Main Dining')));
+    return ['ALL', ...list];
+  }, [tables]);
+
+  // Filtered tables
+  const filteredTables = useMemo(() => {
+    if (selectedSection === 'ALL') return tables;
+    return tables.filter((t) => (t.sectionName || 'Main Dining') === selectedSection);
+  }, [tables, selectedSection]);
+
+  // Handle Add Table
+  const handleAddTable = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!tableNumber.trim()) return;
+
+    try {
+      setSavingTable(true);
+      await tableDataSource.createTable({
+        restaurantId: currentRestId,
+        tableNumber: tableNumber.trim(),
+        seatingCapacity: parseInt(seatingCapacity, 10) || 4,
+        sectionName: sectionName.trim() || 'Main Dining',
+        status: 'AVAILABLE',
+      });
+      await loadData();
+      setTableNumber('');
+      setAddModalOpen(false);
+    } catch (err: any) {
+      alert(err?.message || 'Failed to create table');
+    } finally {
+      setSavingTable(false);
+    }
+  };
+
+  // Find active order for table
+  const getOrderForTable = (table: TableMaster) => {
+    return activeOrders.find(
+      (o) =>
+        (o.tableId === table.id || o.tableName === table.tableNumber || o.tableName === table.tableName) &&
+        o.status !== 'SETTLED' &&
+        o.status !== 'CANCELLED'
+    );
+  };
+
+  const occupiedCount = tables.filter((t) => t.status?.toUpperCase() === 'OCCUPIED' || Boolean(t.activeOrderId)).length;
+
+  return (
+    <AuthGuard>
+      <AppShell>
+        <div className="p-4 sm:p-6 lg:p-8 space-y-6 max-w-7xl mx-auto">
+          {/* Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-[#1E2930] dark:text-[#F3F4F6]">
+                  Floor & Table Management
+                </h1>
+                <span className="rounded-full bg-emerald-500/10 px-3 py-0.5 text-xs font-bold text-emerald-600">
+                  {occupiedCount} Occupied / {tables.length} Total
+                </span>
+              </div>
+              <p className="mt-1 text-xs sm:text-sm text-[#667085] dark:text-[#94A3B8]">
+                Real-time dining room floor plan, table status tracking, and order assignment
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button
+                onClick={loadData}
+                disabled={loading}
+                className="flex items-center gap-2 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-3.5 py-2 text-xs font-semibold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5"
+              >
+                <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                <span>Sync</span>
+              </button>
+
+              <button
+                onClick={() => setAddModalOpen(true)}
+                className="flex items-center gap-2 rounded-xl bg-[#DE8626] px-4 py-2 text-xs font-bold text-white shadow-md shadow-[#DE8626]/20 hover:bg-[#C4721C] transition-colors"
+              >
+                <Plus className="h-4 w-4" />
+                <span>Add Table</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Section Filter Tabs */}
+          <div className="flex items-center gap-2 overflow-x-auto pb-1">
+            {sections.map((sec) => (
+              <button
+                key={sec}
+                onClick={() => setSelectedSection(sec)}
+                className={`shrink-0 rounded-xl px-4 py-2 text-xs font-bold transition-all ${
+                  selectedSection === sec
+                    ? 'bg-[#DE8626] text-white shadow-sm shadow-[#DE8626]/20'
+                    : 'border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#667085] dark:text-[#94A3B8] hover:border-[#DE8626]'
+                }`}
+              >
+                {sec === 'ALL' ? `All Floor (${tables.length})` : sec}
+              </button>
+            ))}
+          </div>
+
+          {/* Tables Grid */}
+          {loading ? (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((n) => (
+                <div
+                  key={n}
+                  className="h-40 rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] animate-pulse"
+                />
+              ))}
+            </div>
+          ) : filteredTables.length === 0 ? (
+            <div className="rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-16 text-center text-xs text-[#667085]">
+              No tables configured in this section. Click "Add Table" to set up your floor plan.
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+              {filteredTables.map((tbl) => {
+                const activeOrder = getOrderForTable(tbl);
+                const isOccupied = tbl.status?.toUpperCase() === 'OCCUPIED' || Boolean(tbl.activeOrderId) || Boolean(activeOrder);
+
+                return (
+                  <div
+                    key={tbl.id}
+                    onClick={() => setActionTable(tbl)}
+                    className={`group relative flex flex-col justify-between rounded-3xl border p-4 shadow-sm transition-all cursor-pointer select-none ${
+                      isOccupied
+                        ? 'border-amber-400/80 bg-gradient-to-br from-amber-500/10 to-[#FFFFFF] dark:to-[#1B2127] hover:border-[#DE8626] hover:shadow-md'
+                        : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] hover:border-[#DE8626] hover:shadow-md'
+                    }`}
+                  >
+                    <div>
+                      {/* Top Header: Seating & Status */}
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="flex items-center gap-1 text-[11px] font-semibold text-[#667085] dark:text-[#94A3B8]">
+                          <Users className="h-3 w-3" />
+                          <span>{tbl.seatingCapacity || 4}p</span>
+                        </span>
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wider ${
+                            isOccupied
+                              ? 'bg-amber-500 text-white'
+                              : 'bg-emerald-500/10 text-emerald-600'
+                          }`}
+                        >
+                          {isOccupied ? 'Occupied' : 'Available'}
+                        </span>
+                      </div>
+
+                      {/* Large Table Number */}
+                      <div className="my-2">
+                        <h3 className="text-xl font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                          T-{tbl.tableNumber}
+                        </h3>
+                        <p className="text-[10px] text-[#667085] dark:text-[#94A3B8] truncate">
+                          {tbl.sectionName || 'Main Dining'}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Bottom Status / Order Info */}
+                    <div className="pt-3 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60 mt-2">
+                      {isOccupied && activeOrder ? (
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-extrabold text-[#DE8626]">
+                            ₹{activeOrder.totalAmount || 0}
+                          </span>
+                          <span className="text-[10px] text-[#667085] truncate max-w-[70px]">
+                            #{activeOrder.id}
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-between text-xs text-[#667085] dark:text-[#94A3B8] group-hover:text-[#DE8626]">
+                          <span className="text-[11px] font-semibold">Seat Guests</span>
+                          <ArrowRight className="h-3 w-3 group-hover:translate-x-0.5 transition-transform" />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* 1. Table Action Sheet Modal */}
+        {actionTable && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+            <div className="w-full max-w-sm rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-6 shadow-2xl">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <TableIcon className="h-5 w-5 text-[#DE8626]" />
+                  <h3 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                    Table T-{actionTable.tableNumber}
+                  </h3>
+                </div>
+                <button onClick={() => setActionTable(null)} className="rounded-lg p-1 text-[#667085]">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="rounded-2xl bg-[#FAF7F2] dark:bg-[#151A20] p-4 space-y-2 text-xs mb-5">
+                <div className="flex justify-between">
+                  <span className="text-[#667085]">Section:</span>
+                  <span className="font-bold">{actionTable.sectionName || 'Main Dining'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[#667085]">Capacity:</span>
+                  <span className="font-bold">{actionTable.seatingCapacity || 4} Guests</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[#667085]">Current Status:</span>
+                  <span
+                    className={`font-bold uppercase ${
+                      actionTable.status?.toUpperCase() === 'OCCUPIED' || Boolean(actionTable.activeOrderId) ? 'text-amber-600' : 'text-emerald-600'
+                    }`}
+                  >
+                    {actionTable.status?.toUpperCase() === 'OCCUPIED' || Boolean(actionTable.activeOrderId) ? 'Occupied' : 'Available'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <button
+                  onClick={() => {
+                    setActionTable(null);
+                    router.push('/pos');
+                  }}
+                  className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#DE8626] py-3 text-xs font-bold text-white shadow-md hover:bg-[#C4721C] transition-colors"
+                >
+                  <ShoppingBag className="h-4 w-4" />
+                  <span>Start Order (Open POS)</span>
+                </button>
+                <button
+                  onClick={() => setActionTable(null)}
+                  className="w-full rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] py-2.5 text-xs font-semibold text-[#667085] hover:bg-black/5"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 2. Add New Table Modal */}
+        {addModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+            <div className="w-full max-w-sm rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-6 shadow-2xl">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">Add Dining Table</h3>
+                <button onClick={() => setAddModalOpen(false)} className="rounded-lg p-1 text-[#667085]">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <form onSubmit={handleAddTable} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-[#667085] uppercase mb-1">
+                    Table Number / Label *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    autoFocus
+                    value={tableNumber}
+                    onChange={(e) => setTableNumber(e.target.value)}
+                    placeholder="e.g. 1, 2A, Rooftop-3"
+                    className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3.5 py-2 text-xs font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-[#667085] uppercase mb-1">
+                    Seating Capacity (Guests) *
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min="1"
+                    max="50"
+                    value={seatingCapacity}
+                    onChange={(e) => setSeatingCapacity(e.target.value)}
+                    placeholder="4"
+                    className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3.5 py-2 text-xs font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-[#667085] uppercase mb-1">
+                    Floor Section *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={sectionName}
+                    onChange={(e) => setSectionName(e.target.value)}
+                    placeholder="e.g. Main Dining, AC Hall, Patio"
+                    className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3.5 py-2 text-xs font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
+                  />
+                </div>
+
+                <div className="pt-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAddModalOpen(false)}
+                    className="flex-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] py-2.5 text-xs font-semibold text-[#667085]"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingTable}
+                    className="flex-1 rounded-xl bg-[#DE8626] py-2.5 text-xs font-bold text-white shadow-md hover:bg-[#C4721C] disabled:opacity-50"
+                  >
+                    {savingTable ? 'Adding...' : 'Add Table'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+      </AppShell>
+    </AuthGuard>
+  );
+}

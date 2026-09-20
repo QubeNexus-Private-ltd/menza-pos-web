@@ -1,0 +1,87 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --menza-bg: #FAF7F2;
+  --menza-surface: #FFFFFF;
+  --menza-primary: #DE8626;
+  --menza-primary-hover: #C4721C;
+  --menza-text: #1E2930;
+  --menza-text-muted: #667085;
+  --menza-border: #E7E1DA;
+}
+
+.dark {
+  --menza-bg: #111418;
+  --menza-surface: #1B2127;
+  --menza-primary: #DE8626;
+  --menza-primary-hover: #C4721C;
+  --menza-text: #F3F4F6;
+  --menza-text-muted: #94A3B8;
+  --menza-border: #2B3540;
+}
+
+body {
+  background-color: var(--menza-bg);
+  color: var(--menza-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Custom scrollbars for POS order lists and catalog */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #D5CEC4;
+  border-radius: 4px;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 4px;
+}
+
+/* Thermal Printer 58mm / 80mm & POS Print Rules */
+@media print {
+  /* Suppress header/footer date and URLs in print output */
+  @page {
+    margin: 0mm !important;
+  }
+
+  /* When printing thermal area specifically */
+  body:has(#thermal-print-area) * {
+    visibility: hidden;
+  }
+  body:has(#thermal-print-area) #thermal-print-area,
+  body:has(#thermal-print-area) #thermal-print-area * {
+    visibility: visible;
+  }
+  body:has(#thermal-print-area) #thermal-print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    margin: 0;
+    padding: 0;
+    color: #000000 !important;
+    background: #FFFFFF !important;
+    font-family: monospace;
+    font-size: 12px;
+    line-height: 1.2;
+  }
+
+  /* General print cleaning when printing standard screens */
+  header, nav, aside, button, .no-print {
+    display: none !important;
+  }
+}
+

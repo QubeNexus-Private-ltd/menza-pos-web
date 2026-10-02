@@ -6,6 +6,7 @@ import { logger } from '../../core/logging';
 export interface OrderNotificationItem {
   id: string;
   orderId: number;
+  tableId?: number;
   tableName: string;
   customerName: string;
   customerPhone?: string;
@@ -173,9 +174,28 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
       return;
     }
 
+    // Orders taken by waiter on dining tables: internal kitchen statuses (Preparing, Ready, Served)
+    // are managed directly by KDS chefs and floor waiters. Cashier / Owner at POS should NOT be
+    // disturbed by kitchen status chimes/popups. Only order creation, cancellation, settlement,
+    // and bill requests should alert the cashier.
+    const statusUpper = newStatus.toUpperCase();
+    const isKitchenPrepStatus = statusUpper === 'PREPARING' || statusUpper === 'READY' || statusUpper === 'SERVED';
+    const isWaiterOrder = Boolean(
+      orderSource.includes('WAITER') ||
+      orderSource === 'STAFF' ||
+      event.isWaiterOrder ||
+      event.orderDetails?.isWaiterOrder ||
+      (event.tableId && Number(event.tableId) > 0) ||
+      event.tableName?.toLowerCase().includes('table')
+    );
+    const isKitchenUpdate = Boolean(event.isKitchenStatus || event.source === 'KDS' || isKitchenPrepStatus);
+
+    const isBillRequest = newStatus.toUpperCase().includes('BILL');
     const isNewOrder = !oldStatus || oldStatus === newStatus;
-    const eventType: 'NEW_ORDER' | 'STATUS_CHANGED' | 'SETTLED' | 'CANCELLED' =
-      newStatus.toUpperCase() === 'SETTLED'
+    const eventType: 'NEW_ORDER' | 'STATUS_CHANGED' | 'SETTLED' | 'CANCELLED' | 'REQUEST_BILL' =
+      isBillRequest
+        ? 'REQUEST_BILL'
+        : newStatus.toUpperCase() === 'SETTLED'
         ? 'SETTLED'
         : newStatus.toUpperCase() === 'CANCELLED'
         ? 'CANCELLED'
@@ -183,19 +203,33 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
         ? 'NEW_ORDER'
         : 'STATUS_CHANGED';
 
+    // Orders taken by waiter on dining tables:
+    // 1. Initial Order Placement (NEW_ORDER): Waiter and KDS handle this; Cashier does NOT receive audible/modal alerts.
+    // 2. Kitchen Preparation Statuses (Preparing, Ready, Served): Chef and waiter manage this; Cashier is NOT disturbed.
+    // ONLY Bill Requests and Order Status changes (Cancelled, Settled, or overarching status changes) should alert cashier!
+    if (isWaiterOrder && !isBillRequest && (eventType === 'NEW_ORDER' || (isKitchenUpdate && isKitchenPrepStatus))) {
+      // Silently keep order and table status tracking in sync without alerting cashier/owner
+      set({
+        knownOrderIds: currentKnownIds,
+        knownOrderStatuses: currentKnownStatuses,
+      });
+      return;
+    }
+
     const items = Array.isArray(event.items) ? event.items : [];
     const itemCount = items.reduce((sum: number, it: any) => sum + (Number(it.quantity) || 1), 0);
-    const itemsSummary =
-      items.length > 0
-        ? items
-            .slice(0, 3)
-            .map((it: any) => `${it.quantity || 1}x ${it.itemName || it.name || 'Item'}`)
-            .join(', ') + (items.length > 3 ? ` +${items.length - 3} more` : '')
-        : event.orderDetails?.itemsSummary || (eventType === 'STATUS_CHANGED' ? `Status: ${newStatus}` : 'Order update');
 
     const tableName =
       event.tableName ||
       (event.tableId ? `Table #${event.tableId}` : event.orderTypeName || 'Counter / Takeaway');
+
+    const rawTableId = Number(
+      event.tableId ??
+      event.TableId ??
+      event.orderDetails?.tableId ??
+      event.orderDetails?.TableId ??
+      0
+    );
 
     const customerName = event.customerName || event.mobileNumber || 'Customer';
 
@@ -218,20 +252,47 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
       )
     ).join(', ');
 
+    const totalAmount = Number(
+      event.totalAmount ??
+      event.TotalAmount ??
+      event.orderDetails?.totalAmount ??
+      event.orderDetails?.TotalAmount ??
+      event.orderDetails?.grandTotal ??
+      event.orderDetails?.GrandTotal ??
+      event.orderData?.totalAmount ??
+      event.orderData?.TotalAmount ??
+      event.amount ??
+      event.Amount ??
+      event.grandTotal ??
+      event.GrandTotal ??
+      0
+    );
+
+    const itemsSummary =
+      isBillRequest
+        ? `🧾 Final bill requested for ${tableName}${totalAmount > 0 ? ` • ₹${totalAmount.toLocaleString('en-IN')}` : ''}`
+        : items.length > 0
+        ? items
+            .slice(0, 3)
+            .map((it: any) => `${it.quantity || 1}x ${it.itemName || it.name || 'Item'}`)
+            .join(', ') + (items.length > 3 ? ` +${items.length - 3} more` : '')
+        : event.orderDetails?.itemsSummary || (eventType === 'STATUS_CHANGED' ? `Status: ${newStatus}` : 'Order update');
+
     const notifItem: OrderNotificationItem = {
       id: `notif_${orderId}_${Date.now()}`,
       orderId,
+      tableId: rawTableId > 0 ? rawTableId : undefined,
       tableName,
-      customerName,
-      customerPhone: event.mobileNumber,
-      totalAmount: Number(event.totalAmount || 0),
+      customerName: isBillRequest ? `Pre-Bill: ${tableName}` : customerName,
+      customerPhone: event.mobileNumber || event.orderDetails?.mobileNumber,
+      totalAmount,
       itemCount: itemCount > 0 ? itemCount : 1,
       itemsSummary,
-      orderStatus: newStatus,
+      orderStatus: isBillRequest ? 'BILL_REQUESTED' : newStatus,
       oldStatus,
       eventType,
-      orderTypeId: event.orderTypeId,
-      orderTypeName: event.orderTypeName || event.deliveryType,
+      orderTypeId: event.orderTypeId || event.orderDetails?.orderTypeId,
+      orderTypeName: event.orderTypeName || event.deliveryType || event.orderDetails?.orderTypeName,
       pickupToken: pickupToken ? String(pickupToken) : undefined,
       tokenNumber: tokenNumber !== undefined ? tokenNumber : undefined,
       stations: stations || undefined,
@@ -282,53 +343,85 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
   handleServiceRequest: (data: any) => {
     if (!data) return;
 
-    const reqId = data.id || data.requestId || Date.now();
-    const tableName = data.tableName || (data.tableId ? `Table #${data.tableId}` : 'Table');
-    const reqType = String(data.requestType || 'CALL_WAITER').toUpperCase();
-    const activeWaiters = Number(data.activeWaiterCount ?? get().activeFloorWaitersCount ?? 0);
-    const fallbackToCounter = Boolean(data.fallbackToCounter || activeWaiters === 0);
+    const reqId = data.id || data.Id || data.requestId || data.RequestId || Date.now();
+    const rawTableId = Number(data.tableId || data.TableId || 0);
+    const rawOrderId = Number(data.orderId || data.OrderId || 0);
+    const tableName = data.tableName || data.TableName || (rawTableId > 0 ? `Table #${rawTableId}` : 'Table');
+    const reqType = String(data.requestType || data.RequestType || data.type || data.Type || (data.isBillRequest || data.IsBillRequest ? 'REQUEST_BILL' : 'CALL_WAITER')).toUpperCase();
+    const activeWaiters = Number(data.activeWaiterCount ?? data.ActiveWaiterCount ?? get().activeFloorWaitersCount ?? 0);
+    const fallbackToCounter = Boolean(data.fallbackToCounter || data.FallbackToCounter || activeWaiters === 0);
+    const isBillRequest = reqType.includes('BILL') || Boolean(data.isBillRequest || data.IsBillRequest);
+
+    const totalAmount = Number(
+      data.totalAmount ??
+      data.TotalAmount ??
+      data.amount ??
+      data.Amount ??
+      data.grandTotal ??
+      data.GrandTotal ??
+      data.orderTotal ??
+      data.OrderTotal ??
+      data.orderDetails?.totalAmount ??
+      data.orderDetails?.TotalAmount ??
+      data.orderDetails?.grandTotal ??
+      data.orderDetails?.GrandTotal ??
+      0
+    );
 
     const typeLabel =
       reqType.includes('WATER')
         ? 'Water Refill'
-        : reqType.includes('BILL')
+        : isBillRequest
         ? 'Pre-Bill Request'
         : 'Waiter Call';
 
-    const itemsSummary = fallbackToCounter
+    const itemsSummary = isBillRequest
+      ? `🧾 Final bill requested for ${tableName}${totalAmount > 0 ? ` • ₹${totalAmount.toLocaleString('en-IN')}` : ''}`
+      : fallbackToCounter
       ? `🚨 Table needs assistance! (0 active waiters on floor - Please assist from counter)`
       : `🛎️ Guest called waiter (${activeWaiters} staff active on floor)`;
 
     const eventType: 'CALL_WAITER' | 'REQUEST_WATER' | 'REQUEST_BILL' =
       reqType.includes('WATER')
         ? 'REQUEST_WATER'
-        : reqType.includes('BILL')
+        : isBillRequest
         ? 'REQUEST_BILL'
         : 'CALL_WAITER';
 
     const notifItem: OrderNotificationItem = {
       id: `service_${reqId}_${Date.now()}`,
-      orderId: Number(data.orderId || 0),
+      orderId: rawOrderId,
+      tableId: rawTableId > 0 ? rawTableId : undefined,
       tableName,
-      customerName: data.message || (fallbackToCounter ? 'Counter Action Required' : 'Table Assistance'),
-      customerPhone: '',
-      totalAmount: 0,
+      customerName: isBillRequest
+        ? `Pre-Bill: ${tableName}`
+        : (data.message || data.Message || (fallbackToCounter ? 'Counter Action Required' : 'Table Assistance')),
+      customerPhone: data.customerPhone || data.CustomerPhone || data.mobileNumber || data.MobileNumber || '',
+      totalAmount,
       itemCount: 1,
       itemsSummary,
-      orderStatus: fallbackToCounter ? 'ATTEND_COUNTER' : 'WAITER_CALLED',
+      orderStatus: isBillRequest ? 'BILL_REQUESTED' : (fallbackToCounter ? 'ATTEND_COUNTER' : 'WAITER_CALLED'),
       eventType,
-      createdAt: data.createdDateUtc || new Date().toISOString(),
+      createdAt: data.createdDateUtc || data.CreatedDateUtc || new Date().toISOString(),
       timestamp: Date.now(),
       isRead: false,
     };
+
+    const state = get();
+    // Replace any previous notification for the exact same service request or exact same orderId or same table bill request
+    const filtered = state.notifications.filter((n) => {
+      if (reqId && n.id.startsWith(`service_${reqId}_`)) return false;
+      if (notifItem.orderId > 0 && n.orderId === notifItem.orderId) return false;
+      if (isBillRequest && notifItem.tableId && n.tableId === notifItem.tableId && n.eventType === 'REQUEST_BILL') return false;
+      return true;
+    });
 
     logger.info('POS', 'SERVICE_CALL_ALERT', `⚡ [Table Call] ${tableName} -> ${typeLabel} (Fallback=${fallbackToCounter})`);
 
     // Play in-app audio chime
     playOrderNotificationSound(get().soundEnabled);
 
-    const state = get();
-    const combined = [notifItem, ...state.notifications].slice(0, 50);
+    const combined = [notifItem, ...filtered].slice(0, 50);
     const unreadCount = combined.filter((n) => !n.isRead).length;
 
     set({
@@ -416,6 +509,23 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
       const isPosAdmin = orderSource === 'POS_ADMIN' || orderSource === 'COUNTER';
 
       if (isPosAdmin) {
+        return;
+      }
+
+      // Orders placed by Waiters at dining tables:
+      // Initial order placement and internal kitchen preparation statuses should NOT alert cashier.
+      // Only significant overarching status transitions (Cancelled, Settled, etc.) alert cashier.
+      const isWaiterOrder = Boolean(
+        orderSource.includes('WAITER') ||
+        orderSource === 'STAFF' ||
+        (order.tableId && Number(order.tableId) > 0) ||
+        order.tableName?.toLowerCase().includes('table')
+      );
+
+      const statusUpper = currentStatus.toUpperCase();
+      const isKitchenPrepStatus = statusUpper === 'PREPARING' || statusUpper === 'READY' || statusUpper === 'SERVED';
+
+      if (isWaiterOrder && (isNew || isKitchenPrepStatus)) {
         return;
       }
 

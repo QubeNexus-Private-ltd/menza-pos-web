@@ -52,12 +52,11 @@ export const NetworkStrengthIndicator: React.FC<NetworkStrengthIndicatorProps> =
     let success = false;
     let elapsed = 0;
 
-    // List of ultra-reliable global zero-payload connectivity endpoints
+    // List of ultra-reliable global zero-payload CDN connectivity endpoints (0 server cost)
     const endpoints = [
       `https://connectivitycheck.gstatic.com/generate_204?_t=${startTime}`,
       `https://www.google.com/generate_204?_t=${startTime}`,
       `https://1.1.1.1/cdn-cgi/trace?_t=${startTime}`,
-      `${APP_CONSTANTS.API_BASE_URL}/Subscription/Configuration`,
     ];
 
     for (const url of endpoints) {
@@ -114,8 +113,8 @@ export const NetworkStrengthIndicator: React.FC<NetworkStrengthIndicatorProps> =
   useEffect(() => {
     checkNetworkLatency();
 
-    // Poll every 10 seconds
-    timerRef.current = setInterval(checkNetworkLatency, 10000);
+    // Low-frequency heartbeat: check once every 60 seconds (or immediately on app resume)
+    timerRef.current = setInterval(checkNetworkLatency, 60000);
 
     const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
       if (nextAppState === 'active') {

@@ -223,6 +223,13 @@ export const OrderNotificationModal: React.FC<OrderNotificationModalProps> = ({
       }
     }
 
+    if (orderToSettle && (!orderToSettle.totalAmount || orderToSettle.totalAmount <= 0)) {
+      const fallbackAmount = isNotificationItem ? (item as OrderNotificationItem).totalAmount : 0;
+      if (fallbackAmount > 0) {
+        orderToSettle.totalAmount = fallbackAmount;
+      }
+    }
+
     if (!orderToSettle) {
       const notif = item as OrderNotificationItem;
       orderToSettle = {
@@ -230,7 +237,7 @@ export const OrderNotificationModal: React.FC<OrderNotificationModalProps> = ({
         restaurantId: effectiveRestId,
         customerName: notif.customerName,
         mobileNumber: notif.customerPhone,
-        totalAmount: notif.totalAmount,
+        totalAmount: notif.totalAmount || 0,
         tableName: notif.tableName,
         orderTypeId: notif.orderTypeId || 1,
         orderTypeName: notif.orderTypeName,
@@ -387,6 +394,105 @@ export const OrderNotificationModal: React.FC<OrderNotificationModalProps> = ({
       Alert.alert('Receipt Printed! 🧾', `Tax invoice receipt for Order #${order.id} sent to printer.`);
     } catch (err: any) {
       Alert.alert('Print Error', err?.message || 'Failed to print receipt.');
+    } finally {
+      setPrintingOrderId(null);
+    }
+  };
+
+  const handlePrintBill = async (item: OrderNotificationItem | OrderMaster) => {
+    const isNotificationItem = 'orderId' in item || (typeof (item as any).id === 'string' && ((item as any).id.startsWith('service_') || (item as any).id.startsWith('notif_')));
+    let orderId = extractNumericOrderId(item);
+    const tableId = (item as any).tableId;
+    if (orderId > 0) {
+      markAsRead(orderId);
+    } else if (isNotificationItem) {
+      markAsRead((item as OrderNotificationItem).id);
+    }
+
+    if (!connectedDevice) {
+      Alert.alert(
+        'No Printer Connected 🖨️',
+        'Please connect a Bluetooth thermal printer from the Printer Settings screen to print customer bills.'
+      );
+      return;
+    }
+
+    try {
+      setPrintingOrderId(orderId > 0 ? orderId : (item as any).id);
+      let targetOrder: OrderMaster | null = isNotificationItem
+        ? (item as OrderNotificationItem).orderData || null
+        : (item as OrderMaster);
+
+      if (orderId > 0 && (!targetOrder || !targetOrder.items || targetOrder.items.length === 0)) {
+        try {
+          const fetched = await orderDataSource.getOrderById(orderId);
+          if (fetched) targetOrder = { ...fetched, id: orderId };
+        } catch {}
+      } else if (orderId <= 0 && tableId && tableId > 0) {
+        try {
+          const fetched = await orderDataSource.getActiveOrderByTable(tableId);
+          if (fetched) {
+            targetOrder = { ...fetched, id: fetched.id };
+            orderId = fetched.id;
+          }
+        } catch {}
+      }
+
+      const notif = isNotificationItem ? (item as OrderNotificationItem) : null;
+      const totalAmount = (targetOrder?.totalAmount && targetOrder.totalAmount > 0)
+        ? targetOrder.totalAmount
+        : (notif?.totalAmount && notif.totalAmount > 0 ? notif.totalAmount : 0);
+      const itemsList = targetOrder?.items && targetOrder.items.length > 0
+        ? targetOrder.items
+        : [{ itemName: notif?.itemsSummary || 'Order Items', quantity: 1, unitPrice: totalAmount, totalPrice: totalAmount }];
+
+      const effectiveAddress = (() => {
+        const addr = targetOrder?.address?.trim() || activeRestaurant?.address?.trim() || '';
+        const city = targetOrder?.city?.trim() || activeRestaurant?.city?.trim() || '';
+        const state = targetOrder?.state?.trim() || activeRestaurant?.state?.trim() || '';
+
+        const parts: string[] = [];
+        if (addr) parts.push(addr);
+        if (city && !addr.toLowerCase().includes(city.toLowerCase())) parts.push(city);
+        if (state && !addr.toLowerCase().includes(state.toLowerCase())) parts.push(state);
+
+        return parts.join(', ');
+      })();
+
+      const receiptData: any = {
+        orderId: orderId > 0 ? orderId : undefined,
+        orderNumber: targetOrder?.orderNumber || (orderId > 0 ? String(orderId) : 'BILL'),
+        pickupToken: targetOrder?.pickupToken || notif?.pickupToken || (orderId > 0 ? String(orderId) : undefined),
+        restaurantName: effectiveRestName,
+        address: effectiveAddress || undefined,
+        contactPhone: targetOrder?.contactNumber || targetOrder?.contactPhone || (activeRestaurant as any)?.contactNumber || activeRestaurant?.ownerMobile || undefined,
+        gstNumber: targetOrder?.gstNumber || undefined,
+        logoUrl: targetOrder?.logoUrl || activeRestaurant?.logoUrl || undefined,
+        customerName: targetOrder?.customerName || notif?.customerName || 'Guest',
+        customerPhone: targetOrder?.mobileNumber || notif?.customerPhone,
+        tableName: targetOrder?.tableName || notif?.tableName || 'Table',
+        orderType: targetOrder?.orderTypeName || notif?.orderTypeName || 'Dine-In',
+        items: itemsList.map((it: any) => ({
+          itemName: it.itemName || it.name || it.dishName || 'Item',
+          quantity: Number(it.quantity || 1),
+          unitPrice: Number(it.unitPrice || it.amount || it.price || 0),
+          totalPrice: Number(it.totalPrice || (Number(it.quantity || 1) * Number(it.unitPrice || it.amount || it.price || 0))),
+          cookingInstruction: it.cookingInstruction,
+        })),
+        subtotal: targetOrder?.subtotal || totalAmount,
+        cgstAmount: targetOrder?.cgst || 0,
+        sgstAmount: targetOrder?.sgst || 0,
+        grandTotal: totalAmount,
+        paymentMode: targetOrder?.paymentMode || 'CASH',
+        paymentStatus: targetOrder?.paymentStatus || 'PENDING',
+        date: targetOrder?.createdAt ? new Date(targetOrder.createdAt) : new Date(),
+        isKot: false,
+      };
+
+      await printReceipt(receiptData);
+      Alert.alert('Bill Printed! 🧾', `Pre-bill receipt for ${receiptData.tableName} (Order #${orderId || 'N/A'}) sent to printer.`);
+    } catch (err: any) {
+      Alert.alert('Print Error', err?.message || 'Failed to print bill receipt.');
     } finally {
       setPrintingOrderId(null);
     }
@@ -667,24 +773,44 @@ export const OrderNotificationModal: React.FC<OrderNotificationModalProps> = ({
                         </View>
 
                         <View style={styles.cardButtonsRow}>
-                          {/* Print KOT */}
-                          <TouchableOpacity
-                            style={styles.cardActionBtnSecondary}
-                            onPress={(e) => {
-                              e.stopPropagation();
-                              handlePrint(item);
-                            }}
-                            disabled={printingOrderId === item.orderId}
-                          >
-                            {printingOrderId === item.orderId ? (
-                              <ActivityIndicator size="small" color="#4A3E35" />
-                            ) : (
-                              <Printer size={13} color="#4A3E35" />
-                            )}
-                            <Text style={styles.cardActionBtnSecondaryText}>
-                              KOT
-                            </Text>
-                          </TouchableOpacity>
+                          {/* Print Bill for Bill Requests, or Print KOT for regular orders */}
+                          {(item.eventType === 'REQUEST_BILL' || statusLower === 'bill_requested') ? (
+                            <TouchableOpacity
+                              style={styles.cardActionBtnPrintBill}
+                              onPress={(e) => {
+                                e.stopPropagation();
+                                handlePrintBill(item);
+                              }}
+                              disabled={printingOrderId === item.orderId || printingOrderId === item.id}
+                            >
+                              {printingOrderId === item.orderId ? (
+                                <ActivityIndicator size="small" color="#FFFFFF" />
+                              ) : (
+                                <Receipt size={13} color="#FFFFFF" />
+                              )}
+                              <Text style={styles.cardActionBtnPrintBillText}>
+                                Print Bill
+                              </Text>
+                            </TouchableOpacity>
+                          ) : (
+                            <TouchableOpacity
+                              style={styles.cardActionBtnSecondary}
+                              onPress={(e) => {
+                                e.stopPropagation();
+                                handlePrint(item);
+                              }}
+                              disabled={printingOrderId === item.orderId}
+                            >
+                              {printingOrderId === item.orderId ? (
+                                <ActivityIndicator size="small" color="#4A3E35" />
+                              ) : (
+                                <Printer size={13} color="#4A3E35" />
+                              )}
+                              <Text style={styles.cardActionBtnSecondaryText}>
+                                KOT
+                              </Text>
+                            </TouchableOpacity>
+                          )}
 
                           {/* Settle Immediately / Settle Order Button */}
                           {!isSettled && (
@@ -1406,6 +1532,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+  },
+
+  cardActionBtnPrintBill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#059669',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+  },
+
+  cardActionBtnPrintBillText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '800',
   },
 
   cardActionBtnSecondary: {

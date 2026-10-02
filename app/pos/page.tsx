@@ -24,11 +24,13 @@ import {
   Phone,
   Table as TableIcon,
   Sparkles,
+  MessageCircle,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
 import { DishImage } from '@/components/common/DishImage';
 import { WebPrinterService } from '@/services/webPrinterService';
+import { WebWhatsAppService } from '@/services/whatsAppService';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { usePrinterStore } from '@shared/presentation/state/usePrinterStore';
 import { useNotificationStore } from '@shared/presentation/state/useNotificationStore';
@@ -318,6 +320,7 @@ export default function PosPage() {
           orderType,
           table: selectedTable?.tableNumber,
           customerName: orderPayload.name,
+          customerPhone: customerPhone.trim(),
           items: cart,
           subtotal,
           totalTax,
@@ -347,6 +350,44 @@ export default function PosPage() {
   const handlePrintKot = () => {
     if (!orderSuccessData?.receiptData) return;
     WebPrinterService.printKot(orderSuccessData.receiptData, paperWidth);
+  };
+
+  const handleShareWhatsApp = async () => {
+    if (!orderSuccessData) return;
+    let phone = orderSuccessData.customerPhone;
+    if (!phone) {
+      const entered = window.prompt('Enter 10-digit customer WhatsApp number:');
+      if (!entered) return;
+      phone = entered.replace(/[^0-9]/g, '').slice(-10);
+    }
+    if (!phone || phone.length < 10) {
+      alert('Please enter a valid 10-digit mobile number');
+      return;
+    }
+
+    const url = WebWhatsAppService.getWhatsAppReceiptUrl(phone, {
+      restaurantName: activeRestaurant?.restaurantName || 'Menza Restaurant',
+      orderId: orderSuccessData.orderId,
+      customerName: orderSuccessData.customerName,
+      items: orderSuccessData.items,
+      grandTotal: orderSuccessData.grandTotal,
+      paymentMode: orderSuccessData.paymentMode,
+    });
+    window.open(url, '_blank');
+
+    if (activeRestaurant?.restaurantId) {
+      WebWhatsAppService.sendOrderStatusNotification({
+        orderId: Number(orderSuccessData.orderId),
+        restaurantId: activeRestaurant.restaurantId,
+        restaurantName: activeRestaurant.restaurantName,
+        mobileNumber: phone,
+        customerName: orderSuccessData.customerName,
+        orderStatus: 'CONFIRMED',
+        orderTypeName: orderSuccessData.orderType,
+        tableName: orderSuccessData.table ? `Table ${orderSuccessData.table}` : undefined,
+        totalAmount: orderSuccessData.grandTotal,
+      }).catch((e) => console.warn('Background WhatsApp push failed:', e));
+    }
   };
 
   return (
@@ -867,24 +908,31 @@ export default function PosPage() {
                 </div>
               </div>
 
-              <div className="flex flex-col sm:flex-row gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <button
                   onClick={handlePrintReceipt}
-                  className="flex-1 flex items-center justify-center gap-1.5 rounded-xl border border-[#DE8626] bg-amber-500/10 py-2.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-colors"
+                  className="flex items-center justify-center gap-1.5 rounded-xl border border-[#DE8626] bg-amber-500/10 py-2.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-colors"
                 >
                   <Printer className="h-4 w-4" />
-                  <span>Print Receipt ({paperWidth})</span>
+                  <span>Receipt</span>
                 </button>
                 <button
                   onClick={handlePrintKot}
-                  className="flex-1 flex items-center justify-center gap-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] py-2.5 text-xs font-bold text-[#667085] hover:border-[#DE8626] hover:text-[#DE8626] transition-colors"
+                  className="flex items-center justify-center gap-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] py-2.5 text-xs font-bold text-[#667085] hover:border-[#DE8626] hover:text-[#DE8626] transition-colors"
                 >
                   <Utensils className="h-4 w-4" />
-                  <span>Print KOT</span>
+                  <span>KOT</span>
+                </button>
+                <button
+                  onClick={handleShareWhatsApp}
+                  className="flex items-center justify-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 py-2.5 text-xs font-bold text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+                >
+                  <MessageCircle className="h-4 w-4" />
+                  <span>WhatsApp</span>
                 </button>
                 <button
                   onClick={() => setOrderSuccessData(null)}
-                  className="flex-1 flex items-center justify-center rounded-xl bg-[#DE8626] py-2.5 text-xs font-bold text-white shadow-md hover:bg-[#C4721C] transition-colors"
+                  className="flex items-center justify-center rounded-xl bg-[#DE8626] py-2.5 text-xs font-bold text-white shadow-md hover:bg-[#C4721C] transition-colors"
                 >
                   <span>New Sale</span>
                 </button>

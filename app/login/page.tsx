@@ -14,10 +14,13 @@ import {
 } from 'lucide-react';
 import { AuthRemoteDataSource } from '@shared/data/datasources/AuthRemoteDataSource';
 import { AuthRepositoryImpl } from '@shared/data/repositories/AuthRepositoryImpl';
+import { TermsConditionRemoteDataSource } from '@shared/data/datasources/TermsConditionRemoteDataSource';
+import { TermsConditionRepositoryImpl } from '@shared/data/repositories/TermsConditionRepositoryImpl';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { RestaurantDetail } from '@shared/domain/models/Restaurant';
 
 const authRepository = new AuthRepositoryImpl(new AuthRemoteDataSource());
+const termsRepository = new TermsConditionRepositoryImpl(new TermsConditionRemoteDataSource());
 
 export default function LoginPage() {
   const router = useRouter();
@@ -132,7 +135,8 @@ export default function LoginPage() {
         activeRestaurantId: activeRestId,
       },
       res.restaurants || [],
-      activeRestId
+      activeRestId,
+      res.isTermConditionChecked
     );
     router.replace('/dashboard');
   };

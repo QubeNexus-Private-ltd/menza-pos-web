@@ -3,12 +3,13 @@
 import React, { useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
+import { isOwnerUser } from '@shared/core/auth/rolePermissions';
 import { Loader2 } from 'lucide-react';
 
 export const AuthGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const router = useRouter();
   const pathname = usePathname();
-  const { isHydrating, isAuthenticated, hasCompletedOnboarding, hydrateSession } = useAuthStore();
+  const { isHydrating, isAuthenticated, hasCompletedOnboarding, hasAcceptedTerms, hydrateSession, user, activeRestaurant } = useAuthStore();
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -26,8 +27,16 @@ export const AuthGuard: React.FC<{ children: React.ReactNode }> = ({ children })
 
     if (!isAuthenticated && pathname !== '/login' && pathname !== '/onboarding') {
       router.replace('/login');
+      return;
     }
-  }, [isHydrating, isAuthenticated, hasCompletedOnboarding, pathname, router]);
+
+    // Unconsented owners cannot access any page other than /dashboard where the consent card is presented
+    const isOwner = isOwnerUser(user, activeRestaurant);
+    if (isAuthenticated && isOwner && !hasAcceptedTerms && pathname !== '/dashboard' && pathname !== '/login') {
+      router.replace('/dashboard');
+      return;
+    }
+  }, [isHydrating, isAuthenticated, hasCompletedOnboarding, hasAcceptedTerms, user, activeRestaurant, pathname, router]);
 
   if (isHydrating) {
     return (

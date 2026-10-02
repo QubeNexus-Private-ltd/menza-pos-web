@@ -21,9 +21,16 @@ import {
   Layers,
   ChevronRight,
   AlertTriangle,
+  ChefHat,
+  CalendarDays,
+  Wallet,
+  MessageSquare,
+  Receipt,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
+import { TermsConsentCard } from '@/components/common/TermsConsentCard';
+import { OrderSettleModal } from '@/components/orders/OrderSettleModal';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { useNotificationStore } from '@shared/presentation/state/useNotificationStore';
 import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
@@ -56,6 +63,7 @@ export default function DashboardPage() {
   const [operatingStatus, setOperatingStatus] = useState<StoreOperatingStatus | null>(null);
   const [tableCount, setTableCount] = useState({ total: 0, occupied: 0 });
   const [superAdminMetrics, setSuperAdminMetrics] = useState({ totalStores: 0, totalRevenue: 0 });
+  const [settlingOrder, setSettlingOrder] = useState<OrderMaster | null>(null);
 
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
@@ -312,6 +320,58 @@ export default function DashboardPage() {
                   Daily revenue summaries, top items, and hourly sales heatmaps
                 </p>
               </div>
+
+              <div
+                onClick={() => router.push('/kitchen')}
+                className="group cursor-pointer rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-5 shadow-sm hover:shadow-md hover:border-[#DE8626] transition-all"
+              >
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-orange-500/10 text-orange-600 mb-3 group-hover:scale-105 transition-transform">
+                  <ChefHat className="h-5 w-5" />
+                </div>
+                <h4 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">Kitchen (KDS)</h4>
+                <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-1">
+                  Live preparation queue, station routing, and kitchen ticket dispatch
+                </p>
+              </div>
+
+              <div
+                onClick={() => router.push('/reservations')}
+                className="group cursor-pointer rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-5 shadow-sm hover:shadow-md hover:border-[#DE8626] transition-all"
+              >
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-teal-500/10 text-teal-600 mb-3 group-hover:scale-105 transition-transform">
+                  <CalendarDays className="h-5 w-5" />
+                </div>
+                <h4 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">Reservations</h4>
+                <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-1">
+                  Guest bookings, slot timings, seating allocations, and walk-ins
+                </p>
+              </div>
+
+              <div
+                onClick={() => router.push('/wallet')}
+                className="group cursor-pointer rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-5 shadow-sm hover:shadow-md hover:border-[#DE8626] transition-all"
+              >
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-600 mb-3 group-hover:scale-105 transition-transform">
+                  <Wallet className="h-5 w-5" />
+                </div>
+                <h4 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">Prepaid Wallet</h4>
+                <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-1">
+                  Commission ledger, Cashfree gateway top-ups, and SMS balances
+                </p>
+              </div>
+
+              <div
+                onClick={() => router.push('/settings/whatsapp')}
+                className="group cursor-pointer rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-5 shadow-sm hover:shadow-md hover:border-[#DE8626] transition-all"
+              >
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-green-500/10 text-green-600 mb-3 group-hover:scale-105 transition-transform">
+                  <MessageSquare className="h-5 w-5" />
+                </div>
+                <h4 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">WhatsApp Alerts</h4>
+                <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-1">
+                  Customer receipt delivery, Gupshup templates, and test messaging
+                </p>
+              </div>
             </div>
           </div>
 
@@ -324,13 +384,22 @@ export default function DashboardPage() {
                   Real-time ticket stream across counter, dine-in, and online
                 </p>
               </div>
-              <button
-                onClick={() => router.push('/pos')}
-                className="flex items-center gap-1 text-xs font-semibold text-[#DE8626] hover:underline"
-              >
-                <span>Open Terminal</span>
-                <ChevronRight className="h-3.5 w-3.5" />
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => router.push('/orders')}
+                  className="flex items-center gap-1 text-xs font-semibold text-[#667085] hover:text-[#DE8626] transition-colors"
+                >
+                  <span>Orders & History</span>
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  onClick={() => router.push('/pos')}
+                  className="flex items-center gap-1 rounded-xl bg-[#DE8626] px-3 py-1.5 text-xs font-bold text-white shadow-xs hover:bg-[#C4721C] transition-colors"
+                >
+                  <ShoppingBag className="h-3.5 w-3.5" />
+                  <span>Open POS</span>
+                </button>
+              </div>
             </div>
 
             {recentOrders.length === 0 ? (
@@ -348,7 +417,8 @@ export default function DashboardPage() {
                       <th className="pb-3 font-semibold">Items</th>
                       <th className="pb-3 font-semibold">Total Amount</th>
                       <th className="pb-3 font-semibold">Status</th>
-                      <th className="pb-3 font-semibold text-right">Time</th>
+                      <th className="pb-3 font-semibold">Time</th>
+                      <th className="pb-3 font-semibold text-right">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#E7E1DA]/60 dark:divide-[#2B3540]/60">
@@ -378,16 +448,34 @@ export default function DashboardPage() {
                                 ? 'bg-emerald-500/10 text-emerald-600'
                                 : order.status === 'CANCELLED'
                                 ? 'bg-red-500/10 text-red-600'
+                                : order.status === 'SERVED'
+                                ? 'bg-emerald-500/15 text-emerald-600 border border-emerald-500/30'
                                 : 'bg-amber-500/10 text-[#DE8626]'
                             }`}
                           >
-                            {order.status}
+                            {order.status === 'SERVED' ? 'Served (Ready)' : order.status}
                           </span>
                         </td>
-                        <td className="py-3 text-right text-[#667085] dark:text-[#94A3B8]">
+                        <td className="py-3 text-[#667085] dark:text-[#94A3B8]">
                           {order.createdAt
                             ? new Date(order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                             : '-'}
+                        </td>
+                        <td className="py-3 text-right">
+                          {order.status !== 'SETTLED' && order.status !== 'CANCELLED' ? (
+                            <button
+                              onClick={() => setSettlingOrder(order)}
+                              className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1 text-[11px] font-bold shadow-xs transition-colors"
+                              title="Settle Bill"
+                            >
+                              <Receipt className="h-3 w-3" />
+                              <span>Settle</span>
+                            </button>
+                          ) : (
+                            <span className="text-[10px] font-bold uppercase text-emerald-600 bg-emerald-500/10 px-2 py-0.5 rounded-md">
+                              Paid
+                            </span>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -398,6 +486,19 @@ export default function DashboardPage() {
           </div>
         </div>
       </AppShell>
+      <TermsConsentCard />
+
+      {settlingOrder && (
+        <OrderSettleModal
+          isOpen={Boolean(settlingOrder)}
+          onClose={() => setSettlingOrder(null)}
+          order={settlingOrder}
+          onSettled={async () => {
+            await loadDashboardData();
+            setSettlingOrder(null);
+          }}
+        />
+      )}
     </AuthGuard>
   );
 }

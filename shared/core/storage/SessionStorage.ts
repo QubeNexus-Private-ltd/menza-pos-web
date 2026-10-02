@@ -10,6 +10,7 @@ const STORAGE_KEYS = {
   RESTAURANTS: '@menza_session_restaurants',
   ACTIVE_RESTAURANT: '@menza_session_active_restaurant',
   ONBOARDING_COMPLETED: '@menza_has_completed_onboarding',
+  TERMS_ACCEPTED: '@menza_has_accepted_terms',
 };
 
 export interface PersistedSession {
@@ -19,6 +20,7 @@ export interface PersistedSession {
   restaurants: RestaurantDetail[];
   activeRestaurant: RestaurantDetail | null;
   hasCompletedOnboarding: boolean;
+  hasAcceptedTerms: boolean;
 }
 
 export class SessionStorage {
@@ -32,6 +34,7 @@ export class SessionStorage {
     restaurants: RestaurantDetail[];
     activeRestaurant?: RestaurantDetail | null;
     hasCompletedOnboarding?: boolean;
+    hasAcceptedTerms?: boolean;
   }): Promise<void> {
     try {
       const items: [string, string][] = [
@@ -40,6 +43,7 @@ export class SessionStorage {
         [STORAGE_KEYS.USER, JSON.stringify(session.user || null)],
         [STORAGE_KEYS.RESTAURANTS, JSON.stringify(session.restaurants || [])],
         [STORAGE_KEYS.ONBOARDING_COMPLETED, 'true'],
+        [STORAGE_KEYS.TERMS_ACCEPTED, session.hasAcceptedTerms ? 'true' : 'false'],
       ];
 
       if (session.activeRestaurant) {
@@ -65,6 +69,7 @@ export class SessionStorage {
         STORAGE_KEYS.RESTAURANTS,
         STORAGE_KEYS.ACTIVE_RESTAURANT,
         STORAGE_KEYS.ONBOARDING_COMPLETED,
+        STORAGE_KEYS.TERMS_ACCEPTED,
       ];
 
       const stores = await AsyncStorage.multiGet(keys);
@@ -76,6 +81,7 @@ export class SessionStorage {
       const token = data[STORAGE_KEYS.TOKEN] || null;
       const refreshToken = data[STORAGE_KEYS.REFRESH_TOKEN] || null;
       const hasCompletedOnboarding = data[STORAGE_KEYS.ONBOARDING_COMPLETED] === 'true';
+      const hasAcceptedTerms = data[STORAGE_KEYS.TERMS_ACCEPTED] === 'true';
 
       let user: User | null = null;
       let restaurants: RestaurantDetail[] = [];
@@ -112,6 +118,7 @@ export class SessionStorage {
         restaurants,
         activeRestaurant,
         hasCompletedOnboarding,
+        hasAcceptedTerms,
       };
     } catch (err: any) {
       logger.api('API_ERROR', 'Failed to load session from AsyncStorage', { error: err?.message });
@@ -122,6 +129,7 @@ export class SessionStorage {
         restaurants: [],
         activeRestaurant: null,
         hasCompletedOnboarding: false,
+        hasAcceptedTerms: false,
       };
     }
   }
@@ -171,6 +179,18 @@ export class SessionStorage {
       await AsyncStorage.setItem(STORAGE_KEYS.ONBOARDING_COMPLETED, status ? 'true' : 'false');
     } catch (err: any) {
       logger.api('API_ERROR', 'Failed to save onboarding status', { error: err?.message });
+    }
+  }
+
+  /**
+   * Persist terms & conditions acceptance status
+   */
+  static async saveTermsAccepted(status: boolean): Promise<void> {
+    try {
+      await AsyncStorage.setItem(STORAGE_KEYS.TERMS_ACCEPTED, status ? 'true' : 'false');
+      logger.auth('TERMS_ACCEPTED', `Terms acceptance status saved: ${status}`);
+    } catch (err: any) {
+      logger.api('API_ERROR', 'Failed to save terms acceptance status', { error: err?.message });
     }
   }
 

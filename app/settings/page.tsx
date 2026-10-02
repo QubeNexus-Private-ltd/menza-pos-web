@@ -13,6 +13,9 @@ import {
   Building2,
   FileText,
   LogOut,
+  MessageSquare,
+  ChefHat,
+  Wallet,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
@@ -30,10 +33,10 @@ export default function SettingsHubPage() {
       desc: 'Configure outlet name, address, GST rates, service charges, and store hours',
     },
     {
-      href: '/settings/bank',
-      icon: CreditCard,
-      title: 'Bank Account & Settlement',
-      desc: 'Payout bank account, IFSC verification, and gateway settlements',
+      href: '/settings/whatsapp',
+      icon: MessageSquare,
+      title: 'WhatsApp Messaging & Alerts',
+      desc: 'Automated receipt dispatches, Gupshup templates, and custom customer chat previews',
     },
     {
       href: '/settings/printer',
@@ -42,10 +45,34 @@ export default function SettingsHubPage() {
       desc: 'Receipt width (58mm/80mm), auto-print toggles, and custom footer messages',
     },
     {
+      href: '/settings/bank',
+      icon: CreditCard,
+      title: 'Bank Account & Settlement',
+      desc: 'Payout bank account, IFSC verification, and gateway settlements',
+    },
+    {
       href: '/settings/billing',
       icon: Crown,
       title: 'Subscription & Billing',
       desc: 'Active plan tier, validity period, feature add-ons, and renewals',
+    },
+    {
+      href: '/kitchen',
+      icon: ChefHat,
+      title: 'Kitchen Stations & Routing',
+      desc: 'KDS preparation counters, live tickets, and auto-initialization of kitchen routing',
+    },
+    {
+      href: '/wallet',
+      icon: Wallet,
+      title: 'Prepaid Wallet & SMS Credits',
+      desc: 'Top up SMS credits, commission balance, and Cashfree gateway transactions',
+    },
+    {
+      href: '/terms',
+      icon: FileText,
+      title: 'Terms & Conditions',
+      desc: 'Review legal terms, customer consent, and partner restaurant agreements',
     },
   ];
 

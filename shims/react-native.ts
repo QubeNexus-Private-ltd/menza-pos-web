@@ -75,6 +75,12 @@ export const Dimensions = {
   addEventListener: () => ({ remove: () => {} }),
 };
 
+export const AppState = {
+  currentState: 'active',
+  addEventListener: () => ({ remove: () => {} }),
+  removeEventListener: () => {},
+};
+
 export default {
   Platform,
   Alert,
@@ -84,4 +90,5 @@ export default {
   useColorScheme,
   StyleSheet,
   Dimensions,
+  AppState,
 };

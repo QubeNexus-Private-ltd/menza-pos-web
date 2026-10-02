@@ -10,7 +10,8 @@ export function resolveDishImageUrl(rawUrl?: string | null): string | null {
     return null;
   }
 
-  const trimmed = rawUrl.trim();
+  // Strip leading/trailing quotes and whitespace
+  const trimmed = rawUrl.replace(/^["']|["']$/g, '').trim();
   if (
     !trimmed ||
     trimmed.toLowerCase() === 'null' ||

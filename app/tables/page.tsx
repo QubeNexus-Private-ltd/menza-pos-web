@@ -16,9 +16,13 @@ import {
   ArrowRight,
   Utensils,
   CheckCircle2,
+  QrCode,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
+import { TableQrModal } from '@/components/tables/TableQrModal';
+import { StorefrontQrModal } from '@/components/tables/StorefrontQrModal';
+import { OrderSettleModal } from '@/components/orders/OrderSettleModal';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { TableRemoteDataSource } from '@shared/data/datasources/TableRemoteDataSource';
 import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
@@ -47,6 +51,9 @@ export default function TablesPage() {
 
   // Table Detail Action Sheet Modal
   const [actionTable, setActionTable] = useState<TableMaster | null>(null);
+  const [qrTable, setQrTable] = useState<TableMaster | null>(null);
+  const [storefrontQrOpen, setStorefrontQrOpen] = useState(false);
+  const [settlingOrder, setSettlingOrder] = useState<OrderMaster | null>(null);
 
   const loadData = useCallback(async () => {
     if (!currentRestId) return;
@@ -142,7 +149,15 @@ export default function TablesPage() {
               </p>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 sm:gap-3">
+              <button
+                onClick={() => setStorefrontQrOpen(true)}
+                className="flex items-center gap-1.5 rounded-xl border border-[#DE8626] bg-amber-500/10 px-3.5 py-2 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-colors"
+              >
+                <QrCode className="h-4 w-4" />
+                <span>Store Standee QR</span>
+              </button>
+
               <button
                 onClick={loadData}
                 disabled={loading}
@@ -216,15 +231,28 @@ export default function TablesPage() {
                           <Users className="h-3 w-3" />
                           <span>{tbl.seatingCapacity || 4}p</span>
                         </span>
-                        <span
-                          className={`rounded-full px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wider ${
-                            isOccupied
-                              ? 'bg-amber-500 text-white'
-                              : 'bg-emerald-500/10 text-emerald-600'
-                          }`}
-                        >
-                          {isOccupied ? 'Occupied' : 'Available'}
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setQrTable(tbl);
+                            }}
+                            title="Print Table QR Sticker"
+                            className="rounded-lg p-1 text-[#667085] hover:bg-amber-500/10 hover:text-[#DE8626] transition-colors"
+                          >
+                            <QrCode className="h-3.5 w-3.5" />
+                          </button>
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wider ${
+                              isOccupied
+                                ? 'bg-amber-500 text-white'
+                                : 'bg-emerald-500/10 text-emerald-600'
+                            }`}
+                          >
+                            {isOccupied ? 'Occupied' : 'Available'}
+                          </span>
+                        </div>
                       </div>
 
                       {/* Large Table Number */}
@@ -242,12 +270,26 @@ export default function TablesPage() {
                     <div className="pt-3 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60 mt-2">
                       {isOccupied && activeOrder ? (
                         <div className="flex items-center justify-between text-xs">
-                          <span className="font-extrabold text-[#DE8626]">
-                            ₹{activeOrder.totalAmount || 0}
-                          </span>
-                          <span className="text-[10px] text-[#667085] truncate max-w-[70px]">
-                            #{activeOrder.id}
-                          </span>
+                          <div>
+                            <span className="font-extrabold text-[#DE8626] block">
+                              ₹{activeOrder.totalAmount || 0}
+                            </span>
+                            <span className="text-[10px] text-[#667085] truncate block">
+                              #{activeOrder.id} • {activeOrder.status || 'Active'}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSettlingOrder(activeOrder);
+                            }}
+                            className="flex items-center gap-1 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1.5 text-[11px] font-bold shadow-xs transition-colors"
+                            title="Settle Bill and Free Table"
+                          >
+                            <Receipt className="h-3 w-3" />
+                            <span>Settle</span>
+                          </button>
                         </div>
                       ) : (
                         <div className="flex items-center justify-between text-xs text-[#667085] dark:text-[#94A3B8] group-hover:text-[#DE8626]">
@@ -264,63 +306,127 @@ export default function TablesPage() {
         </div>
 
         {/* 1. Table Action Sheet Modal */}
-        {actionTable && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <div className="w-full max-w-sm rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-6 shadow-2xl">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2">
-                  <TableIcon className="h-5 w-5 text-[#DE8626]" />
-                  <h3 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">
-                    Table T-{actionTable.tableNumber}
-                  </h3>
-                </div>
-                <button onClick={() => setActionTable(null)} className="rounded-lg p-1 text-[#667085]">
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
+        {actionTable && (() => {
+          const activeOrder = getOrderForTable(actionTable);
+          const isOccupied = actionTable.status?.toUpperCase() === 'OCCUPIED' || Boolean(actionTable.activeOrderId) || Boolean(activeOrder);
+          const isServed = activeOrder?.status?.toUpperCase() === 'SERVED';
 
-              <div className="rounded-2xl bg-[#FAF7F2] dark:bg-[#151A20] p-4 space-y-2 text-xs mb-5">
-                <div className="flex justify-between">
-                  <span className="text-[#667085]">Section:</span>
-                  <span className="font-bold">{actionTable.sectionName || 'Main Dining'}</span>
+          return (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+              <div className="w-full max-w-sm rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-6 shadow-2xl">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <TableIcon className="h-5 w-5 text-[#DE8626]" />
+                    <h3 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                      Table T-{actionTable.tableNumber}
+                    </h3>
+                  </div>
+                  <button onClick={() => setActionTable(null)} className="rounded-lg p-1 text-[#667085]">
+                    <X className="h-4 w-4" />
+                  </button>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-[#667085]">Capacity:</span>
-                  <span className="font-bold">{actionTable.seatingCapacity || 4} Guests</span>
+
+                <div className="rounded-2xl bg-[#FAF7F2] dark:bg-[#151A20] p-4 space-y-2 text-xs mb-5">
+                  <div className="flex justify-between">
+                    <span className="text-[#667085]">Section:</span>
+                    <span className="font-bold">{actionTable.sectionName || 'Main Dining'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-[#667085]">Capacity:</span>
+                    <span className="font-bold">{actionTable.seatingCapacity || 4} Guests</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-[#667085]">Current Status:</span>
+                    <span
+                      className={`font-bold uppercase ${
+                        isOccupied ? 'text-amber-600' : 'text-emerald-600'
+                      }`}
+                    >
+                      {isOccupied ? 'Occupied' : 'Available'}
+                    </span>
+                  </div>
+                  {activeOrder && (
+                    <>
+                      <div className="pt-2 border-t border-[#E7E1DA] dark:border-[#2B3540] flex justify-between">
+                        <span className="text-[#667085]">Active Order:</span>
+                        <span className="font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                          #{activeOrder.id}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-[#667085]">Order State:</span>
+                        <span
+                          className={`font-bold uppercase px-2 py-0.5 rounded-md text-[10px] ${
+                            isServed
+                              ? 'bg-emerald-500/15 text-emerald-600 border border-emerald-500/30'
+                              : 'bg-amber-500/10 text-[#DE8626]'
+                          }`}
+                        >
+                          {isServed ? 'Served (Ready for Bill)' : activeOrder.status || 'Active'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-sm font-extrabold text-[#DE8626] pt-1">
+                        <span>Total Bill:</span>
+                        <span>₹{activeOrder.totalAmount}</span>
+                      </div>
+                    </>
+                  )}
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-[#667085]">Current Status:</span>
-                  <span
-                    className={`font-bold uppercase ${
-                      actionTable.status?.toUpperCase() === 'OCCUPIED' || Boolean(actionTable.activeOrderId) ? 'text-amber-600' : 'text-emerald-600'
+
+                <div className="space-y-2">
+                  {/* Settle Bill Button if table has active order */}
+                  {activeOrder && (
+                    <button
+                      onClick={() => {
+                        const o = activeOrder;
+                        setActionTable(null);
+                        setSettlingOrder(o);
+                      }}
+                      className="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 hover:bg-emerald-700 py-3 text-xs font-bold text-white shadow-md transition-colors"
+                    >
+                      <Receipt className="h-4 w-4" />
+                      <span>Settle Bill & Free Table (₹{activeOrder.totalAmount})</span>
+                    </button>
+                  )}
+
+                  <button
+                    onClick={() => {
+                      setActionTable(null);
+                      router.push('/pos');
+                    }}
+                    className={`flex w-full items-center justify-center gap-2 rounded-2xl py-3 text-xs font-bold transition-colors ${
+                      activeOrder
+                        ? 'border border-[#DE8626] text-[#DE8626] hover:bg-amber-500/10'
+                        : 'bg-[#DE8626] text-white shadow-md hover:bg-[#C4721C]'
                     }`}
                   >
-                    {actionTable.status?.toUpperCase() === 'OCCUPIED' || Boolean(actionTable.activeOrderId) ? 'Occupied' : 'Available'}
-                  </span>
+                    <ShoppingBag className="h-4 w-4" />
+                    <span>{activeOrder ? 'Add Items (Open POS)' : 'Start Order (Open POS)'}</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      const target = actionTable;
+                      setActionTable(null);
+                      setQrTable(target);
+                    }}
+                    className="flex w-full items-center justify-center gap-2 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] py-2.5 text-xs font-semibold text-[#667085] hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                  >
+                    <QrCode className="h-4 w-4" />
+                    <span>Print Table QR Sticker</span>
+                  </button>
+
+                  <button
+                    onClick={() => setActionTable(null)}
+                    className="w-full rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] py-2.5 text-xs font-semibold text-[#667085] hover:bg-black/5"
+                  >
+                    Close
+                  </button>
                 </div>
               </div>
-
-              <div className="space-y-2">
-                <button
-                  onClick={() => {
-                    setActionTable(null);
-                    router.push('/pos');
-                  }}
-                  className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#DE8626] py-3 text-xs font-bold text-white shadow-md hover:bg-[#C4721C] transition-colors"
-                >
-                  <ShoppingBag className="h-4 w-4" />
-                  <span>Start Order (Open POS)</span>
-                </button>
-                <button
-                  onClick={() => setActionTable(null)}
-                  className="w-full rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] py-2.5 text-xs font-semibold text-[#667085] hover:bg-black/5"
-                >
-                  Close
-                </button>
-              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* 2. Add New Table Modal */}
         {addModalOpen && (
@@ -398,6 +504,41 @@ export default function TablesPage() {
               </form>
             </div>
           </div>
+        )}
+
+        {/* 3. Table QR Sticker Modal */}
+        {qrTable && (
+          <TableQrModal
+            isOpen={Boolean(qrTable)}
+            onClose={() => setQrTable(null)}
+            tableId={qrTable.id}
+            tableNumber={String(qrTable.tableNumber)}
+            restaurantId={currentRestId}
+            restaurantName={activeRestaurant?.restaurantName || 'Menza Restaurant'}
+          />
+        )}
+
+        {/* 4. Storefront Standee QR Modal */}
+        {storefrontQrOpen && (
+          <StorefrontQrModal
+            isOpen={storefrontQrOpen}
+            onClose={() => setStorefrontQrOpen(false)}
+            restaurantId={currentRestId}
+            restaurantName={activeRestaurant?.restaurantName || 'Menza Restaurant'}
+          />
+        )}
+
+        {/* 5. Order Settlement Modal */}
+        {settlingOrder && (
+          <OrderSettleModal
+            isOpen={Boolean(settlingOrder)}
+            onClose={() => setSettlingOrder(null)}
+            order={settlingOrder}
+            onSettled={async () => {
+              await loadData();
+              setSettlingOrder(null);
+            }}
+          />
         )}
       </AppShell>
     </AuthGuard>

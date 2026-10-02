@@ -103,6 +103,7 @@ import { TodayOrdersModal } from './TodayOrdersModal';
 import { OrderNotificationModal } from './OrderNotificationModal';
 import { OrderAlertBanner } from '../../components/OrderAlertBanner';
 import { TermsAndConditionsModal } from '../legal/TermsAndConditionsModal';
+import { TermsConsentCard } from '../../components/TermsConsentCard';
 import { NetworkStrengthIndicator } from '../../components/NetworkStrengthIndicator';
 import { RestaurantQrModal } from '../../components/RestaurantQrModal';
 import { StoreOperatingStatusModal } from '../../components/StoreOperatingStatusModal';
@@ -451,10 +452,9 @@ export const AdminDashboardScreen: React.FC = () => {
       }
     });
 
-    // 4. Listen for real-time order creation (plays chime & immediately refreshes metrics)
+    // 4. Listen for real-time order creation (instantly refreshes metrics without redundant HTTP polling)
     const unsubscribeCreated = onPosOrderCreated(() => {
       fetchTodayRevenueData(currentRestId, true);
-      pollRecentOrders(currentRestId);
     });
 
     // 5. Listen for order settlement (immediately refreshes revenue & wallet balance)
@@ -2369,6 +2369,9 @@ export const AdminDashboardScreen: React.FC = () => {
           visible={termsModalVisible}
           onClose={() => setTermsModalVisible(false)}
         />
+
+        {/* OWNER TERMS & CONDITIONS CONSENT CARD OVERLAY */}
+        <TermsConsentCard />
 
         {/* RESTAURANT QR CODE & STANDEE GENERATOR MODAL */}
         <RestaurantQrModal

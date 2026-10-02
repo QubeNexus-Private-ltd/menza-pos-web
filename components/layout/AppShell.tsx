@@ -28,7 +28,11 @@ import {
   Sparkles,
   Check,
   AlertCircle,
+  ChefHat,
+  CalendarDays,
+  Receipt,
 } from 'lucide-react';
+import { StoreShiftModal } from '../common/StoreShiftModal';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { useNotificationStore } from '@shared/presentation/state/useNotificationStore';
 import { useWebTheme } from '../theme/ThemeProvider';
@@ -70,6 +74,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
   const [outletMenuOpen, setOutletMenuOpen] = useState(false);
   const [notifDrawerOpen, setNotifDrawerOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [shiftModalOpen, setShiftModalOpen] = useState(false);
   const [operatingStatus, setOperatingStatus] = useState<StoreOperatingStatus | null>(null);
   const [todaySales, setTodaySales] = useState<{ revenue: number; orderCount: number }>({ revenue: 0, orderCount: 0 });
   const [walletBalance, setWalletBalance] = useState<number | null>(null);
@@ -199,10 +204,24 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
     : [
         { href: '/dashboard', label: 'Overview', icon: LayoutDashboard },
         { href: '/pos', label: 'POS Terminal', icon: ShoppingBag, highlight: true },
-        { href: '/menu', label: 'Menu Catalog', icon: UtensilsCrossed },
+        { href: '/orders', label: 'Orders & History', icon: Receipt },
+        { href: '/kitchen', label: 'Kitchen & KDS', icon: ChefHat },
+        { href: '/reservations', label: 'Reservations', icon: CalendarDays },
         { href: '/tables', label: 'Floor Tables', icon: Table },
+        { href: '/menu', label: 'Menu Catalog', icon: UtensilsCrossed },
+        { href: '/wallet', label: 'Prepaid Wallet', icon: Wallet },
         { href: '/reports', label: 'Analytics', icon: BarChart3 },
         { href: '/staff', label: 'Staff & Roles', icon: Users },
+        { href: '/settings', label: 'Settings', icon: Settings },
+      ];
+
+  const mobileNavItems = isSuperAdmin
+    ? navItems
+    : [
+        { href: '/dashboard', label: 'Overview', icon: LayoutDashboard },
+        { href: '/pos', label: 'POS', icon: ShoppingBag },
+        { href: '/orders', label: 'Orders', icon: Receipt },
+        { href: '/tables', label: 'Tables', icon: Table },
         { href: '/settings', label: 'Settings', icon: Settings },
       ];
 
@@ -390,14 +409,19 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
 
             {/* Store Operating Status Badge */}
             {operatingStatus && !isSuperAdmin && (
-              <div className="hidden sm:flex items-center gap-1.5 rounded-full border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-2.5 py-1 text-[11px] font-medium">
+              <button
+                type="button"
+                onClick={() => setShiftModalOpen(true)}
+                title="Click to change store shift or operating timings"
+                className="hidden sm:flex items-center gap-1.5 rounded-full border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-2.5 py-1 text-[11px] font-medium hover:border-[#DE8626] transition-colors cursor-pointer"
+              >
                 <span
                   className={`h-2 w-2 rounded-full ${
-                    operatingStatus.isOpen ? 'bg-emerald-500' : 'bg-red-500'
+                    operatingStatus.isOpen ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'
                   }`}
                 />
                 <span>{operatingStatus.isOpen ? 'Store Open' : 'Store Closed'}</span>
-              </div>
+              </button>
             )}
           </div>
 
@@ -549,7 +573,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
 
         {/* 4. Mobile Bottom Navigation Bar (< 768px) */}
         <div className="fixed bottom-0 inset-x-0 z-40 flex h-16 items-center justify-around border-t border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] px-2 lg:hidden">
-          {navItems.slice(0, 5).map((item) => {
+          {mobileNavItems.map((item) => {
             const isActive = pathname === item.href;
             const Icon = item.icon;
             return (
@@ -566,6 +590,18 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
             );
           })}
         </div>
+
+        {/* Store Shift / Operating Timings Modal */}
+        {shiftModalOpen && (
+          <StoreShiftModal
+            isOpen={shiftModalOpen}
+            onClose={() => setShiftModalOpen(false)}
+            restaurantId={currentRestId}
+            restaurantName={activeRestaurant?.restaurantName || 'Restaurant'}
+            currentStatus={operatingStatus}
+            onStatusUpdated={(newStatus) => setOperatingStatus(newStatus)}
+          />
+        )}
       </div>
     </div>
   );

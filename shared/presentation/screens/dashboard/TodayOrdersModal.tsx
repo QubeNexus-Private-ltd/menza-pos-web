@@ -62,6 +62,7 @@ import { useAuthStore } from '../../state/useAuthStore';
 import { useNotificationStore } from '../../state/useNotificationStore';
 import { ReceiptData } from '../../../core/printer/EscPosBuilder';
 import { CashierSettlementModal } from '../../components/CashierSettlementModal';
+import { OrderAlertBanner } from '../../components/OrderAlertBanner';
 import { onPosOrderStatusChanged } from '../../../core/network/signalrService';
 import { logger } from '../../../core/logging';
 
@@ -617,6 +618,28 @@ export const TodayOrdersModal: React.FC<TodayOrdersModalProps> = ({
       fetchOrders(nextPage, true);
     }
   }, [loading, loadingMore, hasNextPage, pageNumber, fetchOrders]);
+
+  const handleBannerPress = useCallback(async () => {
+    fetchOrders(1, false);
+    const targetId = useNotificationStore.getState().latestIncomingOrder?.orderId;
+    if (targetId && targetId > 0) {
+      try {
+        const fetched = await orderDataSource.getOrder(targetId);
+        if (fetched) {
+          handleSelectOrder(fetched);
+        }
+      } catch {
+        // Fail-safe
+      }
+    }
+  }, [fetchOrders, handleSelectOrder]);
+
+  const handleBannerSettle = useCallback((orderData: any) => {
+    if (selectedOrderDetail) {
+      setSelectedOrderDetail(null);
+    }
+    setSettleOrderTarget(orderData as OrderMaster);
+  }, [selectedOrderDetail]);
 
   const getStatusColor = (status: string) => {
     const s = (status || '').toUpperCase();
@@ -1774,6 +1797,12 @@ export const TodayOrdersModal: React.FC<TodayOrdersModalProps> = ({
                 })()}
               </View>
             </View>
+
+            {/* Real-time Alert Banner visible while inspecting order details */}
+            <OrderAlertBanner
+              onPress={handleBannerPress}
+              onSettleOrder={handleBannerSettle}
+            />
           </Modal>
         )}
 
@@ -1792,6 +1821,12 @@ export const TodayOrdersModal: React.FC<TodayOrdersModalProps> = ({
             }
           }}
           onSettlementSuccess={handleSettlementSuccess}
+        />
+
+        {/* 8. REAL-TIME FLOATING ORDER ALERT BANNER */}
+        <OrderAlertBanner
+          onPress={handleBannerPress}
+          onSettleOrder={handleBannerSettle}
         />
       </SafeAreaView>
     </Modal>

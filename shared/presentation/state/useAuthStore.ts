@@ -4,11 +4,17 @@ import { RestaurantDetail } from '../../domain/models/Restaurant';
 import { logger } from '../../core/logging';
 import { SessionStorage } from '../../core/storage/SessionStorage';
 import { AuthRemoteDataSource } from '../../data/datasources/AuthRemoteDataSource';
+import { TermsConditionRemoteDataSource } from '../../data/datasources/TermsConditionRemoteDataSource';
+import { TermsConditionRepositoryImpl } from '../../data/repositories/TermsConditionRepositoryImpl';
+import { isOwnerUser } from '../../core/auth/rolePermissions';
+
+const termsRepository = new TermsConditionRepositoryImpl(new TermsConditionRemoteDataSource());
 
 interface AuthState {
   isHydrating: boolean;
   hasCompletedOnboarding: boolean;
   isAuthenticated: boolean;
+  hasAcceptedTerms: boolean;
   token: string | null;
   refreshToken: string | null;
   user: User | null;
@@ -17,7 +23,10 @@ interface AuthState {
 
   hydrateSession: () => Promise<boolean>;
   setCompletedOnboarding: (status: boolean) => void;
-  setAuthData: (token: string, refreshToken: string, user: User, restaurants: RestaurantDetail[], activeRestId?: number) => void;
+  setAuthData: (token: string, refreshToken: string, user: User, restaurants: RestaurantDetail[], activeRestId?: number, hasAcceptedTerms?: boolean) => void;
+  setHasAcceptedTerms: (status: boolean) => void;
+  checkTermsStatus: () => Promise<boolean>;
+  acceptTerms: () => Promise<boolean>;
   updateTokens: (token: string, refreshToken: string) => void;
   setRestaurants: (restaurants: RestaurantDetail[]) => void;
   setActiveRestaurant: (restaurant: RestaurantDetail) => void;
@@ -28,6 +37,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   isHydrating: true,
   hasCompletedOnboarding: false,
   isAuthenticated: false,
+  hasAcceptedTerms: false,
   token: null,
   refreshToken: null,
   user: null,
@@ -67,16 +77,31 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           logger.setRestaurantId(session.activeRestaurant.restaurantId);
         }
 
+        const isOwner = isOwnerUser(session.user, session.activeRestaurant);
+        // Terms & Conditions consent is strictly for the Owner role; non-owners automatically pass
+        const hasAcceptedTerms = !isOwner || Boolean(session.hasAcceptedTerms);
+
         set({
           isHydrating: false,
           hasCompletedOnboarding: true,
           isAuthenticated: true,
+          hasAcceptedTerms,
           token: session.token,
           refreshToken: session.refreshToken,
           user: session.user,
           restaurants: session.restaurants,
           activeRestaurant: session.activeRestaurant,
         });
+
+        // Sync terms acceptance with backend ONLY for owners who haven't accepted locally yet
+        if (isOwner && !hasAcceptedTerms && session.user?.id) {
+          termsRepository.getTermsConditionStatus(session.user.id, session.token || undefined).then((isAccepted) => {
+            if (isAccepted) {
+              SessionStorage.saveTermsAccepted(true);
+              set({ hasAcceptedTerms: true });
+            }
+          }).catch(() => {});
+        }
         return true;
       }
 
@@ -95,13 +120,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ hasCompletedOnboarding: status });
   },
 
-  setAuthData: (token, refreshToken, user, restaurants, activeRestId) => {
-    logger.auth('AUTH_SESSION_CREATED', `Setting authentication session for user: ${user.name} (${user.mobile})`, {
-      userId: user.id,
-      roles: user.roles,
-      restaurantCount: restaurants.length,
-    });
-
+  setAuthData: (token, refreshToken, user, restaurants, activeRestId, hasAcceptedTermsExplicit) => {
     let activeRest: RestaurantDetail | null = null;
     if (activeRestId) {
       activeRest = restaurants.find((r) => r.restaurantId === activeRestId) || null;
@@ -109,6 +128,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (!activeRest && restaurants.length > 0) {
       activeRest = restaurants.find((r) => r.isDefault) || restaurants[0];
     }
+
+    const isOwner = isOwnerUser(user, activeRest);
+    // Non-owner roles never require terms consent
+    const hasAcceptedTerms = !isOwner || Boolean(hasAcceptedTermsExplicit);
+
+    logger.auth('AUTH_SESSION_CREATED', `Setting authentication session for user: ${user.name} (${user.mobile})`, {
+      userId: user.id,
+      roles: user.roles,
+      restaurantCount: restaurants.length,
+      isOwner,
+      hasAcceptedTerms,
+    });
 
     // Populate globals
     (globalThis as any).__MENZA_AUTH_TOKEN__ = token;
@@ -127,17 +158,70 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       restaurants,
       activeRestaurant: activeRest,
       hasCompletedOnboarding: true,
+      hasAcceptedTerms,
     });
 
     set({
       isAuthenticated: true,
       hasCompletedOnboarding: true,
+      hasAcceptedTerms,
       token,
       refreshToken,
       user,
       restaurants,
       activeRestaurant: activeRest,
     });
+
+    // If terms acceptance was not provided by login response and user is owner, sync with backend
+    if (typeof hasAcceptedTermsExplicit !== 'boolean' && isOwner && !hasAcceptedTerms && user?.id && token) {
+      termsRepository.getTermsConditionStatus(user.id, token).then((isAccepted) => {
+        if (isAccepted) {
+          SessionStorage.saveTermsAccepted(true);
+          set({ hasAcceptedTerms: true });
+        }
+      }).catch(() => {});
+    }
+  },
+
+  setHasAcceptedTerms: (status: boolean) => {
+    SessionStorage.saveTermsAccepted(status);
+    set({ hasAcceptedTerms: status });
+  },
+
+  checkTermsStatus: async () => {
+    const user = get().user;
+    const activeRest = get().activeRestaurant;
+    if (!user?.id) return false;
+    if (!isOwnerUser(user, activeRest)) {
+      set({ hasAcceptedTerms: true });
+      return true;
+    }
+    try {
+      const isAccepted = await termsRepository.getTermsConditionStatus(user.id, get().token || undefined);
+      if (isAccepted) {
+        SessionStorage.saveTermsAccepted(true);
+        set({ hasAcceptedTerms: true });
+      }
+      return isAccepted;
+    } catch {
+      return get().hasAcceptedTerms;
+    }
+  },
+
+  acceptTerms: async () => {
+    const user = get().user;
+    if (!user?.id) return false;
+    try {
+      const success = await termsRepository.acceptTermsCondition(user.id, get().token || undefined);
+      if (success) {
+        SessionStorage.saveTermsAccepted(true);
+        set({ hasAcceptedTerms: true });
+      }
+      return success;
+    } catch (err) {
+      logger.api('API_ERROR', 'Failed to accept terms condition', { error: String(err) });
+      throw err;
+    }
   },
 
   updateTokens: (token, refreshToken) => {
@@ -206,6 +290,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       user: null,
       restaurants: [],
       activeRestaurant: null,
+      hasAcceptedTerms: false,
     });
     logger.auth('LOGOUT_COMPLETED', 'User logout completed successfully');
   },

@@ -21,7 +21,12 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./*"],
-      "@shared/*": ["./shared/*", "../src/*"]
+      "@shared/*": ["./shared/*", "../src/*"],
+      "react-native": ["./shims/react-native.ts"],
+      "@react-native-async-storage/async-storage": ["./shims/async-storage.ts"],
+      "expo-print": ["./shims/expo-print.ts"],
+      "expo-sharing": ["./shims/expo-sharing.ts"],
+      "lucide-react-native": ["./node_modules/lucide-react"]
     }
   },
   "include": [
@@ -31,6 +36,9 @@
     ".next/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "shared/presentation/screens",
+    "shared/presentation/components",
+    "shared/presentation/hooks"
   ]
 }

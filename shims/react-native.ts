@@ -3,8 +3,9 @@
  * Translates React Native primitives and utilities to standard browser web APIs.
  */
 
-export const Platform = {
+export const Platform: any = {
   OS: 'web',
+  Version: 1,
   select: (options: Record<string, any>) => options.web || options.default || null,
   isTesting: false,
 };
@@ -46,11 +47,20 @@ export const NativeModules: Record<string, any> = {
   CFPaymentGatewayModule: null,
 };
 
-export const PermissionsAndroid = {
-  PERMISSIONS: {},
-  request: async () => 'granted',
-  check: async () => true,
-  requestMultiple: async () => ({}),
+export const PermissionsAndroid: any = {
+  PERMISSIONS: {
+    BLUETOOTH_SCAN: 'android.permission.BLUETOOTH_SCAN',
+    BLUETOOTH_CONNECT: 'android.permission.BLUETOOTH_CONNECT',
+    ACCESS_FINE_LOCATION: 'android.permission.ACCESS_FINE_LOCATION',
+  },
+  RESULTS: {
+    GRANTED: 'granted',
+    DENIED: 'denied',
+    NEVER_ASK_AGAIN: 'never_ask_again',
+  },
+  request: async (permission?: any, rationale?: any): Promise<string> => 'granted',
+  check: async (permission?: any): Promise<boolean> => true,
+  requestMultiple: async (permissions?: any): Promise<Record<string, string>> => ({}),
 };
 
 export const useColorScheme = () => {
@@ -75,11 +85,34 @@ export const Dimensions = {
   addEventListener: () => ({ remove: () => {} }),
 };
 
+export type AppStateStatus = 'active' | 'background' | 'inactive' | 'unknown' | 'extension';
+
 export const AppState = {
-  currentState: 'active',
-  addEventListener: () => ({ remove: () => {} }),
-  removeEventListener: () => {},
+  currentState: 'active' as AppStateStatus,
+  addEventListener: (type: string, listener: (state: AppStateStatus) => void) => {
+    if (typeof document !== 'undefined') {
+      const visibilityHandler = () => {
+        listener(document.visibilityState === 'visible' ? 'active' : 'background');
+      };
+      document.addEventListener('visibilitychange', visibilityHandler);
+      return {
+        remove: () => {
+          document.removeEventListener('visibilitychange', visibilityHandler);
+        },
+      };
+    }
+    return { remove: () => {} };
+  },
+  removeEventListener: (type: string, listener: (state: AppStateStatus) => void) => {},
 };
+
+export const View = (props: any) => null;
+export const Text = (props: any) => null;
+export const TouchableOpacity = (props: any) => null;
+export type StyleProp<T> = any;
+export type ViewStyle = any;
+export type TextStyle = any;
+export type ImageStyle = any;
 
 export default {
   Platform,
@@ -92,3 +125,4 @@ export default {
   Dimensions,
   AppState,
 };
+

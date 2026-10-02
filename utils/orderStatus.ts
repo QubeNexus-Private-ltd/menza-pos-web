@@ -3,7 +3,7 @@ import { OrderMaster } from '@/types/order';
 /**
  * Robustly checks if an order has already been settled / paid.
  * Handles case-insensitivity, multiple backend status variations ('Settled', 'Completed', 'Paid', 'Success'),
- * paymentStatus ('PAID', 'SUCCESS', 'Settled'), and settled date timestamps. yes
+ * paymentStatus ('PAID', 'SUCCESS', 'Settled'), and settled date timestamps.
  */
 export function isOrderSettled(order?: OrderMaster | null): boolean {
   if (!order) return false;

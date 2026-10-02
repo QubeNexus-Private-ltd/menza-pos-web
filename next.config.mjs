@@ -16,6 +16,11 @@ const sharedPath = localSharedExists
 const nextConfig = {
   ...(monorepoSrcExists ? { outputFileTracingRoot: path.resolve(__dirname, '..') } : {}),
   reactStrictMode: false,
+  logging: {
+    fetches: {
+      fullUrl: true,
+    },
+  },
   webpack: (config, { webpack, dev }) => {
     config.plugins.push(
       new webpack.DefinePlugin({

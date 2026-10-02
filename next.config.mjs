@@ -63,4 +63,6 @@ const nextConfig = {
   },
 };
 
-export default nextConfig;
+import { withAxiom } from 'next-axiom';
+
+export default withAxiom(nextConfig);

@@ -2,6 +2,7 @@ import '../shims/globals';
 import type { Metadata } from 'next';
 import './globals.css';
 import { ThemeProvider } from '../components/theme/ThemeProvider';
+import { AxiomWebVitals } from 'next-axiom';
 
 export const metadata: Metadata = {
   title: 'Menza - Smart Multi-Tenant Restaurant Suite',
@@ -22,6 +23,7 @@ export default function RootLayout({
         <ThemeProvider>
           {children}
         </ThemeProvider>
+        <AxiomWebVitals />
       </body>
     </html>
   );

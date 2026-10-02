@@ -284,6 +284,18 @@ export default function LoginPage() {
           <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
           <span>Encrypted Session • Cloud Multi-Store Controller</span>
         </div>
+
+        {/* Legal links */}
+        <div className="mt-3 text-center text-[11px] text-[#667085] dark:text-[#94A3B8]">
+          <span>By signing in, you agree to Menza's </span>
+          <a href="/terms" target="_blank" rel="noopener noreferrer" className="font-semibold text-[#DE8626] hover:underline">
+            Terms of Service
+          </a>
+          <span> and </span>
+          <a href="/privacy" target="_blank" rel="noopener noreferrer" className="font-semibold text-[#DE8626] hover:underline">
+            Privacy Policy
+          </a>
+        </div>
       </div>
 
       {/* Multi-Restaurant Selection Modal */}

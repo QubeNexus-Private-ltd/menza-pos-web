@@ -133,7 +133,14 @@ export function TermsConsentCard() {
             className="h-4 w-4 rounded-md border-gray-300 text-[#DE8626] focus:ring-[#DE8626] cursor-pointer"
           />
           <span className="text-xs sm:text-sm text-[#1E2930] dark:text-[#F3F4F6] font-semibold">
-            I accept this condition and agree to the Menza Merchant Terms.
+            I accept these conditions and agree to the{' '}
+            <a href="/terms" target="_blank" rel="noopener noreferrer" className="text-[#DE8626] underline hover:text-[#C9751D]">
+              Terms of Service
+            </a>{' '}
+            and{' '}
+            <a href="/privacy" target="_blank" rel="noopener noreferrer" className="text-[#DE8626] underline hover:text-[#C9751D]">
+              Privacy Policy
+            </a>.
           </span>
         </label>
 

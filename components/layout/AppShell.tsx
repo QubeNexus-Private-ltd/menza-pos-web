@@ -327,7 +327,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
         </nav>
 
         {/* Sidebar Footer User Card */}
-        <div className="border-t border-[#E7E1DA] dark:border-[#2B3540] p-3">
+        <div className="border-t border-[#E7E1DA] dark:border-[#2B3540] p-3 space-y-1.5">
           <div className="flex items-center gap-3 rounded-xl p-2 bg-[#FAF7F2] dark:bg-[#151A20]">
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-500/10 text-xs font-bold text-[#DE8626]">
               {user?.name ? user.name.slice(0, 2).toUpperCase() : 'ME'}
@@ -347,6 +347,18 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
             >
               <LogOut className="h-4 w-4" />
             </button>
+          </div>
+
+          <div className="flex items-center justify-center gap-2.5 px-2 text-[10px] text-[#667085] dark:text-[#94A3B8]">
+            <a href="/terms" target="_blank" rel="noopener noreferrer" className="hover:text-[#DE8626] transition-colors">
+              Terms
+            </a>
+            <span>•</span>
+            <a href="/privacy" target="_blank" rel="noopener noreferrer" className="hover:text-[#DE8626] transition-colors">
+              Privacy
+            </a>
+            <span>•</span>
+            <span>Menza Suite</span>
           </div>
         </div>
       </aside>

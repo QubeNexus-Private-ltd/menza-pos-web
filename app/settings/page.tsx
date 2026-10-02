@@ -74,6 +74,12 @@ export default function SettingsHubPage() {
       title: 'Terms & Conditions',
       desc: 'Review legal terms, customer consent, and partner restaurant agreements',
     },
+    {
+      href: '/privacy',
+      icon: ShieldCheck,
+      title: 'Privacy Policy',
+      desc: 'Data protection policies, patron confidentiality, and DPDP Act compliance',
+    },
   ];
 
   return (

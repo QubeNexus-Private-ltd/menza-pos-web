@@ -3,7 +3,7 @@ import {
   ActivityIndicator,
   Animated,
   BackHandler,
-  Image,
+  Easing,
   Keyboard,
   KeyboardAvoidingView,
   Platform,
@@ -22,42 +22,66 @@ import {
   AlertCircle,
   ArrowLeft,
   ArrowRight,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
-  Store,
+  Copy,
+  MessageSquare,
   Scale,
-  ShieldCheck,
+  Sparkles,
 } from 'lucide-react-native';
 import { APP_CONSTANTS } from '../../../core/constants/appConstants';
 import { logger, maskMobile } from '../../../core/logging';
 import { AuthRemoteDataSource } from '../../../data/datasources/AuthRemoteDataSource';
 import { AuthRepositoryImpl } from '../../../data/repositories/AuthRepositoryImpl';
+import { TermsConditionRemoteDataSource } from '../../../data/datasources/TermsConditionRemoteDataSource';
+import { TermsConditionRepositoryImpl } from '../../../data/repositories/TermsConditionRepositoryImpl';
 import { useAuthStore } from '../../state/useAuthStore';
+import { useAutoVerifyOtp } from '../../hooks/useAutoVerifyOtp';
 import { TermsAndConditionsModal } from '../legal/TermsAndConditionsModal';
+import { LoginHeader } from './components/LoginHeader';
+import { LoginBottomWaveSvg } from './components/LoginBottomWaveSvg';
+import { LoginSvgBackground } from './components/LoginSvgBackground';
 
 const authRepository = new AuthRepositoryImpl(new AuthRemoteDataSource());
-
-// Exact aspect ratio from NewLogin.png (852 × 1846)
-const DESIGN_WIDTH = 852;
-const DESIGN_HEIGHT = 1846;
-const DESIGN_ASPECT_RATIO = DESIGN_WIDTH / DESIGN_HEIGHT;
+const termsRepository = new TermsConditionRepositoryImpl(new TermsConditionRemoteDataSource());
 
 export const LoginScreen: React.FC = () => {
   const { height: windowHeight, width: windowWidth } = useWindowDimensions();
-  const [loginMode, setLoginMode] = useState<'mobile' | 'outlet'>('mobile');
   const [mobile, setMobile] = useState('');
-  const [outletCode, setOutletCode] = useState('');
   const [otpCode, setOtpCode] = useState('');
   const [isOtpSent, setIsOtpSent] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [focusedInput, setFocusedInput] = useState<'mobile' | 'otp' | 'outlet' | null>(null);
+  const [focusedInput, setFocusedInput] = useState<'mobile' | 'otp' | null>(null);
   const [resendTimer, setResendTimer] = useState(120);
   const [canResend, setCanResend] = useState(false);
   const [termsModalVisible, setTermsModalVisible] = useState(false);
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
 
+  const isVerifyingRef = useRef(false);
   const entranceAnim = useRef(new Animated.Value(0)).current;
   const setAuthData = useAuthStore((state) => state.setAuthData);
+
+  const {
+    isListening,
+    isAutoDetected,
+    timeoutError,
+    clipboardOtp,
+    pasteClipboardOtp,
+    startListening,
+    stopListening,
+  } = useAutoVerifyOtp({
+    enabled: isOtpSent,
+    numberOfDigits: 6,
+    onOtpReceived: (detectedCode) => {
+      setOtpCode(detectedCode);
+      Keyboard.dismiss();
+      setTimeout(() => {
+        handleVerifyOtp(detectedCode);
+      }, 150);
+    },
+  });
 
   useEffect(() => {
     logger.navigation('LoginScreen');
@@ -69,20 +93,31 @@ export const LoginScreen: React.FC = () => {
   }, [entranceAnim]);
 
   useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const onShow = () => setIsKeyboardVisible(true);
+    const onHide = () => setIsKeyboardVisible(false);
+
+    const showSub = Keyboard.addListener(showEvent, onShow);
+    const hideSub = Keyboard.addListener(hideEvent, onHide);
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
+  useEffect(() => {
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
       if (isOtpSent) {
         handleBackToMobile();
         return true;
       }
-      if (loginMode === 'outlet') {
-        setLoginMode('mobile');
-        setErrorMsg(null);
-        return true;
-      }
       return false;
     });
     return () => subscription.remove();
-  }, [isOtpSent, loginMode]);
+  }, [isOtpSent]);
 
   useEffect(() => {
     if (!isOtpSent || resendTimer <= 0) {
@@ -114,7 +149,7 @@ export const LoginScreen: React.FC = () => {
     const cleaned = text.replace(/[^0-9]/g, '').slice(0, 6);
     setOtpCode(cleaned);
     if (errorMsg) setErrorMsg(null);
-    if (cleaned.length === 6 && !loading) {
+    if (cleaned.length === 6 && !loading && !isVerifyingRef.current) {
       Keyboard.dismiss();
       setTimeout(() => handleVerifyOtp(cleaned), 120);
     }
@@ -134,11 +169,19 @@ export const LoginScreen: React.FC = () => {
       logger.auth('OTP_REQUEST_STARTED', 'Initiating OTP request', {
         mobile: maskMobile(mobileToUse),
       });
-      await authRepository.generateOtp(mobileToUse);
+      const otpRes = await authRepository.generateOtp(mobileToUse);
       setIsOtpSent(true);
       setResendTimer(120);
       setCanResend(false);
+      startListening();
       logger.auth('OTP_REQUEST_SUCCESS', 'OTP generation request completed successfully');
+
+      // Immediate auto-fill & verify if backend provides otpCode (dev/demo/direct)
+      if (otpRes?.otpCode && /^\d{6}$/.test(otpRes.otpCode)) {
+        setOtpCode(otpRes.otpCode);
+        Keyboard.dismiss();
+        setTimeout(() => handleVerifyOtp(otpRes.otpCode), 250);
+      }
     } catch (err: any) {
       logger.auth('OTP_REQUEST_FAILED', 'OTP generation request failed', {
         error: err.message,
@@ -151,8 +194,35 @@ export const LoginScreen: React.FC = () => {
     }
   };
 
+  const handleResendOtp = async () => {
+    if (loading || !canResend) return;
+    setErrorMsg(null);
+    try {
+      setLoading(true);
+      logger.auth('OTP_REQUEST_STARTED', 'Resending OTP request', {
+        mobile: maskMobile(mobile),
+      });
+      const res = await authRepository.generateOtp(mobile);
+      setResendTimer(120);
+      setCanResend(false);
+      startListening();
+      logger.auth('OTP_REQUEST_SUCCESS', 'Resent OTP successfully');
+
+      if (res?.otpCode && /^\d{6}$/.test(res.otpCode)) {
+        setOtpCode(res.otpCode);
+        Keyboard.dismiss();
+        setTimeout(() => handleVerifyOtp(res.otpCode), 250);
+      }
+    } catch (err: any) {
+      logger.auth('OTP_REQUEST_FAILED', 'Resend OTP failed', { error: err.message });
+      setErrorMsg(err.message || 'Unable to resend OTP. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleVerifyOtp = async (codeOverride?: string) => {
-    if (loading) return;
+    if (isVerifyingRef.current || loading) return;
 
     const codeToVerify = codeOverride || otpCode;
     if (codeToVerify.length !== 6) {
@@ -160,10 +230,13 @@ export const LoginScreen: React.FC = () => {
       return;
     }
     try {
+      isVerifyingRef.current = true;
       setLoading(true);
       setErrorMsg(null);
       logger.auth('OTP_VERIFICATION_STARTED', 'Submitting OTP for verification');
       const res = await authRepository.loginWithOtp(mobile, codeToVerify);
+      logger.auth('OTP_VERIFICATION_SUCCESS', 'OTP verification completed successfully');
+
       setAuthData(
         res.token,
         res.refreshToken,
@@ -175,12 +248,13 @@ export const LoginScreen: React.FC = () => {
           activeRestaurantId: res.activeRestaurantId,
         },
         res.restaurants,
-        res.activeRestaurantId
+        res.activeRestaurantId,
+        res.isTermConditionChecked
       );
     } catch (err: any) {
       logger.auth(
         'OTP_VERIFICATION_FAILED',
-        'OTP verification failed, proceeding with session',
+        'OTP verification failed',
         { error: err?.message }
       );
       setErrorMsg(
@@ -188,19 +262,13 @@ export const LoginScreen: React.FC = () => {
           'Invalid verification code. Please check the code and try again.'
       );
     } finally {
+      isVerifyingRef.current = false;
       setLoading(false);
     }
   };
 
-  const handleOutletLogin = async () => {
-    if (outletCode.trim().length < 4) {
-      setErrorMsg('Please enter a valid outlet code.');
-      return;
-    }
-    setErrorMsg('Direct outlet code login has been upgraded to secure Mobile OTP authentication. Please switch to Mobile Login.');
-  };
-
   const handleBackToMobile = () => {
+    stopListening();
     setIsOtpSent(false);
     setOtpCode('');
     setErrorMsg(null);
@@ -208,85 +276,168 @@ export const LoginScreen: React.FC = () => {
     setCanResend(false);
   };
 
-  // Compute responsive canvas preserving exact proportions across phones, tablets & desktop
-  let canvasWidth = windowWidth;
-  let canvasHeight = windowWidth / DESIGN_ASPECT_RATIO;
+  // Responsive device dimensions and breakpoints
+  const minDimension = Math.min(windowWidth, windowHeight);
+  const isTablet = minDimension >= 600;
+  const isLandscapePhone = windowWidth > windowHeight && !isTablet;
+  const isSmallWidth = windowWidth < 380;
+  const isSmallHeight = windowHeight < 700;
+  const isSmallScreen = isSmallWidth || isSmallHeight;
 
-  if (canvasHeight > windowHeight) {
-    canvasHeight = windowHeight;
-    canvasWidth = windowHeight * DESIGN_ASPECT_RATIO;
+  // Responsive max content width constraint (prevents overstretching on tablets while filling phones)
+  const contentWidth = isTablet
+    ? 440
+    : Math.min(windowWidth - (isSmallWidth ? 28 : 40), 430);
+
+  // Responsive Header height estimation for balancing
+  const LOGO_ASPECT_RATIO = 470 / 492;
+  const isCompactHeader = isOtpSent || isKeyboardVisible || isSmallHeight || isLandscapePhone;
+
+  let logoWidth = Math.min(
+    windowWidth * (isLandscapePhone ? 0.25 : isSmallScreen ? 0.48 : isTablet ? 0.32 : 0.54),
+    isLandscapePhone ? 120 : isCompactHeader ? 150 : isSmallScreen ? 180 : isTablet ? 260 : 224
+  );
+  if (isCompactHeader && !isLandscapePhone) {
+    logoWidth = Math.min(logoWidth, 150);
+  }
+  const logoHeight = logoWidth * LOGO_ASPECT_RATIO;
+
+  const estimatedHeaderHeight = isLandscapePhone
+    ? Math.max(logoHeight + 16, 105)
+    : isCompactHeader
+    ? Math.max(logoHeight + 20, 140)
+    : isSmallScreen
+    ? Math.max(logoHeight + 36, 175)
+    : isTablet
+    ? Math.max(logoHeight + 60, 240)
+    : Math.min(windowHeight * 0.30, Math.max(logoHeight + 48, 215));
+
+  // Responsive Wave height
+  const waveHeight = isLandscapePhone
+    ? 90
+    : isSmallScreen
+    ? 135
+    : isTablet
+    ? 200
+    : 170;
+
+  // Estimated form height depending on mode
+  const estimatedFormHeight = isOtpSent
+    ? (isSmallScreen ? 270 : 310)
+    : (isSmallScreen ? 95 : 115);
+
+  // Dynamic vertical slack space distributed smoothly
+  const totalOccupiedHeight = estimatedHeaderHeight + estimatedFormHeight + waveHeight;
+  const slackHeight = Math.max(0, windowHeight - totalOccupiedHeight);
+
+  // Distribute spacing so the number section rests in the balanced vertical center (~47-50% height)
+  // and smoothly shifts up when keyboard opens or orientation changes
+  let targetTopSpacer = 16;
+  let targetBottomSpacer = 16;
+
+  if (isKeyboardVisible || isLandscapePhone) {
+    targetTopSpacer = isOtpSent ? 8 : 14;
+    targetBottomSpacer = 14;
+  } else if (isOtpSent) {
+    targetTopSpacer = Math.max(12, Math.round(slackHeight * 0.34));
+    targetBottomSpacer = Math.max(16, slackHeight - targetTopSpacer);
+  } else {
+    // Standard phone mobile login resting state:
+    // 44% of available vertical slack placed above, 56% below.
+    // Perfectly aligns mobile input pill at ~47-50% screen height!
+    targetTopSpacer = Math.max(20, Math.round(slackHeight * 0.44));
+    targetBottomSpacer = Math.max(24, slackHeight - targetTopSpacer);
   }
 
-  const pillWidth = Math.min(canvasWidth * 0.88, 420);
-  const topHeaderSpacing = canvasHeight * 0.485;
+  const topSpacerAnim = useRef(new Animated.Value(targetTopSpacer)).current;
+  const bottomSpacerAnim = useRef(new Animated.Value(targetBottomSpacer)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(topSpacerAnim, {
+        toValue: targetTopSpacer,
+        duration: 250,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: false,
+      }),
+      Animated.timing(bottomSpacerAnim, {
+        toValue: targetBottomSpacer,
+        duration: 250,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: false,
+      }),
+    ]).start();
+  }, [targetTopSpacer, targetBottomSpacer, topSpacerAnim, bottomSpacerAnim]);
 
   return (
     <View style={styles.root}>
       <StatusBar barStyle="dark-content" backgroundColor="#FAF7F2" translucent />
 
-      {/* Main Single Source of Truth Canvas */}
-      <View
-        style={[
-          styles.canvasContainer,
-          {
-            width: canvasWidth,
-            height: canvasHeight,
-          },
-        ]}
-      >
-        {/* Exact background artwork matching NewLogin.png */}
-        <Image
-          source={require('../../../../assets/menza_login_canvas_bg.png')}
-          style={styles.fullImage}
-          resizeMode="contain"
-          accessibilityLabel="Menza — Order, Dine, Delight"
-        />
+      {/* 
+        Full-screen SVG Background:
+        Draws vector porcelain gradients and ambient lamp lighting that scales fluidly
+        to any screen aspect ratio (long, short, phones, tablets).
+      */}
+      <LoginSvgBackground width={windowWidth} height={windowHeight} />
 
-        {/* Interactive Layer positioned over the canvas */}
-        <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
-          <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
-            style={styles.keyboardView}
+      {/* Main Interactive Screen Layer */}
+      <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.keyboardView}
+        >
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+            contentContainerStyle={[
+              styles.scrollContent,
+              {
+                minHeight:
+                  windowHeight -
+                  (Platform.OS === 'android' && StatusBar.currentHeight
+                    ? StatusBar.currentHeight
+                    : 0),
+              },
+            ]}
+            showsVerticalScrollIndicator={false}
+            bounces={false}
           >
-            <ScrollView
-              keyboardShouldPersistTaps="handled"
-              keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-              contentContainerStyle={[
-                styles.scrollContent,
-                isOtpSent && styles.otpScrollContent,
-              ]}
-              showsVerticalScrollIndicator={false}
-            >
-              <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-                <Animated.View
-                  style={[
-                    styles.mainContainer,
-                    {
-                      opacity: entranceAnim,
-                    },
-                  ]}
-                >
-                  {/* Spacer reserving the top logo & lamps area matching NewLogin.png */}
-                  <View style={{ 
-                    height: isOtpSent ? Math.max(canvasHeight * 0.38,180) : topHeaderSpacing, 
-                    }}   
-                  />
+            <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+              <Animated.View
+                style={[
+                  styles.mainContainer,
+                  {
+                    opacity: entranceAnim,
+                  },
+                ]}
+              >
+                {/* 
+                  1. Responsive Vector Header:
+                  Contains ambient lighting, hanging lamps, and crisp Menza Cloche logo
+                  that scales proportionally on long, short, and tablet screens.
+                */}
+                <LoginHeader compact={isCompactHeader} />
 
-                  {/* Inline Error Banner */}
+                {/* Dynamic Top Animated Spacer: gracefully centers number input and glides up on keyboard focus */}
+                <Animated.View style={{ height: topSpacerAnim }} />
+
+                {/* 
+                  2. Centered Form Container:
+                  Uses responsive max-width so it fills mobile screens cleanly
+                  and remains an elegant centered card on tablets.
+                */}
+                <View style={[styles.formContainer, { width: contentWidth }]}>
+                  {/* Inline Error Alert Banner */}
                   {errorMsg ? (
-                    <View
-                      accessibilityRole="alert"
-                      style={[styles.errorBanner, { width: pillWidth }]}
-                    >
-                      <AlertCircle size={17} color="#DC2626" />
+                    <View accessibilityRole="alert" style={styles.errorBanner}>
+                      <AlertCircle size={16} color="#DC2626" />
                       <Text style={styles.errorText}>{errorMsg}</Text>
                     </View>
                   ) : null}
 
                   {isOtpSent ? (
                     /* OTP Verification Card State */
-                    <View style={[styles.cardContainer, { width: pillWidth }]}>
+                    <View style={[styles.cardContainer, isSmallScreen && styles.cardContainerSmall]}>
                       <TouchableOpacity
                         accessibilityRole="button"
                         onPress={handleBackToMobile}
@@ -296,14 +447,64 @@ export const LoginScreen: React.FC = () => {
                         <Text style={styles.backLinkText}>Change mobile number</Text>
                       </TouchableOpacity>
 
-                      <Text style={styles.cardHeading}>Verify your number</Text>
-                      <Text style={styles.cardSubheading}>
+                      <Text style={[styles.cardHeading, isSmallScreen && styles.cardHeadingSmall]}>
+                        Verify your number
+                      </Text>
+                      <Text style={[styles.cardSubheading, isSmallScreen && styles.cardSubheadingSmall]}>
                         Enter the code sent to +91 {mobile}
                       </Text>
 
+                      {/* Auto-Verify Status Banner */}
+                      {isAutoDetected ? (
+                        <View style={[styles.autoVerifyStatusBanner, styles.autoVerifyStatusSuccess]}>
+                          <CheckCircle2 size={15} color="#17845A" />
+                          <Text style={styles.autoVerifyStatusTextSuccess}>
+                            SMS code detected • Auto-verifying...
+                          </Text>
+                        </View>
+                      ) : isListening ? (
+                        <View style={styles.autoVerifyStatusBanner}>
+                          <ActivityIndicator size="small" color="#17845A" style={{ transform: [{ scale: 0.8 }] }} />
+                          <Text style={styles.autoVerifyStatusText}>
+                            Auto-detecting OTP from incoming SMS...
+                          </Text>
+                        </View>
+                      ) : timeoutError ? (
+                        <View style={[styles.autoVerifyStatusBanner, styles.autoVerifyStatusMuted]}>
+                          <MessageSquare size={14} color="#6B7280" />
+                          <Text style={styles.autoVerifyStatusTextMuted}>
+                            Auto-detect timed out. Please enter code manually.
+                          </Text>
+                        </View>
+                      ) : Platform.OS === 'ios' ? (
+                        <View style={[styles.autoVerifyStatusBanner, styles.autoVerifyStatusMuted]}>
+                          <Sparkles size={14} color="#D96B14" />
+                          <Text style={styles.autoVerifyStatusTextMuted}>
+                            Tap code from SMS above keyboard to auto-fill
+                          </Text>
+                        </View>
+                      ) : null}
+
+                      {/* One-Tap Clipboard Paste Chip if 6-digit OTP detected on clipboard */}
+                      {clipboardOtp && otpCode.length < 6 ? (
+                        <TouchableOpacity
+                          style={styles.clipboardChip}
+                          onPress={pasteClipboardOtp}
+                          activeOpacity={0.8}
+                        >
+                          <Copy size={13} color="#D96B14" />
+                          <Text style={styles.clipboardChipText}>
+                            Paste code from SMS:{' '}
+                            <Text style={styles.clipboardChipBold}>{clipboardOtp}</Text>
+                          </Text>
+                        </TouchableOpacity>
+                      ) : null}
+
+                      {/* 6-Digit Responsive OTP Input */}
                       <View
                         style={[
                           styles.otpInputWrapper,
+                          isSmallScreen && styles.otpInputWrapperSmall,
                           focusedInput === 'otp' && styles.inputWrapperFocused,
                         ]}
                       >
@@ -318,18 +519,21 @@ export const LoginScreen: React.FC = () => {
                           keyboardType="number-pad"
                           autoComplete="sms-otp"
                           textContentType="oneTimeCode"
+                          importantForAutofill="yes"
+                          selectTextOnFocus
                           maxLength={6}
                           autoFocus
-                          secureTextEntry
-                          style={styles.otpInput}
+                          secureTextEntry={false}
+                          style={[styles.otpInput, isSmallScreen && styles.otpInputSmall]}
                         />
                       </View>
 
+                      {/* Verify Button */}
                       <TouchableOpacity
                         activeOpacity={0.88}
                         onPress={() => handleVerifyOtp()}
                         disabled={loading}
-                        style={styles.continueButton}
+                        style={[styles.continueButton, isSmallScreen && styles.continueButtonSmall]}
                       >
                         {loading ? (
                           <ActivityIndicator size="small" color="#FFFFFF" />
@@ -341,10 +545,11 @@ export const LoginScreen: React.FC = () => {
                         )}
                       </TouchableOpacity>
 
+                      {/* Resend Countdown Row */}
                       <View style={styles.resendRow}>
                         <Text style={styles.resendPrompt}>Didn't receive a code?</Text>
                         {canResend ? (
-                          <TouchableOpacity onPress={() => handleSendOtp()} disabled={loading}>
+                          <TouchableOpacity onPress={handleResendOtp} disabled={loading}>
                             <Text style={styles.resendActiveText}>Resend OTP</Text>
                           </TouchableOpacity>
                         ) : (
@@ -354,70 +559,25 @@ export const LoginScreen: React.FC = () => {
                         )}
                       </View>
                     </View>
-                  ) : loginMode === 'outlet' ? (
-                    /* Outlet Code Login Card State */
-                    <View style={[styles.cardContainer, { width: pillWidth }]}>
-                      <TouchableOpacity
-                        accessibilityRole="button"
-                        onPress={() => {
-                          setLoginMode('mobile');
-                          setErrorMsg(null);
-                        }}
-                        style={styles.backLinkRow}
-                      >
-                        <ArrowLeft size={16} color="#D96B14" />
-                        <Text style={styles.backLinkText}>Back to mobile login</Text>
-                      </TouchableOpacity>
-
-                      <Text style={styles.cardHeading}>Enter Outlet Code</Text>
-                      <Text style={styles.cardSubheading}>
-                        Fast-login for cashiers and store terminals
-                      </Text>
-
-                      <View
-                        style={[
-                          styles.outletInputWrapper,
-                          focusedInput === 'outlet' && styles.inputWrapperFocused,
-                        ]}
-                      >
-                        <Store size={18} color="#9CA3AF" style={{ marginLeft: 14 }} />
-                      </View>
-
-                      <TouchableOpacity
-                        activeOpacity={0.88}
-                        onPress={handleOutletLogin}
-                        disabled={loading}
-                        style={styles.continueButton}
-                      >
-                        {loading ? (
-                          <ActivityIndicator size="small" color="#FFFFFF" />
-                        ) : (
-                          <>
-                            <Text style={styles.continueButtonText}>Continue to Outlet</Text>
-                            <ArrowRight size={18} color="#FFFFFF" style={styles.continueIcon} />
-                          </>
-                        )}
-                      </TouchableOpacity>
-                    </View>
                   ) : (
-                    /* Exact NewLogin.png Floating Capsule Input Bar */
+                    /* Floating Capsule Input Pill (Exact Menza Design) */
                     <View style={styles.floatingPillSection}>
                       <View
                         style={[
                           styles.floatingPill,
-                          { width: pillWidth },
+                          isSmallScreen && styles.floatingPillSmall,
                           focusedInput === 'mobile' && styles.floatingPillFocused,
                         ]}
                       >
                         {/* Country Code Selector: 🇮🇳 +91 v | */}
                         <View style={styles.countryPickerAdornment}>
-                          <Text style={styles.flagEmoji}>🇮🇳</Text>
-                          <Text style={styles.countryCodeText}>+91</Text>
-                          <ChevronDown size={14} color="#6B7280" style={styles.chevronIcon} />
+                          <Text style={[styles.flagEmoji, isSmallWidth && styles.flagEmojiSmall]}>🇮🇳</Text>
+                          <Text style={[styles.countryCodeText, isSmallWidth && styles.countryCodeTextSmall]}>+91</Text>
+                          <ChevronDown size={isSmallWidth ? 12 : 14} color="#6B7280" style={styles.chevronIcon} />
                           <View style={styles.inputDividerLine} />
                         </View>
 
-                        {/* Mobile Number Input */}
+                        {/* Mobile Number Input with responsive styling preventing cutoff */}
                         <TextInput
                           accessibilityLabel="Mobile number"
                           value={mobile}
@@ -430,40 +590,25 @@ export const LoginScreen: React.FC = () => {
                           autoComplete="tel"
                           textContentType="telephoneNumber"
                           maxLength={10}
-                          style={styles.textInput}
+                          style={[styles.textInput, isSmallWidth && styles.textInputSmall]}
                         />
 
-                        {/* Right Orange Chevron Arrow Button */}
+                        {/* Right Orange Chevron Button */}
                         <TouchableOpacity
                           activeOpacity={0.75}
                           onPress={() => handleSendOtp()}
                           disabled={loading}
-                          style={styles.chevronActionBtn}
+                          style={[styles.chevronActionBtn, isSmallWidth && styles.chevronActionBtnSmall]}
                           accessibilityLabel="Continue"
                           accessibilityRole="button"
                         >
                           {loading ? (
                             <ActivityIndicator size="small" color="#E08726" />
                           ) : (
-                            <ChevronRight size={26} color="#E08726" strokeWidth={2.4} />
+                            <ChevronRight size={isSmallWidth ? 22 : 26} color="#E08726" strokeWidth={2.4} />
                           )}
                         </TouchableOpacity>
                       </View>
-
-                      {/* Subtle Outlet Code Alternative Link */}
-                      <TouchableOpacity
-                        activeOpacity={0.78}
-                        onPress={() => {
-                          setLoginMode('outlet');
-                          setErrorMsg(null);
-                        }}
-                        style={styles.outletModeLink}
-                      >
-                        <Store size={15} color="#8C7A6B" style={{ marginRight: 6 }} />
-                        <Text style={styles.outletModeText}>
-                          Sign in with Outlet Code / Cashier PIN
-                        </Text>
-                      </TouchableOpacity>
                     </View>
                   )}
 
@@ -479,15 +624,25 @@ export const LoginScreen: React.FC = () => {
                       <Text style={styles.termsFooterHighlight}>Terms & Conditions, Rules and Regulations</Text>
                     </Text>
                   </TouchableOpacity>
+                </View>
 
-                  {/* Bottom Safety Margin */}
-                  <View style={{ height: Math.max(canvasHeight * 0.08, 40) }} />
-                </Animated.View>
-              </TouchableWithoutFeedback>
-            </ScrollView>
-          </KeyboardAvoidingView>
-        </SafeAreaView>
-      </View>
+                {/* Dynamic Bottom Animated Spacer: balances the screen and adapts to keyboard */}
+                <Animated.View style={{ height: bottomSpacerAnim }} />
+
+                {/* 
+                  3. Responsive Vector SVG Bottom Wave:
+                  Scales to 100% width on any screen with zero pixelation or distortion,
+                  housing the trust badge "POWERING 1000+ RESTAURANTS".
+                */}
+                <LoginBottomWaveSvg
+                  height={waveHeight}
+                  showBadge={!isLandscapePhone}
+                />
+              </Animated.View>
+            </TouchableWithoutFeedback>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
 
       {/* Terms and Conditions Modal */}
       <TermsAndConditionsModal
@@ -499,43 +654,28 @@ export const LoginScreen: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
-  otpScrollContent: {
-    paddingBottom:  180,
-  },
   root: {
     flex: 1,
     backgroundColor: '#FAF7F2',
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  canvasContainer: {
-    position: 'relative',
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-    backgroundColor: '#FAF7F2',
-  },
-  fullImage: {
-    width: '100%',
-    height: '100%',
-    position: 'absolute',
   },
   safeArea: {
     flex: 1,
-    width: '100%',
   },
   keyboardView: {
     flex: 1,
-    width: '100%',
   },
   scrollContent: {
     flexGrow: 1,
-    alignItems: 'center',
   },
   mainContainer: {
-    width: '100%',
+    flexGrow: 1,
     alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+  },
+  formContainer: {
+    alignItems: 'center',
+    alignSelf: 'center',
   },
   floatingPillSection: {
     alignItems: 'center',
@@ -544,54 +684,74 @@ const styles = StyleSheet.create({
   floatingPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    height: 62,
-    borderRadius: 31,
+    width: '100%',
+    height: 60,
+    borderRadius: 30,
     backgroundColor: '#FFFFFF',
-    paddingLeft: 18,
-    paddingRight: 14,
+    paddingLeft: 16,
+    paddingRight: 10,
     shadowColor: '#3C2F00',
     shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.12,
+    shadowOpacity: 0.10,
     shadowRadius: 16,
     elevation: 6,
     borderWidth: 1,
-    borderColor: 'rgba(235, 230, 222, 0.75)',
+    borderColor: 'rgba(235, 230, 222, 0.85)',
+  },
+  floatingPillSmall: {
+    height: 54,
+    borderRadius: 27,
+    paddingLeft: 12,
+    paddingRight: 8,
   },
   floatingPillFocused: {
     borderColor: '#E08726',
     borderWidth: 1.5,
-    shadowOpacity: 0.2,
+    shadowOpacity: 0.18,
   },
   countryPickerAdornment: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   flagEmoji: {
-    fontSize: 20,
-    marginRight: 6,
+    fontSize: 19,
+    marginRight: 5,
+  },
+  flagEmojiSmall: {
+    fontSize: 16,
+    marginRight: 4,
   },
   countryCodeText: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 15.5,
+    fontWeight: '700',
     color: '#1F2937',
   },
+  countryCodeTextSmall: {
+    fontSize: 14,
+  },
   chevronIcon: {
-    marginLeft: 3,
-    marginRight: 10,
+    marginLeft: 2,
+    marginRight: 8,
   },
   inputDividerLine: {
     width: 1,
-    height: 26,
+    height: 24,
     backgroundColor: '#E5E7EB',
-    marginRight: 10,
+    marginRight: 8,
   },
   textInput: {
     flex: 1,
+    minWidth: 0,
     height: '100%',
-    fontSize: 16,
+    fontSize: 15.5,
     fontWeight: '500',
     color: '#1F2937',
-    paddingRight: 10,
+    paddingRight: 6,
+    letterSpacing: 0.3,
+  },
+  textInputSmall: {
+    fontSize: 14,
+    paddingRight: 4,
   },
   chevronActionBtn: {
     width: 38,
@@ -600,80 +760,142 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  outletModeLink: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 18,
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-  },
-  outletModeText: {
-    color: '#7C6F62',
-    fontSize: 13,
-    fontWeight: '600',
-    letterSpacing: 0.2,
+  chevronActionBtnSmall: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
   },
   cardContainer: {
+    width: '100%',
     backgroundColor: '#FFFFFF',
-    borderRadius: 24,
-    paddingHorizontal: 22,
-    paddingTop: 24,
-    paddingBottom: 22,
+    borderRadius: 22,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 20,
     shadowColor: '#3C2F00',
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.08,
-    shadowRadius: 24,
+    shadowRadius: 20,
     elevation: 6,
     borderWidth: 1,
-    borderColor: 'rgba(231, 225, 218, 0.45)',
+    borderColor: 'rgba(231, 225, 218, 0.55)',
+  },
+  cardContainerSmall: {
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 16,
   },
   cardHeading: {
-    fontSize: 22,
+    fontSize: 21,
     fontWeight: '700',
     color: '#1F2937',
     letterSpacing: -0.3,
   },
-  cardSubheading: {
-    fontSize: 14,
-    color: '#6B7280',
-    marginTop: 4,
-    marginBottom: 20,
+  cardHeadingSmall: {
+    fontSize: 19,
   },
-  errorBanner: {
+  cardSubheading: {
+    fontSize: 13.5,
+    color: '#6B7280',
+    marginTop: 3,
+    marginBottom: 16,
+  },
+  cardSubheadingSmall: {
+    fontSize: 12.5,
+    marginBottom: 14,
+  },
+  autoVerifyStatusBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    padding: 12,
+    paddingVertical: 7,
+    paddingHorizontal: 11,
+    borderRadius: 10,
+    backgroundColor: '#EBF8F1',
+    borderWidth: 1,
+    borderColor: '#C6EEDB',
+    marginBottom: 12,
+  },
+  autoVerifyStatusSuccess: {
+    backgroundColor: '#DCFCE7',
+    borderColor: '#86EFAC',
+  },
+  autoVerifyStatusMuted: {
+    backgroundColor: '#F9FAFB',
+    borderColor: '#E5E7EB',
+  },
+  autoVerifyStatusText: {
+    fontSize: 11.5,
+    fontWeight: '600',
+    color: '#17845A',
+    flex: 1,
+  },
+  autoVerifyStatusTextSuccess: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#15803D',
+    flex: 1,
+  },
+  autoVerifyStatusTextMuted: {
+    fontSize: 11.5,
+    fontWeight: '500',
+    color: '#6B7280',
+    flex: 1,
+  },
+  clipboardChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'center',
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 18,
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    marginBottom: 12,
+  },
+  clipboardChipText: {
+    fontSize: 11.5,
+    color: '#92400E',
+    fontWeight: '500',
+  },
+  clipboardChipBold: {
+    fontWeight: '700',
+    color: '#B45309',
+    letterSpacing: 0.8,
+  },
+  errorBanner: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 10,
     borderRadius: 12,
     backgroundColor: '#FEE2E2',
-    marginBottom: 16,
+    marginBottom: 14,
     borderWidth: 1,
     borderColor: '#FECACA',
   },
   errorText: {
     flex: 1,
     color: '#DC2626',
-    fontSize: 13,
+    fontSize: 12.5,
     fontWeight: '500',
+    lineHeight: 16,
   },
   otpInputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
-    height: 52,
+    height: 50,
     borderRadius: 12,
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#E5E7EB',
   },
-  outletInputWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    height: 52,
-    borderRadius: 12,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
+  otpInputWrapperSmall: {
+    height: 46,
   },
   inputWrapperFocused: {
     borderColor: '#D96B14',
@@ -688,73 +910,83 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     letterSpacing: 6,
   },
+  otpInputSmall: {
+    fontSize: 16,
+    letterSpacing: 4,
+  },
   continueButton: {
-    height: 50,
-    borderRadius: 14,
+    height: 48,
+    borderRadius: 13,
     backgroundColor: '#D96B14',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 16,
+    marginTop: 14,
     shadowColor: '#D96B14',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
+    shadowOpacity: 0.22,
+    shadowRadius: 8,
     elevation: 3,
+  },
+  continueButtonSmall: {
+    height: 44,
+    borderRadius: 11,
+    marginTop: 12,
   },
   continueButtonText: {
     color: '#FFFFFF',
-    fontSize: 15,
+    fontSize: 14.5,
     fontWeight: '600',
     letterSpacing: 0.2,
   },
   continueIcon: {
-    marginLeft: 8,
+    marginLeft: 6,
   },
   backLinkRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginBottom: 12,
+    marginBottom: 10,
     alignSelf: 'flex-start',
   },
   backLinkText: {
     color: '#D96B14',
-    fontSize: 13,
+    fontSize: 12.5,
     fontWeight: '600',
   },
   resendRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'center',
     alignItems: 'center',
     gap: 5,
-    marginTop: 16,
+    marginTop: 14,
   },
   resendPrompt: {
     color: '#6B7280',
-    fontSize: 13,
+    fontSize: 12.5,
   },
   resendActiveText: {
     color: '#D96B14',
-    fontSize: 13,
+    fontSize: 12.5,
     fontWeight: '700',
   },
   resendTimerText: {
     color: '#9CA3AF',
-    fontSize: 13,
+    fontSize: 12.5,
   },
   termsFooterLink: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 18,
-    paddingHorizontal: 24,
+    marginTop: 14,
+    paddingHorizontal: 12,
   },
   termsFooterText: {
     fontSize: 11,
     color: '#78716C',
     textAlign: 'center',
-    lineHeight: 16,
+    lineHeight: 15,
   },
   termsFooterHighlight: {
     color: '#D96B14',
@@ -762,4 +994,3 @@ const styles = StyleSheet.create({
     textDecorationLine: 'underline',
   },
 });
-

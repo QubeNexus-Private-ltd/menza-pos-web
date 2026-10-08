@@ -15,12 +15,9 @@ import {
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
-import { useAuthStore } from '@shared/presentation/state/useAuthStore';
-import { RoleRemoteDataSource } from '@shared/data/datasources/RoleRemoteDataSource';
-import { StaffMember } from '@shared/domain/models/StaffMember';
-import { RoleMaster } from '@shared/domain/models/Role';
-
-const roleDataSource = new RoleRemoteDataSource();
+import { useAuthStore } from '@/stores/useAuthStore';
+import { StaffService } from '@/services/staffService';
+import { StaffMember, RoleMaster } from '@/types/staff';
 
 export default function StaffPage() {
   const { activeRestaurant, restaurants } = useAuthStore();
@@ -44,8 +41,8 @@ export default function StaffPage() {
     try {
       setLoading(true);
       const [staffRes, rolesRes] = await Promise.allSettled([
-        roleDataSource.getStaffMembers(currentRestId),
-        roleDataSource.getAllRoles(),
+        StaffService.getStaff(currentRestId),
+        StaffService.getRoles(),
       ]);
 
       if (staffRes.status === 'fulfilled' && Array.isArray(staffRes.value)) {
@@ -74,7 +71,7 @@ export default function StaffPage() {
 
     try {
       setSavingStaff(true);
-      await roleDataSource.registerStaffMember({
+      await StaffService.createStaff({
         restaurantId: currentRestId,
         name: name.trim(),
         mobile: mobile.trim(),

@@ -19,35 +19,30 @@ import {
   AlertCircle,
   QrCode,
   ArrowRight,
-  Receipt,
   User,
   Phone,
   Table as TableIcon,
   Sparkles,
+  MessageCircle,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
 import { DishImage } from '@/components/common/DishImage';
 import { WebPrinterService } from '@/services/webPrinterService';
-import { useAuthStore } from '@shared/presentation/state/useAuthStore';
-import { usePrinterStore } from '@shared/presentation/state/usePrinterStore';
-import { useNotificationStore } from '@shared/presentation/state/useNotificationStore';
-import { CatalogRemoteDataSource } from '@shared/data/datasources/CatalogRemoteDataSource';
-import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
-import { OrderRepositoryImpl } from '@shared/data/repositories/OrderRepositoryImpl';
-import { TableRemoteDataSource } from '@shared/data/datasources/TableRemoteDataSource';
-import { RestaurantConfigRemoteDataSource } from '@shared/data/datasources/RestaurantConfigRemoteDataSource';
-import { MenuItem } from '@shared/domain/models/Item';
-import { Category } from '@shared/domain/models/Category';
-import { TableMaster } from '@shared/domain/models/Table';
-import { RestaurantConfig } from '@shared/domain/models/RestaurantConfig';
-import { BillingModes, PosCheckoutModes } from '@shared/domain/models/Order';
-import { ReceiptData } from '@shared/core/printer/EscPosBuilder';
-
-const catalogDataSource = new CatalogRemoteDataSource();
-const orderRepository = new OrderRepositoryImpl(new OrderRemoteDataSource());
-const tableDataSource = new TableRemoteDataSource();
-const configDataSource = new RestaurantConfigRemoteDataSource();
+import { WebWhatsAppService } from '@/services/whatsAppService';
+import { useAuthStore } from '@/stores/useAuthStore';
+import { usePrinterStore } from '@/stores/usePrinterStore';
+import { useNotificationStore } from '@/stores/useNotificationStore';
+import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
+import { MenuService } from '@/services/menuService';
+import { OrderService } from '@/services/orderService';
+import { TableService } from '@/services/tableService';
+import { ConfigService } from '@/services/configService';
+import { MenuItem, Category } from '@/types/menu';
+import { TableMaster } from '@/types/table';
+import { RestaurantConfig } from '@/types/restaurant';
+import { BillingModes, PosCheckoutModes } from '@/types/order';
+import { ReceiptData } from '@/types/printer';
 
 interface CartItem {
   itemId: number;
@@ -100,18 +95,16 @@ export default function PosPage() {
     const loadData = async () => {
       try {
         setLoading(true);
-        const [catsRes, itemsRes, tablesRes, cfgRes] = await Promise.allSettled([
-          catalogDataSource.getCategories(currentRestId),
-          catalogDataSource.getMenuItems(currentRestId),
-          tableDataSource.getTables(currentRestId),
-          configDataSource.getConfig(currentRestId),
+        const [catsRes, tablesRes, cfgRes] = await Promise.allSettled([
+          MenuService.getCatalogTree(currentRestId),
+          TableService.getTables(currentRestId),
+          ConfigService.getRestaurantConfig(currentRestId),
         ]);
 
         if (catsRes.status === 'fulfilled' && Array.isArray(catsRes.value)) {
           setCategories(catsRes.value);
-        }
-        if (itemsRes.status === 'fulfilled' && Array.isArray(itemsRes.value)) {
-          setItems(itemsRes.value);
+          const allItems = catsRes.value.flatMap((c) => (c.items || []).map((it) => ({ ...it, categoryId: it.categoryId || c.categoryId })));
+          setItems(allItems);
         }
         if (tablesRes.status === 'fulfilled' && Array.isArray(tablesRes.value)) {
           setTables(tablesRes.value);
@@ -150,21 +143,22 @@ export default function PosPage() {
 
   // Cart Operations
   const addToCart = (item: MenuItem) => {
+    const id = item.id || item.itemId;
     setCart((prev) => {
-      const existing = prev.find((ci) => ci.itemId === item.id);
+      const existing = prev.find((ci) => ci.itemId === id);
       if (existing) {
         return prev.map((ci) =>
-          ci.itemId === item.id ? { ...ci, quantity: ci.quantity + 1 } : ci
+          ci.itemId === id ? { ...ci, quantity: ci.quantity + 1 } : ci
         );
       }
       return [
         ...prev,
         {
-          itemId: item.id,
+          itemId: id,
           itemName: item.itemName,
           price: item.price,
           quantity: 1,
-          isVeg: Boolean(item.isVeg),
+          isVeg: Boolean(item.isVeg ?? item.isVegetarian),
         },
       ];
     });
@@ -218,6 +212,13 @@ export default function PosPage() {
   const executeOrder = async (isPostPaidKOT: boolean) => {
     if (cart.length === 0 || isPlacingOrder) return;
 
+    const { isExpired, lifecycleState, openRenewalModal } = useSubscriptionStore.getState();
+    if (isExpired || lifecycleState === 'EXPIRED') {
+      alert('Subscription Expired 🔒\nYour restaurant subscription has expired beyond the grace period. Order taking and billing are locked until your plan is renewed.\n\nPlease pay for your subscription to continue operations.');
+      openRenewalModal();
+      return;
+    }
+
     if (orderType === 'DINE_IN' && !selectedTable) {
       alert('Please select a dining table for Dine-in orders.');
       setTableModalOpen(true);
@@ -259,7 +260,8 @@ export default function PosPage() {
         items: itemsPayload,
       };
 
-      const orderId = await orderRepository.placeOrder(orderPayload);
+      const placeRes: any = await OrderService.placeOrder(orderPayload);
+      const orderId = placeRes?.orderId || placeRes?.id || Number(placeRes);
 
       if (orderId && orderId > 0) {
         markOrderAsKnown(orderId, isPostPaidKOT ? 'Pending' : 'Confirmed');
@@ -318,6 +320,7 @@ export default function PosPage() {
           orderType,
           table: selectedTable?.tableNumber,
           customerName: orderPayload.name,
+          customerPhone: customerPhone.trim(),
           items: cart,
           subtotal,
           totalTax,
@@ -347,6 +350,45 @@ export default function PosPage() {
   const handlePrintKot = () => {
     if (!orderSuccessData?.receiptData) return;
     WebPrinterService.printKot(orderSuccessData.receiptData, paperWidth);
+  };
+
+  const handleShareWhatsApp = async () => {
+    if (!orderSuccessData) return;
+    let phone = orderSuccessData.customerPhone;
+    if (!phone) {
+      const entered = window.prompt('Enter 10-digit customer WhatsApp number:');
+      if (!entered) return;
+      phone = entered.replace(/[^0-9]/g, '').slice(-10);
+    }
+    if (!phone || phone.length < 10) {
+      alert('Please enter a valid 10-digit mobile number');
+      return;
+    }
+
+    const url = WebWhatsAppService.getWhatsAppReceiptUrl(phone, {
+      restaurantName: activeRestaurant?.restaurantName || 'Menza Restaurant',
+      orderId: orderSuccessData.orderId,
+      customerName: orderSuccessData.customerName,
+      items: orderSuccessData.items,
+      grandTotal: orderSuccessData.grandTotal,
+      paymentMode: orderSuccessData.paymentMode,
+    });
+    window.open(url, '_blank');
+
+    // Background test WhatsApp push (Disabled - Testing Only)
+    // if (activeRestaurant?.restaurantId) {
+    //   WebWhatsAppService.sendOrderStatusNotification({
+    //     orderId: Number(orderSuccessData.orderId),
+    //     restaurantId: activeRestaurant.restaurantId,
+    //     restaurantName: activeRestaurant.restaurantName,
+    //     mobileNumber: phone,
+    //     customerName: orderSuccessData.customerName,
+    //     orderStatus: 'CONFIRMED',
+    //     orderTypeName: orderSuccessData.orderType,
+    //     tableName: orderSuccessData.table ? `Table ${orderSuccessData.table}` : undefined,
+    //     totalAmount: orderSuccessData.grandTotal,
+    //   }).catch((e) => console.warn('Background WhatsApp push failed:', e));
+    // }
   };
 
   return (
@@ -460,8 +502,8 @@ export default function PosPage() {
               </button>
               {categories.map((cat) => (
                 <button
-                  key={cat.id}
-                  onClick={() => setSelectedCategory(cat.id)}
+                  key={cat.id ?? cat.categoryId}
+                  onClick={() => setSelectedCategory(cat.id ?? cat.categoryId)}
                   className={`shrink-0 rounded-xl px-3.5 py-1.5 text-xs font-bold transition-all ${
                     selectedCategory === cat.id
                       ? 'bg-[#DE8626] text-white shadow-sm shadow-[#DE8626]/20'
@@ -867,24 +909,31 @@ export default function PosPage() {
                 </div>
               </div>
 
-              <div className="flex flex-col sm:flex-row gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <button
                   onClick={handlePrintReceipt}
-                  className="flex-1 flex items-center justify-center gap-1.5 rounded-xl border border-[#DE8626] bg-amber-500/10 py-2.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-colors"
+                  className="flex items-center justify-center gap-1.5 rounded-xl border border-[#DE8626] bg-amber-500/10 py-2.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-colors"
                 >
                   <Printer className="h-4 w-4" />
-                  <span>Print Receipt ({paperWidth})</span>
+                  <span>Receipt</span>
                 </button>
                 <button
                   onClick={handlePrintKot}
-                  className="flex-1 flex items-center justify-center gap-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] py-2.5 text-xs font-bold text-[#667085] hover:border-[#DE8626] hover:text-[#DE8626] transition-colors"
+                  className="flex items-center justify-center gap-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] py-2.5 text-xs font-bold text-[#667085] hover:border-[#DE8626] hover:text-[#DE8626] transition-colors"
                 >
                   <Utensils className="h-4 w-4" />
-                  <span>Print KOT</span>
+                  <span>KOT</span>
+                </button>
+                <button
+                  onClick={handleShareWhatsApp}
+                  className="flex items-center justify-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 py-2.5 text-xs font-bold text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+                >
+                  <MessageCircle className="h-4 w-4" />
+                  <span>WhatsApp</span>
                 </button>
                 <button
                   onClick={() => setOrderSuccessData(null)}
-                  className="flex-1 flex items-center justify-center rounded-xl bg-[#DE8626] py-2.5 text-xs font-bold text-white shadow-md hover:bg-[#C4721C] transition-colors"
+                  className="flex items-center justify-center rounded-xl bg-[#DE8626] py-2.5 text-xs font-bold text-white shadow-md hover:bg-[#C4721C] transition-colors"
                 >
                   <span>New Sale</span>
                 </button>

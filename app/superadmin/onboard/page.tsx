@@ -15,10 +15,7 @@ import {
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
-import { SuperAdminRemoteDataSource } from '@shared/data/datasources/SuperAdminRemoteDataSource';
-import { SuperAdminRepositoryImpl } from '@shared/data/repositories/SuperAdminRepositoryImpl';
-
-const superAdminRepo = new SuperAdminRepositoryImpl(new SuperAdminRemoteDataSource());
+import { SuperAdminService } from '@/services/superAdminService';
 
 export default function SuperAdminOnboardPage() {
   const router = useRouter();
@@ -39,7 +36,7 @@ export default function SuperAdminOnboardPage() {
 
     try {
       setSaving(true);
-      const res = await superAdminRepo.onboardRestaurant({
+      const res = await SuperAdminService.onboardRestaurant({
         restaurantName: restaurantName.trim(),
         ownerName: ownerName.trim() || `${restaurantName.trim()} Owner`,
         ownerMobile: ownerMobile.trim(),

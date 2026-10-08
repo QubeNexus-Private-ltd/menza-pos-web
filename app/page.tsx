@@ -2,12 +2,12 @@
 
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAuthStore } from '@shared/presentation/state/useAuthStore';
+import { useAuthStore } from '@/stores/useAuthStore';
 import { Loader2 } from 'lucide-react';
 
 export default function HomePage() {
   const router = useRouter();
-  const { isHydrating, isAuthenticated, hasCompletedOnboarding, hydrateSession } = useAuthStore();
+  const { isHydrating, isAuthenticated, hasCompletedOnboarding, hasAcceptedTerms, hydrateSession } = useAuthStore();
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {

@@ -37,7 +37,6 @@ export function DishImage({
           src={resolvedUrl}
           alt={alt}
           loading="lazy"
-          crossOrigin="anonymous"
           onError={() => setHasError(true)}
           className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
         />

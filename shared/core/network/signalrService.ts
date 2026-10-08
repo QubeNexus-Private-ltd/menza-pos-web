@@ -1,12 +1,18 @@
 import { HubConnection, HubConnectionBuilder, LogLevel, HttpTransportType } from '@microsoft/signalr';
+import { AppState, AppStateStatus } from 'react-native';
 import { APP_CONSTANTS } from '../constants/appConstants';
 import { useNotificationStore } from '../../presentation/state/useNotificationStore';
 import { useKitchenStationStore } from '../../presentation/state/useKitchenStationStore';
+import { useAuthStore } from '../../presentation/state/useAuthStore';
 import { WalletEvents } from '../utils/walletEvents';
 import { logger } from '../logging';
 
 let hubConnection: HubConnection | null = null;
 let activeRestaurantId: number | null = null;
+let isConnecting = false;
+let reconnectTimer: any = null;
+let isAppStateListenerRegistered = false;
+
 const statusListeners = new Set<(data: any) => void>();
 const orderCreatedListeners = new Set<(data: any) => void>();
 const orderSettledListeners = new Set<(data: any) => void>();
@@ -20,13 +26,40 @@ const tableStatusListeners = new Set<(data: any) => void>();
 const kitchenStationListeners = new Set<(data: any) => void>();
 const menuItemAvailabilityListeners = new Set<(data: any) => void>();
 
+function schedulePersistentReconnect() {
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(() => {
+    if (activeRestaurantId && (!hubConnection || hubConnection.state === 'Disconnected')) {
+      logger.info('POS', 'SIGNALR_RECONNECT_CYCLE', `⚡ [SignalR] Executing scheduled persistent auto-reconnect for restaurant #${activeRestaurantId}...`);
+      startPosSignalRConnection(activeRestaurantId).catch(() => {});
+    }
+  }, 4000);
+}
+
+function registerAppStateListener() {
+  if (isAppStateListenerRegistered) return;
+  isAppStateListenerRegistered = true;
+
+  AppState.addEventListener('change', (nextState: AppStateStatus) => {
+    if (nextState === 'active') {
+      if (activeRestaurantId && (!hubConnection || hubConnection.state === 'Disconnected')) {
+        logger.info('POS', 'SIGNALR_FOREGROUND_RESUME', `📱 [SignalR] App returned to active foreground; restoring real-time connection for restaurant #${activeRestaurantId}...`);
+        startPosSignalRConnection(activeRestaurantId).catch(() => {});
+      }
+    }
+  });
+}
+
 /**
  * Initializes and starts the SignalR Order Hub connection for POS / Admin
  */
 export async function startPosSignalRConnection(restaurantId?: number | null): Promise<HubConnection | null> {
   const targetRestId = restaurantId && restaurantId > 0 ? restaurantId : activeRestaurantId;
-  const baseUrl = APP_CONSTANTS.API_BASE_URL.replace(/\/api\/?$/, '');
-  const hubUrl = `${baseUrl}/hubs/order`;
+  registerAppStateListener();
+
+  if (targetRestId && targetRestId > 0) {
+    activeRestaurantId = targetRestId;
+  }
 
   if (hubConnection && hubConnection.state === 'Connected') {
     if (targetRestId && targetRestId !== activeRestaurantId) {
@@ -35,14 +68,48 @@ export async function startPosSignalRConnection(restaurantId?: number | null): P
     return hubConnection;
   }
 
+  if (isConnecting) {
+    return hubConnection;
+  }
+  isConnecting = true;
+
+  const baseUrl = APP_CONSTANTS.API_BASE_URL.replace(/\/api\/?$/, '');
+  const hubUrl = targetRestId && targetRestId > 0
+    ? `${baseUrl}/hubs/order?restaurantId=${targetRestId}`
+    : `${baseUrl}/hubs/order`;
+
   try {
+    if (hubConnection) {
+      try {
+        await hubConnection.stop();
+      } catch {}
+      hubConnection = null;
+    }
+
     hubConnection = new HubConnectionBuilder()
       .withUrl(hubUrl, {
-        transport: HttpTransportType.WebSockets | HttpTransportType.ServerSentEvents | HttpTransportType.LongPolling,
+        transport: HttpTransportType.WebSockets | HttpTransportType.LongPolling,
+        accessTokenFactory: async () => {
+          try {
+            const token = useAuthStore.getState().token || (globalThis as any).__MENZA_AUTH_TOKEN__ || '';
+            return token || '';
+          } catch {
+            return '';
+          }
+        },
       })
-      .withAutomaticReconnect([0, 2000, 5000, 10000, 30000])
-      .configureLogging(LogLevel.Warning)
+      .withAutomaticReconnect({
+        nextRetryDelayInMilliseconds: (retryContext) => {
+          // Continuous exponential backoff capped at 25 seconds
+          return Math.min(1000 * Math.pow(1.4, Math.min(retryContext.previousRetryCount, 10)), 25000);
+        },
+      })
+      .configureLogging(LogLevel.None)
       .build();
+
+    // 60s server timeout to match backend ClientTimeoutInterval; 15s keepalive interval
+    hubConnection.serverTimeoutInMilliseconds = 60000;
+    hubConnection.keepAliveIntervalInMilliseconds = 15000;
 
     // 1. Listen for Order Status Changes
     hubConnection.on('OnOrderStatusChanged', (data: any) => {
@@ -92,12 +159,11 @@ export async function startPosSignalRConnection(restaurantId?: number | null): P
       try { WalletEvents.emit(); } catch (e) { console.warn(e); }
     });
 
-    // 4. Listen for Kitchen KDS status updates
+    // 4. Listen for Kitchen KDS status updates (silently update status listeners without spamming cashier alerts)
     hubConnection.on('OnKitchenStatusChanged', (data: any) => {
       logger.info('POS', 'SIGNALR_EVENT', `⚡ [SignalR] Real-time KitchenStatusChanged received for Order #${data?.orderId || data?.id}`, data);
       
-      useNotificationStore.getState().handleOrderStatusChanged(data);
-
+      // Update background status listeners (e.g. table board / orders list) quietly
       statusListeners.forEach((cb) => {
         try { cb(data); } catch (e) { console.error(e); }
       });
@@ -137,7 +203,10 @@ export async function startPosSignalRConnection(restaurantId?: number | null): P
     };
 
     hubConnection.on('ServiceRequestCreated', handleServiceCall);
+    hubConnection.on('OnServiceRequestCreated', handleServiceCall);
     hubConnection.on('WaiterCalled', handleServiceCall);
+    hubConnection.on('OnBillRequested', handleServiceCall);
+    hubConnection.on('BillRequested', handleServiceCall);
 
     // 9. Listen for Waiter Duty / Floor Shift Status Changes
     hubConnection.on('OnWaiterDutyStatusChanged', (data: any) => {
@@ -198,15 +267,13 @@ export async function startPosSignalRConnection(restaurantId?: number | null): P
     hubConnection.on('OnMenuItemAvailabilityChanged', handleMenuItemAvailability);
     hubConnection.on('MenuItemAvailabilityChanged', handleMenuItemAvailability);
 
-    await hubConnection.start();
-    logger.info('POS', 'SIGNALR_CONNECT', `⚡ [SignalR] Connected to OrderNotificationHub at ${hubUrl}`);
+    // Register connection lifecycle listeners before starting the connection
+    hubConnection.onreconnecting((error) => {
+      logger.warn('POS', 'SIGNALR_RECONNECTING', `⚡ [SignalR] Temporary connection interruption (${error?.message || 'Socket abort/reset'}). Auto-reconnecting in background...`);
+    });
 
-    if (targetRestId && targetRestId > 0) {
-      await joinRestaurantGroup(targetRestId);
-    }
-
-    hubConnection.onreconnected(async () => {
-      logger.info('POS', 'SIGNALR_RECONNECT', '⚡ [SignalR] Reconnected. Rejoining restaurant group & triggering sync...');
+    hubConnection.onreconnected(async (connectionId) => {
+      logger.info('POS', 'SIGNALR_RECONNECTED', `⚡ [SignalR] Reconnected successfully (ConnectionId: ${connectionId || 'active'}). Rejoining restaurant group & triggering sync...`);
       if (activeRestaurantId) {
         await joinRestaurantGroup(activeRestaurantId);
       }
@@ -215,11 +282,40 @@ export async function startPosSignalRConnection(restaurantId?: number | null): P
       });
     });
 
+    hubConnection.onclose((error) => {
+      logger.warn('POS', 'SIGNALR_DISCONNECTED', `⚡ [SignalR] Real-time connection closed (${error?.message || 'Abnormal closure'}). Scheduling persistent auto-reconnect cycle...`);
+      schedulePersistentReconnect();
+    });
+
+    await hubConnection.start();
+    logger.info('POS', 'SIGNALR_CONNECT', `⚡ [SignalR] Connected to OrderNotificationHub at ${hubUrl}`);
+
+    if (targetRestId && targetRestId > 0) {
+      await joinRestaurantGroup(targetRestId);
+    }
+
     return hubConnection;
   } catch (err: any) {
-    logger.warn('POS', 'SIGNALR_WARN', `⚡ [SignalR] Connection note: ${err?.message || err}`);
+    logger.warn('POS', 'SIGNALR_WARN', `⚡ [SignalR] Initial connection attempt note: ${err?.message || err}. Scheduling automatic reconnect...`);
+    schedulePersistentReconnect();
     return null;
+  } finally {
+    isConnecting = false;
   }
+}
+
+/**
+ * Checks if the SignalR Hub connection is currently active and healthy
+ */
+export function isSignalRConnected(): boolean {
+  return hubConnection?.state === 'Connected';
+}
+
+/**
+ * Returns the current live status string of the SignalR Hub connection
+ */
+export function getSignalRConnectionState(): string {
+  return hubConnection?.state || 'Disconnected';
 }
 
 /**

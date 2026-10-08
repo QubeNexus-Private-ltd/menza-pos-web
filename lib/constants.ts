@@ -1,0 +1,33 @@
+export const APP_CONSTANTS = {
+  APP_NAME: 'Menza Web POS',
+  VERSION: '1.0.0',
+  DEFAULT_API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api',
+  API_BASE_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api',
+  STORAGE_KEYS: {
+    AUTH_TOKEN: 'menza_auth_token',
+    REFRESH_TOKEN: 'menza_refresh_token',
+    USER_DATA: 'menza_user_data',
+    ACTIVE_RESTAURANT: 'menza_active_restaurant',
+    CONSENT_ACCEPTED: 'menza_consent_accepted',
+    PRINTER_CONFIG: 'menza_printer_config',
+    THEME: 'menza_theme',
+  },
+  ROLES: {
+    SUPER_ADMIN: 'SUPERADMIN',
+    OWNER: 'OWNER',
+    ADMIN: 'ADMIN',
+    MANAGER: 'MANAGER',
+    CASHIER: 'CASHIER',
+    WAITER: 'WAITER',
+    KITCHEN: 'KITCHEN',
+  },
+  ORDER_STATUSES: {
+    PENDING: 'PENDING',
+    CONFIRMED: 'CONFIRMED',
+    PREPARING: 'PREPARING',
+    READY: 'READY',
+    SERVED: 'SERVED',
+    SETTLED: 'SETTLED',
+    CANCELLED: 'CANCELLED',
+  },
+} as const;

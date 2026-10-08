@@ -15,10 +15,8 @@ import {
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
-import { SubscriptionRemoteDataSource } from '@shared/data/datasources/SubscriptionRemoteDataSource';
-import { SubscriptionPlan } from '@shared/domain/models/Subscription';
-
-const subscriptionDataSource = new SubscriptionRemoteDataSource();
+import { SubscriptionService } from '@/services/subscriptionService';
+import { SubscriptionPlan } from '@/types/subscription';
 
 export default function SuperAdminPlansPage() {
   const router = useRouter();
@@ -39,7 +37,7 @@ export default function SuperAdminPlansPage() {
   const loadPlans = useCallback(async () => {
     try {
       setLoading(true);
-      const list = await subscriptionDataSource.getPlans();
+      const list = await SubscriptionService.getPlans();
       setPlans(list);
     } catch (err) {
       console.warn('Plans fetch error', err);
@@ -54,7 +52,7 @@ export default function SuperAdminPlansPage() {
 
   const handleTogglePlan = async (plan: SubscriptionPlan) => {
     try {
-      const res = await subscriptionDataSource.togglePlanStatus(plan.id, !plan.isActive);
+      const res = await SubscriptionService.togglePlanStatus(plan.id, !plan.isActive);
       if (res.success) {
         setPlans((prev) =>
           prev.map((p) => (p.id === plan.id ? { ...p, isActive: !p.isActive } : p))
@@ -74,7 +72,7 @@ export default function SuperAdminPlansPage() {
 
     try {
       setSavingPlan(true);
-      const res = await subscriptionDataSource.createPlan({
+      const res = await SubscriptionService.createPlan({
         subscriptionCode: planCode.trim(),
         subscriptionName: planName.trim(),
         planName: planName.trim(),

@@ -1,4 +1,4 @@
-import { APP_CONSTANTS } from '@shared/core/constants/appConstants';
+import { APP_CONSTANTS } from '@/lib/constants';
 
 /**
  * Normalizes and resolves a dish image URL to an absolute accessible URL.
@@ -10,7 +10,8 @@ export function resolveDishImageUrl(rawUrl?: string | null): string | null {
     return null;
   }
 
-  const trimmed = rawUrl.trim();
+  // Strip leading/trailing quotes and whitespace
+  const trimmed = rawUrl.replace(/^["']|["']$/g, '').trim();
   if (
     !trimmed ||
     trimmed.toLowerCase() === 'null' ||

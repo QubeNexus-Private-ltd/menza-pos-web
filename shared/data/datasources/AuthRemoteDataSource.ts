@@ -32,8 +32,16 @@ export class AuthRemoteDataSource {
       mobileNumber: cleanMobile,
       mobile: cleanMobile,
       deviceId,
+      smsHash: '7nP3ic8JzV5',
+      appHash: '7nP3ic8JzV5',
+      hash: '7nP3ic8JzV5',
     });
-    return response.data;
+    const resData = response.data;
+    const otpCode = resData?.otpCode || resData?.OtpCode || resData?.otp || resData?.Otp || resData?.code || resData?.Code;
+    return {
+      message: resData?.message || resData?.Message || 'OTP sent successfully',
+      otpCode: otpCode ? String(otpCode) : undefined,
+    };
   }
 
   async resendOtp(mobile: string, deviceId?: string): Promise<{ message: string; otpCode?: string }> {
@@ -42,8 +50,16 @@ export class AuthRemoteDataSource {
       mobileNumber: cleanMobile,
       mobile: cleanMobile,
       deviceId,
+      smsHash: '7nP3ic8JzV5',
+      appHash: '7nP3ic8JzV5',
+      hash: '7nP3ic8JzV5',
     });
-    return response.data;
+    const resData = response.data;
+    const otpCode = resData?.otpCode || resData?.OtpCode || resData?.otp || resData?.Otp || resData?.code || resData?.Code;
+    return {
+      message: resData?.message || resData?.Message || 'OTP sent successfully',
+      otpCode: otpCode ? String(otpCode) : undefined,
+    };
   }
 
   private mapAuthResponse(data: any): AuthResponse {
@@ -86,6 +102,7 @@ export class AuthRemoteDataSource {
       imageUrl: topImage,
       bannerUrl: topImage,
       restaurants: mappedRestaurants,
+      isTermConditionChecked: Boolean(data.isTermConditionChecked ?? data.IsTermConditionChecked ?? false),
     };
   }
 

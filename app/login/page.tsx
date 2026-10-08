@@ -12,12 +12,9 @@ import {
   CheckCircle2,
   AlertCircle,
 } from 'lucide-react';
-import { AuthRemoteDataSource } from '@shared/data/datasources/AuthRemoteDataSource';
-import { AuthRepositoryImpl } from '@shared/data/repositories/AuthRepositoryImpl';
-import { useAuthStore } from '@shared/presentation/state/useAuthStore';
-import { RestaurantDetail } from '@shared/domain/models/Restaurant';
-
-const authRepository = new AuthRepositoryImpl(new AuthRemoteDataSource());
+import { AuthService } from '@/services/authService';
+import { useAuthStore } from '@/stores/useAuthStore';
+import { RestaurantDetail } from '@/types/auth';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -81,7 +78,7 @@ export default function LoginPage() {
     try {
       setLoading(true);
       setErrorMsg(null);
-      await authRepository.generateOtp(mobile);
+      await AuthService.generateOtp(mobile);
       setIsOtpSent(true);
       setResendTimer(120);
       setCanResend(false);
@@ -104,7 +101,18 @@ export default function LoginPage() {
     try {
       setLoading(true);
       setErrorMsg(null);
-      const res = await authRepository.loginWithOtp(mobile, otpCode);
+      const res = await AuthService.loginWithOtp(mobile, otpCode);
+
+      const isSuperAdmin = res.roles?.some((r: string) =>
+        ['SUPERADMIN', 'SUPER_ADMIN', 'SUPERADMINONLY'].includes(r.toUpperCase().replace(/[^A-Z]/g, ''))
+      );
+
+      const hasOutlets = Array.isArray(res.restaurants) && res.restaurants.length > 0;
+
+      if (!isSuperAdmin && !hasOutlets) {
+        completeLogin(res, undefined, '/pending-approval');
+        return;
+      }
 
       if (res.restaurants && res.restaurants.length > 1) {
         setPendingAuthResponse(res);
@@ -120,11 +128,12 @@ export default function LoginPage() {
     }
   };
 
-  const completeLogin = (res: any, activeRestId?: number) => {
+  const completeLogin = (res: any, activeRestId?: number, redirectTo: string = '/dashboard') => {
     setAuthData(
       res.token,
       res.refreshToken,
       {
+        userId: res.userId,
         id: res.userId,
         name: res.name,
         mobile: res.mobile,
@@ -132,9 +141,10 @@ export default function LoginPage() {
         activeRestaurantId: activeRestId,
       },
       res.restaurants || [],
-      activeRestId
+      activeRestId,
+      res.isTermConditionChecked
     );
-    router.replace('/dashboard');
+    router.replace(redirectTo);
   };
 
   return (

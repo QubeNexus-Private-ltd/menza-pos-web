@@ -3,7 +3,7 @@
  * Enables printing HTML reports via browser print dialog.
  */
 
-export async function printAsync(options: { html?: string; uri?: string }): Promise<void> {
+export async function printAsync(options: { html?: string; uri?: string; [key: string]: any }): Promise<void> {
   if (typeof window === 'undefined') return;
 
   if (options.html) {
@@ -24,7 +24,7 @@ export async function printAsync(options: { html?: string; uri?: string }): Prom
   window.print();
 }
 
-export async function printToFileAsync(options: { html?: string }): Promise<{ uri: string; numberOfPages: number }> {
+export async function printToFileAsync(options: { html?: string; [key: string]: any }): Promise<{ uri: string; numberOfPages: number; [key: string]: any }> {
   await printAsync(options);
   return { uri: '', numberOfPages: 1 };
 }

@@ -15,12 +15,9 @@ import {
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
-import { useAuthStore } from '@shared/presentation/state/useAuthStore';
-import { SuperAdminRemoteDataSource } from '@shared/data/datasources/SuperAdminRemoteDataSource';
-import { SuperAdminRepositoryImpl } from '@shared/data/repositories/SuperAdminRepositoryImpl';
-import { RestaurantDetail } from '@shared/domain/models/Restaurant';
-
-const superAdminRepo = new SuperAdminRepositoryImpl(new SuperAdminRemoteDataSource());
+import { useAuthStore } from '@/stores/useAuthStore';
+import { SuperAdminService } from '@/services/superAdminService';
+import { RestaurantDetail } from '@/types/auth';
 
 export default function SuperAdminDirectoryPage() {
   const router = useRouter();
@@ -32,7 +29,7 @@ export default function SuperAdminDirectoryPage() {
   const loadStores = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await superAdminRepo.getAllRestaurants(undefined, undefined, undefined, undefined, 1, 100);
+      const res = await SuperAdminService.getAllRestaurants(undefined, undefined, undefined, undefined, 1, 100);
       if (res?.items) {
         setStores(res.items);
       }

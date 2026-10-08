@@ -1,4 +1,4 @@
-import { PaperWidth, ReceiptData, EscPosBuilder } from '@shared/core/printer/EscPosBuilder';
+import { PaperWidth, ReceiptData, EscPosBuilder } from '@/lib/printer/escpos';
 
 export interface PrintOptions {
   paperWidth?: PaperWidth;
@@ -300,11 +300,7 @@ export class WebPrinterService {
     const printWidth = is80mm ? '72mm' : '48mm';
     const containerWidth = is80mm ? '280px' : '200px';
 
-    const formattedDate = data.date
-      ? typeof data.date === 'string'
-        ? data.date
-        : data.date.toLocaleString('en-IN')
-      : new Date().toLocaleString('en-IN');
+    const formattedDate = data.date ? String(data.date) : new Date().toLocaleString('en-IN');
 
     const items = Array.isArray(data.items) ? data.items : [];
     const totalQty = items.reduce((sum, item) => sum + (Number(item.quantity) || 1), 0);
@@ -459,7 +455,7 @@ export class WebPrinterService {
       <div class="item-row">
         <span class="item-name">${this.escape(i.itemName)}</span>
         <span class="item-qty">x${i.quantity}</span>
-        <span class="item-total">₹${Number(i.totalPrice !== undefined ? i.totalPrice : (i.unitPrice * i.quantity)).toFixed(2)}</span>
+        <span class="item-total">₹${Number(i.totalPrice !== undefined ? i.totalPrice : ((i.unitPrice ?? i.price ?? 0) * i.quantity)).toFixed(2)}</span>
       </div>
       ${i.cookingInstruction ? `<div style="font-size: 9px; padding-left: 6px; font-style: italic;">* ${this.escape(i.cookingInstruction)}</div>` : ''}
     `).join('')}
@@ -536,11 +532,7 @@ export class WebPrinterService {
     const printWidth = is80mm ? '72mm' : '48mm';
     const containerWidth = is80mm ? '280px' : '200px';
 
-    const formattedDate = data.date
-      ? typeof data.date === 'string'
-        ? data.date
-        : data.date.toLocaleString('en-IN')
-      : new Date().toLocaleString('en-IN');
+    const formattedDate = data.date ? String(data.date) : new Date().toLocaleString('en-IN');
 
     const tokenDisplay = data.pickupToken || data.orderNumber || data.orderId;
     const items = Array.isArray(data.items) ? data.items : [];

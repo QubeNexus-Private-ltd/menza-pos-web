@@ -80,7 +80,11 @@ class Logger {
       return;
     }
 
-    const outputText = formatTerminalLog(entry);
+    const isBrowser = typeof window !== 'undefined';
+    const isProd = process.env.NODE_ENV === 'production' || Boolean(process.env.NEXT_PUBLIC_VERCEL_ENV);
+
+    // In production, output structured JSON for Vercel log drain parsing; in dev, format terminal colors
+    const outputText = isProd ? JSON.stringify(entry) : formatTerminalLog(entry);
 
     switch (entry.level) {
       case 'DEBUG':
@@ -98,6 +102,29 @@ class Logger {
       default:
         console.log(outputText);
         break;
+    }
+
+    // In client browser on production, forward critical errors to /api/log for Vercel runtime ingestion
+    if (isBrowser && isProd && (entry.level === 'ERROR' || entry.level === 'WARN')) {
+      try {
+        const payload = JSON.stringify({
+          ...entry,
+          url: window.location.href,
+        });
+
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon('/api/log', payload);
+        } else {
+          fetch('/api/log', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: payload,
+            keepalive: true,
+          }).catch(() => {});
+        }
+      } catch {
+        // Silently prevent logging errors from breaking application flow
+      }
     }
   }
 
@@ -177,11 +204,15 @@ class Logger {
       | 'OTP_VERIFICATION_STARTED'
       | 'OTP_VERIFICATION_SUCCESS'
       | 'OTP_VERIFICATION_FAILED'
+      | 'SMS_RETRIEVER_STARTED'
+      | 'SMS_RETRIEVER_START_FAILED'
+      | 'SMS_OTP_AUTO_DETECTED'
       | 'AUTH_SESSION_CREATED'
       | 'AUTH_SESSION_EXPIRED'
       | 'TOKEN_REFRESH_STARTED'
       | 'TOKEN_REFRESH_SUCCESS'
       | 'TOKEN_REFRESH_FAILED'
+      | 'TERMS_ACCEPTED'
       | 'LOGOUT_STARTED'
       | 'LOGOUT_COMPLETED',
     message: string,

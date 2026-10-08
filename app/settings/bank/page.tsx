@@ -14,13 +14,9 @@ import {
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
-import { useAuthStore } from '@shared/presentation/state/useAuthStore';
-import {
-  RestaurantBankRemoteDataSource,
-  RestaurantBankAccountResponse,
-} from '@shared/data/datasources/RestaurantBankRemoteDataSource';
-
-const bankDataSource = new RestaurantBankRemoteDataSource();
+import { useAuthStore } from '@/stores/useAuthStore';
+import { BankService } from '@/services/bankService';
+import { RestaurantBankAccountResponse } from '@/types/bank';
 
 export default function BankAccountPage() {
   const router = useRouter();
@@ -43,7 +39,7 @@ export default function BankAccountPage() {
     if (!currentRestId) return;
     try {
       setLoading(true);
-      const acc = await bankDataSource.getBankAccount(currentRestId);
+      const acc = await BankService.getBankAccount(currentRestId);
       if (acc) {
         setExistingAccount(acc);
         setAccountHolder(acc.accountHolder || '');
@@ -84,14 +80,14 @@ export default function BankAccountPage() {
       setSaving(true);
       setSuccessMsg(null);
 
-      await bankDataSource.registerBankAccount(currentRestId, {
+      await BankService.registerBankAccount(currentRestId, {
         accountNumber: accountNumber.trim(),
         accountHolder: accountHolder.trim(),
         ifsc: ifsc.trim().toUpperCase(),
         bankName: bankName.trim() || undefined,
       });
 
-      const updated = await bankDataSource.getBankAccount(currentRestId);
+      const updated = await BankService.getBankAccount(currentRestId);
       if (updated) {
         setExistingAccount(updated);
       }

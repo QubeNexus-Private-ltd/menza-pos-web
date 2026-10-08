@@ -20,26 +20,23 @@ import {
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
-import { useAuthStore } from '@shared/presentation/state/useAuthStore';
-import { ReportRemoteDataSource } from '@shared/data/datasources/ReportRemoteDataSource';
-import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
-import { apiCacheManager } from '@shared/core/network/apiClient';
+import { useAuthStore } from '@/stores/useAuthStore';
+import { ReportService } from '@/services/reportService';
+import { OrderService } from '@/services/orderService';
+import { apiCacheManager } from '@/lib/api/client';
 import {
-  ExecutiveDashboard,
-  DatewiseSalesSummary,
-  TopSellingItemsReport,
-  HourlySalesHeatmap,
-} from '@shared/domain/models/Report';
-import { OrderMaster } from '@shared/domain/models/Order';
+  ExecutiveDashboardDTO as ExecutiveDashboard,
+  DatewiseSalesSummaryDTO as DatewiseSalesSummary,
+  TopSellingItemsReportDTO as TopSellingItemsReport,
+  HourlySalesHeatmapDTO as HourlySalesHeatmap,
+} from '@/types/report';
+import { OrderMaster } from '@/types/order';
 import { RevenueTrendChart } from '@/components/analytics/RevenueTrendChart';
 import { OrdersTrendChart } from '@/components/analytics/OrdersTrendChart';
 import { TopSellingDishesChart } from '@/components/analytics/TopSellingDishesChart';
 import { CategoryBreakdownChart } from '@/components/analytics/CategoryBreakdownChart';
 import { HourlyRushChart } from '@/components/analytics/HourlyRushChart';
 import { PaymentBreakdownChart, PaymentModeMetric } from '@/components/analytics/PaymentBreakdownChart';
-
-const reportDataSource = new ReportRemoteDataSource();
-const orderDataSource = new OrderRemoteDataSource();
 
 export default function ReportsPage() {
   const { activeRestaurant, restaurants } = useAuthStore();
@@ -85,18 +82,18 @@ export default function ReportsPage() {
       }
 
       const [dashRes, salesRes, topRes, heatRes, ordersRes] = await Promise.allSettled([
-        reportDataSource.getExecutiveDashboard(currentRestId),
-        reportDataSource.getDatewiseSalesSummary(currentRestId, fromDateStr, toDateStr),
-        reportDataSource.getTopSellingItems(currentRestId, fromDateStr, toDateStr, 15),
-        reportDataSource.getHourlySalesHeatmap(currentRestId, toDateStr),
-        orderDataSource.getTodayOrders(currentRestId, 'ALL', 1, 50),
+        ReportService.getExecutiveDashboard(currentRestId),
+        ReportService.getDatewiseSales(currentRestId, fromDateStr, toDateStr),
+        ReportService.getTopSellingItems(currentRestId, fromDateStr, toDateStr, 15),
+        ReportService.getHourlySalesHeatmap(currentRestId, toDateStr),
+        OrderService.getTodayOrders(currentRestId, 'ALL', 1, 50),
       ]);
 
       if (dashRes.status === 'fulfilled' && dashRes.value) setDashboard(dashRes.value);
       if (salesRes.status === 'fulfilled' && salesRes.value) setSalesSummary(salesRes.value);
       if (topRes.status === 'fulfilled' && topRes.value) setTopItems(topRes.value);
       if (heatRes.status === 'fulfilled' && heatRes.value) setHeatmap(heatRes.value);
-      if (ordersRes.status === 'fulfilled' && ordersRes.value?.items) setOrders(ordersRes.value.items);
+      if (ordersRes.status === 'fulfilled' && Array.isArray(ordersRes.value)) setOrders(ordersRes.value);
     } catch (err) {
       console.warn('Failed to load business reports', err);
     } finally {
@@ -307,12 +304,24 @@ export default function ReportsPage() {
             {/* Chart Body */}
             {trendTab === 'revenue' ? (
               <RevenueTrendChart
-                data={salesSummary?.dailyBreakdown || []}
+                data={(salesSummary?.dailyBreakdown || []).map((d: any) => ({
+                  date: d.date,
+                  grossSales: Number(d.grossSales ?? d.totalSales ?? 0),
+                  netSales: Number(d.netSales ?? d.totalSales ?? 0),
+                  taxAmount: Number(d.taxAmount ?? d.totalTax ?? 0),
+                  discountAmount: Number(d.discountAmount ?? d.totalDiscount ?? 0),
+                }))}
                 height={260}
               />
             ) : (
               <OrdersTrendChart
-                data={salesSummary?.dailyBreakdown || []}
+                data={(salesSummary?.dailyBreakdown || []).map((d: any) => ({
+                  date: d.date,
+                  totalOrders: Number(d.totalOrders ?? d.orderCount ?? d.ordersCount ?? 0),
+                  completedOrders: Number(d.completedOrders ?? d.orderCount ?? d.ordersCount ?? 0),
+                  cancelledOrders: Number(d.cancelledOrders ?? 0),
+                  averageOrderValue: Number(d.averageOrderValue ?? 0),
+                }))}
                 height={260}
               />
             )}
@@ -366,7 +375,13 @@ export default function ReportsPage() {
               </div>
 
               <HourlyRushChart
-                slots={heatmap?.hourlySlots || []}
+                slots={(heatmap?.hourlySlots || heatmap?.buckets || []).map((s: any, idx: number) => ({
+                  hour: Number(s.hour ?? idx),
+                  hourLabel: s.hourLabel || s.timeSlot || `${s.hour ?? idx}:00`,
+                  ordersCount: Number(s.ordersCount ?? s.orderCount ?? 0),
+                  totalSales: Number(s.totalSales ?? s.revenue ?? 0),
+                  completedOrders: Number(s.completedOrders ?? 0),
+                }))}
                 peakHourLabel={heatmap?.peakHourLabel}
                 peakHourOrders={heatmap?.peakHourOrdersCount}
                 height={210}

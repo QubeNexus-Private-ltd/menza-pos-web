@@ -781,7 +781,7 @@ const styles = StyleSheet.create({
   },
   entityDivider: {
     height: 1,
-    backgroundColor: '#E7DC CF',
+    backgroundColor: '#E7DCCF',
     marginVertical: 12,
   },
   entityInfoRow: {

@@ -15,11 +15,9 @@ import {
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
-import { useAuthStore } from '@shared/presentation/state/useAuthStore';
-import { RestaurantConfigRemoteDataSource } from '@shared/data/datasources/RestaurantConfigRemoteDataSource';
-import { RestaurantConfig, StoreOperatingStatus } from '@shared/domain/models/RestaurantConfig';
-
-const configDataSource = new RestaurantConfigRemoteDataSource();
+import { useAuthStore } from '@/stores/useAuthStore';
+import { ConfigService } from '@/services/configService';
+import { RestaurantConfig, StoreOperatingStatus } from '@/types/restaurant';
 
 export default function RestaurantConfigPage() {
   const router = useRouter();
@@ -49,8 +47,8 @@ export default function RestaurantConfigPage() {
     try {
       setLoading(true);
       const [cfg, op] = await Promise.allSettled([
-        configDataSource.getConfig(currentRestId),
-        configDataSource.getOperatingStatus(currentRestId),
+        ConfigService.getRestaurantConfig(currentRestId),
+        ConfigService.getOperatingStatus(currentRestId),
       ]);
 
       if (cfg.status === 'fulfilled' && cfg.value) {
@@ -88,7 +86,7 @@ export default function RestaurantConfigPage() {
       setSuccessMsg(null);
 
       await Promise.all([
-        configDataSource.updateConfig(currentRestId, {
+        ConfigService.updateRestaurantConfig(currentRestId, {
           restaurantName: name.trim(),
           contactNumber: phone.trim(),
           email: email.trim(),
@@ -99,8 +97,8 @@ export default function RestaurantConfigPage() {
           cgstPercentage: parseFloat(cgstRate) || 0,
           sgstPercentage: parseFloat(sgstRate) || 0,
         }),
-        configDataSource.toggleOrdering(currentRestId, {
-          isAccepting: isOpen,
+        ConfigService.toggleOrdering(currentRestId, {
+          isOpen,
         }),
       ]);
 

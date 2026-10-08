@@ -109,6 +109,19 @@ export const isCashierOnly = (
   return true;
 };
 
+/**
+ * Checks if the user has the Owner role.
+ * Terms & Conditions consent is strictly required only for Owners.
+ */
+export const isOwnerUser = (
+  user: User | null,
+  activeRestaurant?: RestaurantDetail | null
+): boolean => {
+  if (!user) return false;
+  const roles = extractUserRoles(user, activeRestaurant || null);
+  return roles.some((r) => r === 'owner' || r.includes('owner') || r.includes('tenant_admin'));
+};
+
 /** 
  * Check if user has permission to edit store configuration.
  * Only Store Owners, Admins, and SuperAdmins can modify store configuration.

@@ -10,7 +10,7 @@ import {
   CheckCircle2,
   Sparkles,
 } from 'lucide-react';
-import { useAuthStore } from '@shared/presentation/state/useAuthStore';
+import { useAuthStore } from '@/stores/useAuthStore';
 
 const SLIDES = [
   {

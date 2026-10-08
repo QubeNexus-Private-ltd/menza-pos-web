@@ -17,9 +17,9 @@ import {
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
-import { usePrinterStore } from '@shared/presentation/state/usePrinterStore';
-import { useAuthStore } from '@shared/presentation/state/useAuthStore';
-import { PaperWidth } from '@shared/core/printer/EscPosBuilder';
+import { usePrinterStore } from '@/stores/usePrinterStore';
+import { useAuthStore } from '@/stores/useAuthStore';
+import { PaperWidth } from '@/types/printer';
 import { WebPrinterService } from '@/services/webPrinterService';
 
 export default function PrinterSettingsPage() {

@@ -7,7 +7,7 @@ export async function isAvailableAsync(): Promise<boolean> {
   return typeof navigator !== 'undefined' && Boolean(navigator.share);
 }
 
-export async function shareAsync(url: string, options?: { dialogTitle?: string; mimeType?: string }): Promise<void> {
+export async function shareAsync(url: string, options?: { dialogTitle?: string; mimeType?: string; UTI?: string; [key: string]: any }): Promise<void> {
   if (typeof navigator !== 'undefined' && navigator.share) {
     try {
       await navigator.share({

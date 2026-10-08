@@ -15,16 +15,15 @@ import {
   Filter,
   ArrowUpDown,
   Sparkles,
+  Upload,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
 import { DishImage } from '@/components/common/DishImage';
-import { useAuthStore } from '@shared/presentation/state/useAuthStore';
-import { CatalogRemoteDataSource } from '@shared/data/datasources/CatalogRemoteDataSource';
-import { MenuItem } from '@shared/domain/models/Item';
-import { Category } from '@shared/domain/models/Category';
-
-const catalogDataSource = new CatalogRemoteDataSource();
+import { WebImageUploadService } from '@/services/imageUploadService';
+import { MenuService, WebMenuService } from '@/services/menuService';
+import { useAuthStore } from '@/stores/useAuthStore';
+import { MenuItem, Category } from '@/types/menu';
 
 export default function MenuCatalogPage() {
   const { activeRestaurant, restaurants } = useAuthStore();
@@ -48,9 +47,11 @@ export default function MenuCatalogPage() {
   const [itemCode, setItemCode] = useState('');
   const [itemImageUrl, setItemImageUrl] = useState('');
   const [savingItem, setSavingItem] = useState(false);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
 
-  // Add Category Modal
+  // Add / Edit Category Modal
   const [catModalOpen, setCatModalOpen] = useState(false);
+  const [editingCategory, setEditingCategory] = useState<Category | null>(null);
   const [newCatName, setNewCatName] = useState('');
   const [savingCat, setSavingCat] = useState(false);
 
@@ -58,19 +59,16 @@ export default function MenuCatalogPage() {
     if (!currentRestId) return;
     try {
       setLoading(true);
-      const [catsRes, itemsRes] = await Promise.allSettled([
-        catalogDataSource.getCategories(currentRestId),
-        catalogDataSource.getMenuItems(currentRestId),
-      ]);
-
-      if (catsRes.status === 'fulfilled' && Array.isArray(catsRes.value)) {
-        setCategories(catsRes.value);
-        if (catsRes.value.length > 0 && !itemCategoryId) {
-          setItemCategoryId(catsRes.value[0].id);
+      const cats = await MenuService.getCatalogTree(currentRestId);
+      if (Array.isArray(cats)) {
+        setCategories(cats);
+        if (cats.length > 0 && !itemCategoryId) {
+          setItemCategoryId(cats[0].id || cats[0].categoryId);
         }
-      }
-      if (itemsRes.status === 'fulfilled' && Array.isArray(itemsRes.value)) {
-        setItems(itemsRes.value);
+        const allItems = cats.flatMap((c) =>
+          (c.items || []).map((it) => ({ ...it, categoryId: it.categoryId || c.categoryId }))
+        );
+        setItems(allItems);
       }
     } catch (err) {
       console.warn('Failed to load menu catalog', err);
@@ -85,12 +83,13 @@ export default function MenuCatalogPage() {
 
   // Toggle item availability
   const handleToggleStatus = async (item: MenuItem) => {
+    const targetId = item.id || item.itemId;
     try {
-      setTogglingItemId(item.id);
+      setTogglingItemId(targetId);
       const newStatus = !(item.isAvailable ?? true);
-      await catalogDataSource.updateItemStatus(item.id, newStatus);
+      await MenuService.updateMenuItem(targetId, { isAvailable: newStatus, isActive: newStatus });
       setItems((prev) =>
-        prev.map((it) => (it.id === item.id ? { ...it, isAvailable: newStatus } : it))
+        prev.map((it) => ((it.id || it.itemId) === targetId ? { ...it, isAvailable: newStatus } : it))
       );
     } catch (err: any) {
       alert(err?.message || 'Failed to update item status');
@@ -144,9 +143,9 @@ export default function MenuCatalogPage() {
       };
 
       if (editingItem) {
-        await catalogDataSource.updateMenuItem(editingItem.id, payload);
+        await MenuService.updateMenuItem(editingItem.id || (editingItem as any).itemId, payload);
       } else {
-        await catalogDataSource.createMenuItem(payload);
+        await MenuService.createMenuItem({ ...payload, restaurantId: currentRestId });
       }
 
       await loadData();
@@ -158,19 +157,82 @@ export default function MenuCatalogPage() {
     }
   };
 
-  // Save Category
+  const handleImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setIsUploadingImage(true);
+      const url = await WebImageUploadService.uploadImage(file);
+      setItemImageUrl(url);
+    } catch (err: any) {
+      alert(err?.message || 'Image upload failed. Please try a valid JPG/PNG image.');
+    } finally {
+      setIsUploadingImage(false);
+    }
+  };
+
+  const handleDeleteItem = async (item: MenuItem) => {
+    if (!window.confirm(`Are you sure you want to delete "${item.itemName}"? This action cannot be undone.`)) return;
+    try {
+      const itemId = item.id || item.itemId;
+      const success = await WebMenuService.deleteMenuItem(itemId, currentRestId);
+      if (success) {
+        await loadData();
+      } else {
+        alert('Failed to delete menu item.');
+      }
+    } catch (err: any) {
+      alert(err?.message || 'Error deleting menu item.');
+    }
+  };
+
+  const handleOpenCreateCategory = () => {
+    setEditingCategory(null);
+    setNewCatName('');
+    setCatModalOpen(true);
+  };
+
+  const handleOpenEditCategory = (cat: Category) => {
+    setEditingCategory(cat);
+    setNewCatName(cat.categoryName);
+    setCatModalOpen(true);
+  };
+
+  const handleDeleteCategory = async (cat: Category) => {
+    if (!window.confirm(`Are you sure you want to delete category "${cat.categoryName}"? Dishes in this category may be affected.`)) return;
+    try {
+      const catId = cat.id || cat.categoryId;
+      const success = await WebMenuService.deleteCategory(catId);
+      if (success) {
+        if (selectedCategory === cat.id || selectedCategory === cat.categoryId) setSelectedCategory(null);
+        await loadData();
+      } else {
+        alert('Failed to delete category.');
+      }
+    } catch (err: any) {
+      alert(err?.message || 'Error deleting category.');
+    }
+  };
+
+  // Save Category (Create or Update)
   const handleSaveCategory = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCatName.trim()) return;
 
     try {
       setSavingCat(true);
-      await catalogDataSource.createCategory(newCatName.trim(), '', currentRestId);
+      if (editingCategory) {
+        const catId = editingCategory.id || editingCategory.categoryId;
+        await WebMenuService.updateCategory(catId, newCatName.trim(), '', currentRestId);
+      } else {
+        await MenuService.createCategory(currentRestId, newCatName.trim());
+      }
       await loadData();
       setNewCatName('');
+      setEditingCategory(null);
       setCatModalOpen(false);
     } catch (err: any) {
-      alert(err?.message || 'Failed to create category');
+      alert(err?.message || 'Failed to save category');
     } finally {
       setSavingCat(false);
     }
@@ -289,18 +351,50 @@ export default function MenuCatalogPage() {
               All Dishes ({items.length})
             </button>
             {categories.map((cat) => (
-              <button
+              <div
                 key={cat.id}
-                onClick={() => setSelectedCategory(cat.id)}
-                className={`shrink-0 rounded-xl px-4 py-2 text-xs font-bold transition-all ${
+                className={`group shrink-0 flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold transition-all ${
                   selectedCategory === cat.id
                     ? 'bg-[#DE8626] text-white shadow-sm shadow-[#DE8626]/20'
                     : 'border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#667085] dark:text-[#94A3B8] hover:border-[#DE8626]'
                 }`}
               >
-                {cat.categoryName}
-              </button>
+                <button type="button" onClick={() => setSelectedCategory(cat.id ?? cat.categoryId ?? null)}>
+                  {cat.categoryName}
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleOpenEditCategory(cat);
+                  }}
+                  title="Edit Category"
+                  className="rounded p-0.5 opacity-60 hover:opacity-100 hover:text-amber-200 transition-opacity"
+                >
+                  <Edit2 className="h-3 w-3" />
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDeleteCategory(cat);
+                  }}
+                  title="Delete Category"
+                  className="rounded p-0.5 opacity-60 hover:opacity-100 hover:text-red-300 transition-opacity"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </div>
             ))}
+
+            <button
+              type="button"
+              onClick={handleOpenCreateCategory}
+              className="shrink-0 flex items-center gap-1 rounded-xl border border-dashed border-[#DE8626] px-3 py-1.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/10 transition-colors"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span>New Category</span>
+            </button>
           </div>
 
           {/* Catalog Data Table */}
@@ -380,13 +474,22 @@ export default function MenuCatalogPage() {
                             </button>
                           </td>
                           <td className="py-3 px-4 text-right">
-                            <button
-                              onClick={() => handleOpenEdit(item)}
-                              className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] p-2 text-[#667085] hover:border-[#DE8626] hover:text-[#DE8626] transition-colors"
-                              title="Edit Dish"
-                            >
-                              <Edit2 className="h-3.5 w-3.5" />
-                            </button>
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                onClick={() => handleOpenEdit(item)}
+                                className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] p-2 text-[#667085] hover:border-[#DE8626] hover:text-[#DE8626] transition-colors"
+                                title="Edit Dish"
+                              >
+                                <Edit2 className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteItem(item)}
+                                className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] p-2 text-[#667085] hover:border-red-500 hover:text-red-500 transition-colors"
+                                title="Delete Dish"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -509,10 +612,10 @@ export default function MenuCatalogPage() {
 
                 <div>
                   <label className="block text-xs font-semibold text-[#667085] dark:text-[#94A3B8] uppercase mb-1">
-                    Dish Image URL (Optional)
+                    Dish Photo / Image
                   </label>
-                  <div className="flex items-center gap-3">
-                    <div className="h-11 w-11 shrink-0 rounded-xl overflow-hidden border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20]">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="h-12 w-12 shrink-0 rounded-xl overflow-hidden border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20]">
                       <DishImage
                         src={itemImageUrl}
                         alt="Dish image preview"
@@ -520,16 +623,27 @@ export default function MenuCatalogPage() {
                         fallbackIconSize={16}
                       />
                     </div>
-                    <input
-                      type="text"
-                      value={itemImageUrl}
-                      onChange={(e) => setItemImageUrl(e.target.value)}
-                      placeholder="e.g. https://... or /uploads/items/photo.jpg"
-                      className="flex-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3.5 py-2 text-xs font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
-                    />
+                    <label className="flex-1 cursor-pointer flex items-center justify-center gap-1.5 rounded-xl border border-dashed border-[#DE8626] bg-amber-500/10 py-2.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-colors">
+                      <Upload className="h-4 w-4" />
+                      <span>{isUploadingImage ? 'Uploading Image...' : 'Upload Image File'}</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        disabled={isUploadingImage}
+                        onChange={handleImageFileChange}
+                        className="hidden"
+                      />
+                    </label>
                   </div>
+                  <input
+                    type="text"
+                    value={itemImageUrl}
+                    onChange={(e) => setItemImageUrl(e.target.value)}
+                    placeholder="Or enter image URL (https://...)"
+                    className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3.5 py-2 text-xs font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
+                  />
                   <p className="mt-1 text-[10px] text-[#667085] dark:text-[#94A3B8]">
-                    Supports absolute URLs, relative backend paths (/uploads/...), or base64 images
+                    Uploads directly to Menza Azure Blob storage or paste any image URL
                   </p>
                 </div>
 
@@ -554,13 +668,21 @@ export default function MenuCatalogPage() {
           </div>
         )}
 
-        {/* 2. Add Category Modal */}
+        {/* 2. Add / Edit Category Modal */}
         {catModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
             <div className="w-full max-w-sm rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-6 shadow-2xl">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">Create Menu Category</h3>
-                <button onClick={() => setCatModalOpen(false)} className="rounded-lg p-1 text-[#667085]">
+                <h3 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                  {editingCategory ? 'Edit Category' : 'Create Menu Category'}
+                </h3>
+                <button
+                  onClick={() => {
+                    setCatModalOpen(false);
+                    setEditingCategory(null);
+                  }}
+                  className="rounded-lg p-1 text-[#667085]"
+                >
                   <X className="h-4 w-4" />
                 </button>
               </div>
@@ -584,7 +706,10 @@ export default function MenuCatalogPage() {
                 <div className="pt-2 flex gap-2">
                   <button
                     type="button"
-                    onClick={() => setCatModalOpen(false)}
+                    onClick={() => {
+                      setCatModalOpen(false);
+                      setEditingCategory(null);
+                    }}
                     className="flex-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] py-2.5 text-xs font-semibold text-[#667085]"
                   >
                     Cancel
@@ -594,7 +719,7 @@ export default function MenuCatalogPage() {
                     disabled={savingCat}
                     className="flex-1 rounded-xl bg-[#DE8626] py-2.5 text-xs font-bold text-white shadow-md hover:bg-[#C4721C] disabled:opacity-50"
                   >
-                    {savingCat ? 'Creating...' : 'Create'}
+                    {savingCat ? 'Saving...' : editingCategory ? 'Save Changes' : 'Create'}
                   </button>
                 </div>
               </form>

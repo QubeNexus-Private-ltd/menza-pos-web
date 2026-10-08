@@ -2,13 +2,23 @@
 
 import React, { useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
-import { useAuthStore } from '@shared/presentation/state/useAuthStore';
+import { useAuthStore } from '@/stores/useAuthStore';
+import { isOwnerUser } from '@/lib/auth/permissions';
 import { Loader2 } from 'lucide-react';
 
 export const AuthGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const router = useRouter();
   const pathname = usePathname();
-  const { isHydrating, isAuthenticated, hasCompletedOnboarding, hydrateSession } = useAuthStore();
+  const {
+    isHydrating,
+    isAuthenticated,
+    hasCompletedOnboarding,
+    hasAcceptedTerms,
+    hydrateSession,
+    user,
+    activeRestaurant,
+    restaurants,
+  } = useAuthStore();
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -26,8 +36,37 @@ export const AuthGuard: React.FC<{ children: React.ReactNode }> = ({ children })
 
     if (!isAuthenticated && pathname !== '/login' && pathname !== '/onboarding') {
       router.replace('/login');
+      return;
     }
-  }, [isHydrating, isAuthenticated, hasCompletedOnboarding, pathname, router]);
+
+    if (isAuthenticated) {
+      const isSuperAdmin = user?.roles?.some((r) =>
+        ['SUPERADMIN', 'SUPER_ADMIN', 'SUPERADMINONLY'].includes(r.toUpperCase().replace(/[^A-Z]/g, ''))
+      );
+      const hasOutlets = Array.isArray(restaurants) && restaurants.length > 0;
+
+      // Unassigned users must stay on /pending-approval
+      if (!isSuperAdmin && !hasOutlets) {
+        if (pathname !== '/pending-approval' && pathname !== '/login') {
+          router.replace('/pending-approval');
+          return;
+        }
+      }
+
+      // Assigned users who navigate to /pending-approval redirect to /dashboard
+      if ((isSuperAdmin || hasOutlets) && pathname === '/pending-approval') {
+        router.replace('/dashboard');
+        return;
+      }
+
+      // Unconsented owners cannot access any page other than /dashboard where the consent card is presented
+      const isOwner = isOwnerUser(user?.roles);
+      if (isOwner && !hasAcceptedTerms && pathname !== '/dashboard' && pathname !== '/login') {
+        router.replace('/dashboard');
+        return;
+      }
+    }
+  }, [isHydrating, isAuthenticated, hasCompletedOnboarding, hasAcceptedTerms, user, activeRestaurant, restaurants, pathname, router]);
 
   if (isHydrating) {
     return (
@@ -41,6 +80,14 @@ export const AuthGuard: React.FC<{ children: React.ReactNode }> = ({ children })
   }
 
   if (!isAuthenticated && pathname !== '/login' && pathname !== '/onboarding') {
+    return null;
+  }
+
+  const isSuperAdmin = user?.roles?.some((r) =>
+    ['SUPERADMIN', 'SUPER_ADMIN', 'SUPERADMINONLY'].includes(r.toUpperCase().replace(/[^A-Z]/g, ''))
+  );
+  const hasOutlets = Array.isArray(restaurants) && restaurants.length > 0;
+  if (isAuthenticated && !isSuperAdmin && !hasOutlets && pathname !== '/pending-approval' && pathname !== '/login') {
     return null;
   }
 

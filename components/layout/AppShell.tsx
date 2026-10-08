@@ -28,9 +28,13 @@ import {
   Sparkles,
   Check,
   AlertCircle,
+  ChefHat,
+  CalendarDays,
+  IndianRupee,
 } from 'lucide-react';
-import { useAuthStore } from '@shared/presentation/state/useAuthStore';
-import { useNotificationStore } from '@shared/presentation/state/useNotificationStore';
+import { StoreShiftModal } from '../common/StoreShiftModal';
+import { useAuthStore } from '@/stores/useAuthStore';
+import { useNotificationStore } from '@/stores/useNotificationStore';
 import { useWebTheme } from '../theme/ThemeProvider';
 import {
   startPosSignalRConnection,
@@ -38,13 +42,16 @@ import {
   onPosOrderStatusChanged,
   onPosOrderSettled,
   onStoreOperatingStatusChanged,
-} from '@shared/core/network/signalrService';
-import { RestaurantDetail } from '@shared/domain/models/Restaurant';
-import { playOrderNotificationSound } from '@shared/core/utils/notificationSound';
-import { RestaurantConfigRemoteDataSource } from '@shared/data/datasources/RestaurantConfigRemoteDataSource';
-import { StoreOperatingStatus } from '@shared/domain/models/RestaurantConfig';
-import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
-import { WalletRemoteDataSource } from '@shared/data/datasources/WalletRemoteDataSource';
+} from '@/lib/signalr/signalrService';
+import { RestaurantDetail } from '@/types/auth';
+import { playOrderNotificationSound } from '@/lib/sound/notificationSound';
+import { ConfigService } from '@/services/configService';
+import { StoreOperatingStatus } from '@/types/restaurant';
+import { OrderService } from '@/services/orderService';
+import { WebWalletService } from '@/services/walletService';
+import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
+import { SubscriptionGraceBanner } from '@/components/subscription/SubscriptionGraceBanner';
+import { SubscriptionBlockerModal } from '@/components/subscription/SubscriptionBlockerModal';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -54,6 +61,12 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
   const pathname = usePathname();
   const router = useRouter();
   const { user, activeRestaurant, restaurants, setActiveRestaurant, logout } = useAuthStore();
+  const {
+    fetchSubscriptionStatus,
+    fetchPlans,
+    lifecycleState: subscriptionLifecycleState,
+    isExpired: isSubscriptionExpired,
+  } = useSubscriptionStore();
   const { theme, toggleTheme, isDark } = useWebTheme();
   const {
     unreadCount,
@@ -70,6 +83,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
   const [outletMenuOpen, setOutletMenuOpen] = useState(false);
   const [notifDrawerOpen, setNotifDrawerOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [shiftModalOpen, setShiftModalOpen] = useState(false);
   const [operatingStatus, setOperatingStatus] = useState<StoreOperatingStatus | null>(null);
   const [todaySales, setTodaySales] = useState<{ revenue: number; orderCount: number }>({ revenue: 0, orderCount: 0 });
   const [walletBalance, setWalletBalance] = useState<number | null>(null);
@@ -108,16 +122,15 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
   useEffect(() => {
     if (!currentRestId || isSuperAdmin) return;
 
-    const orderDs = new OrderRemoteDataSource();
-    const configDs = new RestaurantConfigRemoteDataSource();
-    const walletDs = new WalletRemoteDataSource();
+    fetchSubscriptionStatus(currentRestId);
+    fetchPlans();
 
     const loadData = async () => {
       try {
         const [rev, op, wal] = await Promise.allSettled([
-          orderDs.getTodayRevenue(currentRestId),
-          configDs.getOperatingStatus(currentRestId),
-          walletDs.getWallet(currentRestId),
+          OrderService.getTodayRevenueMetrics(currentRestId),
+          ConfigService.getOperatingStatus(currentRestId),
+          WebWalletService.getWallet(currentRestId),
         ]);
 
         if (rev.status === 'fulfilled' && rev.value) {
@@ -170,10 +183,9 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
 
     // Poll fallback every 45s
     const pollInterval = setInterval(() => {
-      orderDs
-        .getTodayOrders(currentRestId, 'ALL', 1, 20)
-        .then((res) => {
-          if (res?.items) processIncomingOrders(res.items);
+      OrderService.getTodayOrders(currentRestId, 'ALL', 1, 20)
+        .then((items) => {
+          if (Array.isArray(items)) processIncomingOrders(items);
         })
         .catch(() => {});
     }, 45000);
@@ -188,6 +200,8 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
     };
   }, [currentRestId, isSuperAdmin, handleOrderStatusChanged, processIncomingOrders]);
 
+  const hasOutlets = Array.isArray(restaurants) && restaurants.length > 0;
+
   const navItems = isSuperAdmin
     ? [
         { href: '/dashboard', label: 'Overview', icon: LayoutDashboard },
@@ -196,13 +210,31 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
         { href: '/superadmin/plans', label: 'Plans & Pricing', icon: Crown },
         { href: '/settings', label: 'Settings', icon: Settings },
       ]
+    : !hasOutlets
+    ? []
     : [
         { href: '/dashboard', label: 'Overview', icon: LayoutDashboard },
         { href: '/pos', label: 'POS Terminal', icon: ShoppingBag, highlight: true },
-        { href: '/menu', label: 'Menu Catalog', icon: UtensilsCrossed },
+        { href: '/orders', label: 'Orders & History', icon: IndianRupee },
+        { href: '/kitchen', label: 'Kitchen & KDS', icon: ChefHat },
+        // { href: '/reservations', label: 'Reservations', icon: CalendarDays },
         { href: '/tables', label: 'Floor Tables', icon: Table },
+        { href: '/menu', label: 'Menu Catalog', icon: UtensilsCrossed },
+        { href: '/wallet', label: 'Prepaid Wallet', icon: Wallet },
         { href: '/reports', label: 'Analytics', icon: BarChart3 },
         { href: '/staff', label: 'Staff & Roles', icon: Users },
+        { href: '/settings', label: 'Settings', icon: Settings },
+      ];
+
+  const mobileNavItems = isSuperAdmin
+    ? navItems
+    : !hasOutlets
+    ? []
+    : [
+        { href: '/dashboard', label: 'Overview', icon: LayoutDashboard },
+        { href: '/pos', label: 'POS', icon: ShoppingBag },
+        { href: '/orders', label: 'Orders', icon: IndianRupee },
+        { href: '/tables', label: 'Tables', icon: Table },
         { href: '/settings', label: 'Settings', icon: Settings },
       ];
 
@@ -390,14 +422,19 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
 
             {/* Store Operating Status Badge */}
             {operatingStatus && !isSuperAdmin && (
-              <div className="hidden sm:flex items-center gap-1.5 rounded-full border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-2.5 py-1 text-[11px] font-medium">
+              <button
+                type="button"
+                onClick={() => setShiftModalOpen(true)}
+                title="Click to change store shift or operating timings"
+                className="hidden sm:flex items-center gap-1.5 rounded-full border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-2.5 py-1 text-[11px] font-medium hover:border-[#DE8626] transition-colors cursor-pointer"
+              >
                 <span
                   className={`h-2 w-2 rounded-full ${
-                    operatingStatus.isOpen ? 'bg-emerald-500' : 'bg-red-500'
+                    operatingStatus.isOpen ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'
                   }`}
                 />
                 <span>{operatingStatus.isOpen ? 'Store Open' : 'Store Closed'}</span>
-              </div>
+              </button>
             )}
           </div>
 
@@ -542,6 +579,9 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
           </div>
         )}
 
+        {/* Subscription Grace / Expiration Notification Banner */}
+        {!isSuperAdmin && <SubscriptionGraceBanner />}
+
         {/* Viewport Content */}
         <main className="flex-1 overflow-y-auto pb-16 lg:pb-0">
           {children}
@@ -549,7 +589,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
 
         {/* 4. Mobile Bottom Navigation Bar (< 768px) */}
         <div className="fixed bottom-0 inset-x-0 z-40 flex h-16 items-center justify-around border-t border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] px-2 lg:hidden">
-          {navItems.slice(0, 5).map((item) => {
+          {mobileNavItems.map((item) => {
             const isActive = pathname === item.href;
             const Icon = item.icon;
             return (
@@ -566,6 +606,21 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
             );
           })}
         </div>
+
+        {/* Store Shift / Operating Timings Modal */}
+        {shiftModalOpen && (
+          <StoreShiftModal
+            isOpen={shiftModalOpen}
+            onClose={() => setShiftModalOpen(false)}
+            restaurantId={currentRestId}
+            restaurantName={activeRestaurant?.restaurantName || 'Restaurant'}
+            currentStatus={operatingStatus}
+            onStatusUpdated={(newStatus) => setOperatingStatus(newStatus)}
+          />
+        )}
+
+        {/* Subscription Blocker / Paywall Modal */}
+        {!isSuperAdmin && <SubscriptionBlockerModal />}
       </div>
     </div>
   );

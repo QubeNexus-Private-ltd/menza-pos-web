@@ -16,15 +16,15 @@ import {
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
-import { useAuthStore } from '@shared/presentation/state/useAuthStore';
-import { SubscriptionRemoteDataSource } from '@shared/data/datasources/SubscriptionRemoteDataSource';
-import { SubscriptionPlan, UserSubscriptionStatus } from '@shared/domain/models/Subscription';
-
-const subscriptionDataSource = new SubscriptionRemoteDataSource();
+import { useAuthStore } from '@/stores/useAuthStore';
+import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
+import { SubscriptionService } from '@/services/subscriptionService';
+import { SubscriptionPlan, UserSubscriptionStatus } from '@/types/subscription';
 
 export default function SubscriptionBillingPage() {
   const router = useRouter();
   const { activeRestaurant, restaurants } = useAuthStore();
+  const { openRenewalModal } = useSubscriptionStore();
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
   const [loading, setLoading] = useState(true);
@@ -36,8 +36,8 @@ export default function SubscriptionBillingPage() {
     try {
       setLoading(true);
       const [subRes, plansRes] = await Promise.allSettled([
-        subscriptionDataSource.getRestaurantSubscription(currentRestId),
-        subscriptionDataSource.getPlans(),
+        SubscriptionService.getRestaurantSubscription(currentRestId),
+        SubscriptionService.getPlans(),
       ]);
 
       if (subRes.status === 'fulfilled') setActiveSub(subRes.value);
@@ -173,7 +173,7 @@ export default function SubscriptionBillingPage() {
                   </div>
 
                   <button
-                    onClick={() => alert('To upgrade or renew your plan, please contact your store account administrator.')}
+                    onClick={() => openRenewalModal(plan)}
                     className="mt-6 w-full rounded-2xl border border-[#DE8626] bg-amber-500/10 py-3 text-xs font-bold text-[#DE8626] hover:bg-[#DE8626] hover:text-white transition-all"
                   >
                     Select Plan

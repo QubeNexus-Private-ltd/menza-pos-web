@@ -21,34 +21,35 @@ import {
   Layers,
   ChevronRight,
   AlertTriangle,
+  ChefHat,
+  CalendarDays,
+  Wallet,
+  MessageSquare,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
-import { useAuthStore } from '@shared/presentation/state/useAuthStore';
-import { useNotificationStore } from '@shared/presentation/state/useNotificationStore';
-import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
-import { SuperAdminRemoteDataSource } from '@shared/data/datasources/SuperAdminRemoteDataSource';
-import { SuperAdminRepositoryImpl } from '@shared/data/repositories/SuperAdminRepositoryImpl';
-import { RestaurantConfigRemoteDataSource } from '@shared/data/datasources/RestaurantConfigRemoteDataSource';
-import { TableRemoteDataSource } from '@shared/data/datasources/TableRemoteDataSource';
-import { RestaurantTodayRevenue, OrderMaster } from '@shared/domain/models/Order';
-import { StoreOperatingStatus } from '@shared/domain/models/RestaurantConfig';
+import { TermsConsentCard } from '@/components/common/TermsConsentCard';
+import { OrderSettleModal } from '@/components/orders/OrderSettleModal';
+import { isOrderSettled, isOrderCancelled, isOrderAwaitingSettlement } from '@/utils/orderStatus';
+import { useAuthStore } from '@/stores/useAuthStore';
+import { useNotificationStore } from '@/stores/useNotificationStore';
+import { OrderService } from '@/services/orderService';
+import { SuperAdminService } from '@/services/superAdminService';
+import { ConfigService } from '@/services/configService';
+import { TableService } from '@/services/tableService';
+import { RestaurantTodayRevenue, OrderMaster } from '@/types/order';
+import { StoreOperatingStatus } from '@/types/restaurant';
 
 export default function DashboardPage() {
   const router = useRouter();
   const { user, activeRestaurant, restaurants } = useAuthStore();
   const { unreadCount } = useNotificationStore();
 
-  const roleName = user?.roles?.[0] || 'Owner';
+  const roleName = user?.roles?.[0] || (restaurants.length > 0 ? 'Owner' : 'Guest');
   const isSuperAdmin =
     user?.roles?.some((r) =>
       ['SUPERADMIN', 'SUPER_ADMIN', 'SUPERADMINONLY'].includes(r.toUpperCase().replace(/[^A-Z]/g, ''))
     ) || Boolean(roleName && roleName.toLowerCase().includes('superadmin'));
-
-  const orderRemoteDataSource = useMemo(() => new OrderRemoteDataSource(), []);
-  const configRemoteDataSource = useMemo(() => new RestaurantConfigRemoteDataSource(), []);
-  const tableRemoteDataSource = useMemo(() => new TableRemoteDataSource(), []);
-  const superAdminRepo = useMemo(() => new SuperAdminRepositoryImpl(new SuperAdminRemoteDataSource()), []);
 
   const [loading, setLoading] = useState(true);
   const [revenueData, setRevenueData] = useState<RestaurantTodayRevenue | null>(null);
@@ -56,6 +57,7 @@ export default function DashboardPage() {
   const [operatingStatus, setOperatingStatus] = useState<StoreOperatingStatus | null>(null);
   const [tableCount, setTableCount] = useState({ total: 0, occupied: 0 });
   const [superAdminMetrics, setSuperAdminMetrics] = useState({ totalStores: 0, totalRevenue: 0 });
+  const [settlingOrder, setSettlingOrder] = useState<OrderMaster | null>(null);
 
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
@@ -63,9 +65,9 @@ export default function DashboardPage() {
     if (isSuperAdmin) {
       try {
         setLoading(true);
-        const stores = await superAdminRepo.getAllRestaurants(undefined, undefined, undefined, undefined, 1, 100);
+        const stores = await SuperAdminService.getRestaurants(undefined, 1, 100);
         setSuperAdminMetrics({
-          totalStores: stores.totalCount || stores.items.length,
+          totalStores: stores?.totalCount || (Array.isArray(stores) ? stores.length : 0),
           totalRevenue: 0,
         });
       } catch (err) {
@@ -78,30 +80,33 @@ export default function DashboardPage() {
 
     if (!currentRestId) {
       setLoading(false);
+      if (restaurants.length === 0) {
+        router.replace('/pending-approval');
+      }
       return;
     }
 
     try {
       setLoading(true);
       const [rev, orders, op, tables] = await Promise.allSettled([
-        orderRemoteDataSource.getTodayRevenue(currentRestId),
-        orderRemoteDataSource.getTodayOrders(currentRestId, 'ALL', 1, 10),
-        configRemoteDataSource.getOperatingStatus(currentRestId),
-        tableRemoteDataSource.getTables(currentRestId),
+        OrderService.getTodayRevenueMetrics(currentRestId),
+        OrderService.getTodayOrders(currentRestId, 'ALL', 1, 10),
+        ConfigService.getOperatingStatus(currentRestId),
+        TableService.getTables(currentRestId),
       ]);
 
       if (rev.status === 'fulfilled' && rev.value) {
         setRevenueData(rev.value);
       }
-      if (orders.status === 'fulfilled' && orders.value?.items) {
-        setRecentOrders(orders.value.items);
+      if (orders.status === 'fulfilled' && Array.isArray(orders.value)) {
+        setRecentOrders(orders.value);
       }
       if (op.status === 'fulfilled' && op.value) {
         setOperatingStatus(op.value);
       }
       if (tables.status === 'fulfilled' && Array.isArray(tables.value)) {
         const total = tables.value.length;
-        const occupied = tables.value.filter((t) => t.status?.toUpperCase() === 'OCCUPIED' || Boolean(t.activeOrderId)).length;
+        const occupied = tables.value.filter((t) => t.status?.toUpperCase() === 'OCCUPIED' || Boolean((t as any).activeOrderId || t.currentOrderId)).length;
         setTableCount({ total, occupied });
       }
     } catch (err) {
@@ -109,7 +114,7 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, [currentRestId, isSuperAdmin, orderRemoteDataSource, configRemoteDataSource, tableRemoteDataSource, superAdminRepo]);
+  }, [currentRestId, isSuperAdmin]);
 
   useEffect(() => {
     loadDashboardData();
@@ -193,7 +198,7 @@ export default function DashboardPage() {
               </div>
               <div className="mt-3">
                 <h3 className="text-2xl font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
-                  {recentOrders.filter((o) => o.status !== 'SETTLED' && o.status !== 'CANCELLED').length}
+                  {recentOrders.filter((o) => isOrderAwaitingSettlement(o)).length}
                 </h3>
                 <p className="mt-1 text-xs text-[#667085] dark:text-[#94A3B8]">
                   Orders in kitchen & counter
@@ -312,6 +317,60 @@ export default function DashboardPage() {
                   Daily revenue summaries, top items, and hourly sales heatmaps
                 </p>
               </div>
+
+              <div
+                onClick={() => router.push('/kitchen')}
+                className="group cursor-pointer rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-5 shadow-sm hover:shadow-md hover:border-[#DE8626] transition-all"
+              >
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-orange-500/10 text-orange-600 mb-3 group-hover:scale-105 transition-transform">
+                  <ChefHat className="h-5 w-5" />
+                </div>
+                <h4 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">Kitchen (KDS)</h4>
+                <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-1">
+                  Live preparation queue, station routing, and kitchen ticket dispatch
+                </p>
+              </div>
+
+              {/* Reservations Module (Temporarily Disabled from UI) */}
+              {/* <div
+                onClick={() => router.push('/reservations')}
+                className="group cursor-pointer rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-5 shadow-sm hover:shadow-md hover:border-[#DE8626] transition-all"
+              >
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-teal-500/10 text-teal-600 mb-3 group-hover:scale-105 transition-transform">
+                  <CalendarDays className="h-5 w-5" />
+                </div>
+                <h4 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">Reservations</h4>
+                <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-1">
+                  Guest bookings, slot timings, seating allocations, and walk-ins
+                </p>
+              </div> */}
+
+              <div
+                onClick={() => router.push('/wallet')}
+                className="group cursor-pointer rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-5 shadow-sm hover:shadow-md hover:border-[#DE8626] transition-all"
+              >
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-600 mb-3 group-hover:scale-105 transition-transform">
+                  <Wallet className="h-5 w-5" />
+                </div>
+                <h4 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">Prepaid Wallet</h4>
+                <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-1">
+                  Commission ledger, Cashfree gateway top-ups, and SMS balances
+                </p>
+              </div>
+
+              {/* WhatsApp Alerts Module (Disabled - Testing Only) */}
+              {/* <div
+                onClick={() => router.push('/settings/whatsapp')}
+                className="group cursor-pointer rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-5 shadow-sm hover:shadow-md hover:border-[#DE8626] transition-all"
+              >
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-green-500/10 text-green-600 mb-3 group-hover:scale-105 transition-transform">
+                  <MessageSquare className="h-5 w-5" />
+                </div>
+                <h4 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">WhatsApp Alerts</h4>
+                <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-1">
+                  Customer receipt delivery, Gupshup templates, and test messaging
+                </p>
+              </div> */}
             </div>
           </div>
 
@@ -324,13 +383,23 @@ export default function DashboardPage() {
                   Real-time ticket stream across counter, dine-in, and online
                 </p>
               </div>
-              <button
-                onClick={() => router.push('/pos')}
-                className="flex items-center gap-1 text-xs font-semibold text-[#DE8626] hover:underline"
-              >
-                <span>Open Terminal</span>
-                <ChevronRight className="h-3.5 w-3.5" />
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => router.push('/orders')}
+                  className="flex items-center gap-1.5 text-xs font-semibold text-[#667085] hover:text-[#DE8626] transition-colors"
+                >
+                  <IndianRupee className="h-3.5 w-3.5 text-[#DE8626]" />
+                  <span>Orders & History</span>
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  onClick={() => router.push('/pos')}
+                  className="flex items-center gap-1 rounded-xl bg-[#DE8626] px-3 py-1.5 text-xs font-bold text-white shadow-xs hover:bg-[#C4721C] transition-colors"
+                >
+                  <ShoppingBag className="h-3.5 w-3.5" />
+                  <span>Open POS</span>
+                </button>
+              </div>
             </div>
 
             {recentOrders.length === 0 ? (
@@ -348,7 +417,8 @@ export default function DashboardPage() {
                       <th className="pb-3 font-semibold">Items</th>
                       <th className="pb-3 font-semibold">Total Amount</th>
                       <th className="pb-3 font-semibold">Status</th>
-                      <th className="pb-3 font-semibold text-right">Time</th>
+                      <th className="pb-3 font-semibold">Time</th>
+                      <th className="pb-3 font-semibold text-right">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#E7E1DA]/60 dark:divide-[#2B3540]/60">
@@ -374,20 +444,42 @@ export default function DashboardPage() {
                         <td className="py-3">
                           <span
                             className={`rounded-md px-2 py-0.5 text-[10px] font-bold uppercase ${
-                              order.status === 'SETTLED'
+                              isOrderSettled(order)
                                 ? 'bg-emerald-500/10 text-emerald-600'
-                                : order.status === 'CANCELLED'
+                                : isOrderCancelled(order)
                                 ? 'bg-red-500/10 text-red-600'
+                                : order.status?.toUpperCase() === 'SERVED'
+                                ? 'bg-emerald-500/15 text-emerald-600 border border-emerald-500/30'
                                 : 'bg-amber-500/10 text-[#DE8626]'
                             }`}
                           >
-                            {order.status}
+                            {isOrderSettled(order)
+                              ? 'Settled'
+                              : order.status?.toUpperCase() === 'SERVED'
+                              ? 'Served (Ready)'
+                              : order.status}
                           </span>
                         </td>
-                        <td className="py-3 text-right text-[#667085] dark:text-[#94A3B8]">
+                        <td className="py-3 text-[#667085] dark:text-[#94A3B8]">
                           {order.createdAt
                             ? new Date(order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                             : '-'}
+                        </td>
+                        <td className="py-3 text-right">
+                          {isOrderAwaitingSettlement(order) ? (
+                            <button
+                              onClick={() => setSettlingOrder(order)}
+                              className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1 text-[11px] font-bold shadow-xs transition-colors"
+                              title="Settle Bill"
+                            >
+                              <IndianRupee className="h-3 w-3" />
+                              <span>Settle</span>
+                            </button>
+                          ) : (
+                            <span className="text-[10px] font-bold uppercase text-emerald-600 bg-emerald-500/10 px-2 py-0.5 rounded-md">
+                              Paid
+                            </span>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -398,6 +490,19 @@ export default function DashboardPage() {
           </div>
         </div>
       </AppShell>
+      <TermsConsentCard />
+
+      {settlingOrder && (
+        <OrderSettleModal
+          isOpen={Boolean(settlingOrder)}
+          onClose={() => setSettlingOrder(null)}
+          order={settlingOrder}
+          onSettled={async () => {
+            await loadDashboardData();
+            setSettlingOrder(null);
+          }}
+        />
+      )}
     </AuthGuard>
   );
 }

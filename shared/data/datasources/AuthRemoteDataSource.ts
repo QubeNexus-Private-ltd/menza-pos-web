@@ -36,7 +36,7 @@ export class AuthRemoteDataSource {
       appHash: '7nP3ic8JzV5',
       hash: '7nP3ic8JzV5',
     });
-    const resData = response.data;
+    const resData = response.data?.data ?? response.data;
     const otpCode = resData?.otpCode || resData?.OtpCode || resData?.otp || resData?.Otp || resData?.code || resData?.Code;
     return {
       message: resData?.message || resData?.Message || 'OTP sent successfully',
@@ -49,12 +49,12 @@ export class AuthRemoteDataSource {
     const response = await apiClient.post('/Auth/GenerateOtp', {
       mobileNumber: cleanMobile,
       mobile: cleanMobile,
-      deviceId,
+      deviceId: deviceId || 'web-client',
       smsHash: '7nP3ic8JzV5',
       appHash: '7nP3ic8JzV5',
       hash: '7nP3ic8JzV5',
     });
-    const resData = response.data;
+    const resData = response.data?.data ?? response.data;
     const otpCode = resData?.otpCode || resData?.OtpCode || resData?.otp || resData?.Otp || resData?.code || resData?.Code;
     return {
       message: resData?.message || resData?.Message || 'OTP sent successfully',
@@ -64,16 +64,17 @@ export class AuthRemoteDataSource {
 
   private mapAuthResponse(data: any): AuthResponse {
     if (!data) return data;
-    const token = data.token || data.Token || data.accessToken || data.AccessToken || '';
+    const raw = data?.data ?? data;
+    const token = raw.token || raw.Token || raw.accessToken || raw.AccessToken || '';
     const tokenClaims = decodeJwtClaims(token);
 
-    const rawRoles = data.roles || data.Roles || (data.role ? [data.role] : data.Role ? [data.Role] : (data.roleName ? [data.roleName] : []));
+    const rawRoles = raw.roles || raw.Roles || (raw.role ? [raw.role] : raw.Role ? [raw.Role] : (raw.roleName ? [raw.roleName] : []));
     const rolesList = Array.isArray(rawRoles) ? rawRoles : typeof rawRoles === 'string' ? [rawRoles] : [];
 
-    const topLogo = data.logoUrl || data.LogoUrl || data.logo || data.Logo || tokenClaims.logoUrl || tokenClaims.storeLogoUrl || tokenClaims.logo || '';
-    const topImage = data.imageUrl || data.ImageUrl || data.bannerUrl || data.BannerUrl || data.image || data.Image || data.banner || data.Banner || tokenClaims.imageUrl || tokenClaims.bannerUrl || tokenClaims.bannerImageUrl || tokenClaims.storeImageUrl || '';
+    const topLogo = raw.logoUrl || raw.LogoUrl || raw.logo || raw.Logo || tokenClaims.logoUrl || tokenClaims.storeLogoUrl || tokenClaims.logo || '';
+    const topImage = raw.imageUrl || raw.ImageUrl || raw.bannerUrl || raw.BannerUrl || raw.image || raw.Image || raw.banner || raw.Banner || tokenClaims.imageUrl || tokenClaims.bannerUrl || tokenClaims.bannerImageUrl || tokenClaims.storeImageUrl || '';
 
-    const rawRestaurants = data.restaurants || data.Restaurants || [];
+    const rawRestaurants = raw.restaurants || raw.Restaurants || [];
     const mappedRestaurants: RestaurantDetail[] = Array.isArray(rawRestaurants)
       ? rawRestaurants.map((r: any) => ({
           restaurantId: r.restaurantId || r.RestaurantId || r.id || r.Id || 0,
@@ -91,18 +92,18 @@ export class AuthRemoteDataSource {
 
     return {
       token,
-      refreshToken: data.refreshToken || data.RefreshToken || data.refresh_token || '',
-      userId: data.userId || data.UserId || (tokenClaims.userId ? Number(tokenClaims.userId) : 0),
-      name: data.name || data.Name || tokenClaims.unique_name || '',
-      mobile: data.mobileNumber || data.MobileNumber || data.mobile || data.Mobile || '',
+      refreshToken: raw.refreshToken || raw.RefreshToken || raw.refresh_token || '',
+      userId: raw.userId || raw.UserId || (tokenClaims.userId ? Number(tokenClaims.userId) : 0),
+      name: raw.name || raw.Name || tokenClaims.unique_name || '',
+      mobile: raw.mobileNumber || raw.MobileNumber || raw.mobile || raw.Mobile || '',
       roles: rolesList,
-      activeRestaurantId: data.activeRestaurantId || data.ActiveRestaurantId || (tokenClaims.activeRestId ? Number(tokenClaims.activeRestId) : undefined),
-      restaurantName: data.restaurantName || data.RestaurantName || tokenClaims.restaurantName,
+      activeRestaurantId: raw.activeRestaurantId || raw.ActiveRestaurantId || (tokenClaims.activeRestId ? Number(tokenClaims.activeRestId) : undefined),
+      restaurantName: raw.restaurantName || raw.RestaurantName || tokenClaims.restaurantName,
       logoUrl: topLogo,
       imageUrl: topImage,
       bannerUrl: topImage,
       restaurants: mappedRestaurants,
-      isTermConditionChecked: Boolean(data.isTermConditionChecked ?? data.IsTermConditionChecked ?? false),
+      isTermConditionChecked: Boolean(raw.isTermConditionChecked ?? raw.IsTermConditionChecked ?? false),
     };
   }
 

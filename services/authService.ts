@@ -2,21 +2,33 @@ import { apiClient } from '@/lib/api/client';
 import { AuthResponse, TermsConditionStatus } from '@/types/auth';
 
 export class AuthService {
-  static async generateOtp(mobile: string, deviceId: string = 'web-client'): Promise<boolean> {
+  static async generateOtp(mobile: string, deviceId: string = 'web-client'): Promise<{ success: boolean; message: string; otpCode?: string }> {
+    const cleanMobile = mobile.replace(/[^0-9]/g, '').slice(-10);
     const res = await apiClient.post('/Auth/GenerateOtp', {
-      mobile: mobile.trim(),
+      mobile: cleanMobile,
+      mobileNumber: cleanMobile,
       deviceId,
     });
-    return res.status === 200;
+    const resData = res.data?.data ?? res.data;
+    const otpCode = resData?.otpCode || resData?.OtpCode || resData?.otp || resData?.Otp || resData?.code || resData?.Code;
+    return {
+      success: res.status === 200,
+      message: resData?.message || resData?.Message || 'OTP sent successfully',
+      otpCode: otpCode ? String(otpCode) : undefined,
+    };
   }
 
   static async loginWithOtp(mobile: string, otpCode: string, deviceId: string = 'web-client'): Promise<AuthResponse> {
+    const cleanMobile = mobile.replace(/[^0-9]/g, '').slice(-10);
     const res = await apiClient.post<AuthResponse>('/Auth/Login', {
-      mobile: mobile.trim(),
+      mobile: cleanMobile,
+      mobileNumber: cleanMobile,
       otpCode: otpCode.trim(),
+      otp: otpCode.trim(),
       deviceId,
     });
-    return res.data;
+    const raw = (res.data as any)?.data ?? res.data;
+    return raw;
   }
 
   static async refreshToken(token: string, refreshToken: string): Promise<AuthResponse> {

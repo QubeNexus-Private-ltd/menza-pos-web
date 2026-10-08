@@ -1,5 +1,5 @@
 import { apiClient } from '@/lib/api/client';
-import { AuthResponse, TermsConditionStatus, RestaurantDetail } from '@/types/auth';
+import { AuthResponse, TermsConditionStatus } from '@/types/auth';
 
 export class AuthService {
   static async generateOtp(mobile: string, deviceId: string = 'web-client'): Promise<boolean> {
@@ -17,15 +17,6 @@ export class AuthService {
       deviceId,
     });
     return res.data;
-  }
-
-  static async getMyRestaurants(): Promise<RestaurantDetail[]> {
-    try {
-      const res = await apiClient.get<RestaurantDetail[]>('/Auth/MyRestaurants');
-      return Array.isArray(res.data) ? res.data : [];
-    } catch {
-      return [];
-    }
   }
 
   static async refreshToken(token: string, refreshToken: string): Promise<AuthResponse> {

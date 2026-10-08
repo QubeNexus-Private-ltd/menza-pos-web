@@ -109,17 +109,6 @@ export default function LoginPage() {
       setErrorMsg(null);
       const res = await authRepository.loginWithOtp(mobile, otpCode);
 
-      const isSuperAdmin = res.roles?.some((r: string) =>
-        ['SUPERADMIN', 'SUPER_ADMIN', 'SUPERADMINONLY'].includes(r.toUpperCase().replace(/[^A-Z]/g, ''))
-      );
-
-      const hasOutlets = Array.isArray(res.restaurants) && res.restaurants.length > 0;
-
-      if (!isSuperAdmin && !hasOutlets) {
-        completeLogin(res, undefined, '/onboard-number');
-        return;
-      }
-
       if (res.restaurants && res.restaurants.length > 1) {
         setPendingAuthResponse(res);
         setRestaurantSelectionModal(true);
@@ -134,7 +123,7 @@ export default function LoginPage() {
     }
   };
 
-  const completeLogin = (res: any, activeRestId?: number, redirectTo: string = '/dashboard') => {
+  const completeLogin = (res: any, activeRestId?: number) => {
     setAuthData(
       res.token,
       res.refreshToken,
@@ -149,7 +138,7 @@ export default function LoginPage() {
       activeRestId,
       res.isTermConditionChecked
     );
-    router.replace(redirectTo);
+    router.replace('/dashboard');
   };
 
   return (

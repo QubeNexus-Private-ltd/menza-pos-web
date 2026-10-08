@@ -9,16 +9,7 @@ import { Loader2 } from 'lucide-react';
 export const AuthGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const router = useRouter();
   const pathname = usePathname();
-  const {
-    isHydrating,
-    isAuthenticated,
-    hasCompletedOnboarding,
-    hasAcceptedTerms,
-    hydrateSession,
-    user,
-    activeRestaurant,
-    restaurants,
-  } = useAuthStore();
+  const { isHydrating, isAuthenticated, hasCompletedOnboarding, hasAcceptedTerms, hydrateSession, user, activeRestaurant } = useAuthStore();
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -39,34 +30,13 @@ export const AuthGuard: React.FC<{ children: React.ReactNode }> = ({ children })
       return;
     }
 
-    if (isAuthenticated) {
-      const hasOutlets = Array.isArray(restaurants) && restaurants.length > 0;
-      const isSuperAdmin = user?.roles?.some((r: any) =>
-        typeof r === 'string' && r.toLowerCase().includes('superadmin')
-      );
-
-      // Unassigned users without any restaurant outlet must stay on /onboard-number
-      if (!hasOutlets && !isSuperAdmin) {
-        if (pathname !== '/onboard-number' && pathname !== '/login') {
-          router.replace('/onboard-number');
-          return;
-        }
-      }
-
-      // Users who have outlets should not stay on /onboard-number
-      if ((hasOutlets || isSuperAdmin) && pathname === '/onboard-number') {
-        router.replace('/dashboard');
-        return;
-      }
-
-      // Unconsented owners cannot access any page other than /dashboard where the consent card is presented
-      const isOwner = isOwnerUser(user, activeRestaurant);
-      if (isOwner && !hasAcceptedTerms && pathname !== '/dashboard' && pathname !== '/login') {
-        router.replace('/dashboard');
-        return;
-      }
+    // Unconsented owners cannot access any page other than /dashboard where the consent card is presented
+    const isOwner = isOwnerUser(user, activeRestaurant);
+    if (isAuthenticated && isOwner && !hasAcceptedTerms && pathname !== '/dashboard' && pathname !== '/login') {
+      router.replace('/dashboard');
+      return;
     }
-  }, [isHydrating, isAuthenticated, hasCompletedOnboarding, hasAcceptedTerms, user, activeRestaurant, restaurants, pathname, router]);
+  }, [isHydrating, isAuthenticated, hasCompletedOnboarding, hasAcceptedTerms, user, activeRestaurant, pathname, router]);
 
   if (isHydrating) {
     return (
@@ -80,14 +50,6 @@ export const AuthGuard: React.FC<{ children: React.ReactNode }> = ({ children })
   }
 
   if (!isAuthenticated && pathname !== '/login' && pathname !== '/onboarding') {
-    return null;
-  }
-
-  const hasOutlets = Array.isArray(restaurants) && restaurants.length > 0;
-  const isSuperAdmin = user?.roles?.some((r: any) =>
-    typeof r === 'string' && r.toLowerCase().includes('superadmin')
-  );
-  if (isAuthenticated && !hasOutlets && !isSuperAdmin && pathname !== '/onboard-number' && pathname !== '/login') {
     return null;
   }
 

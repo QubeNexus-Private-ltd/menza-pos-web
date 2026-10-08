@@ -82,14 +82,13 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
       const sub = await SubscriptionService.getRestaurantSubscription(targetRestId);
 
       if (!sub) {
-        // If restaurant has no subscription records in DB, it is expired/unsubscribed
         set({
           subscription: null,
-          lifecycleState: 'EXPIRED',
+          lifecycleState: 'NONE',
           daysRemaining: 0,
           isInGracePeriod: false,
           graceDaysRemaining: 0,
-          isExpired: true,
+          isExpired: false,
           hasLoaded: true,
           isLoading: false,
         });

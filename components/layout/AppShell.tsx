@@ -33,6 +33,9 @@ import {
   Receipt,
 } from 'lucide-react';
 import { StoreShiftModal } from '../common/StoreShiftModal';
+import { SubscriptionGraceBanner } from '../subscription/SubscriptionGraceBanner';
+import { SubscriptionBlockerModal } from '../subscription/SubscriptionBlockerModal';
+import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { useNotificationStore } from '@shared/presentation/state/useNotificationStore';
 import { useWebTheme } from '../theme/ThemeProvider';
@@ -137,6 +140,9 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
         if (wal.status === 'fulfilled' && wal.value) {
           setWalletBalance(Number(wal.value.balance || 0));
         }
+
+        // Check active restaurant subscription lifecycle state
+        useSubscriptionStore.getState().fetchSubscriptionStatus(currentRestId);
       } catch (err) {
         console.warn('Failed to load restaurant telemetry', err);
       }
@@ -578,6 +584,9 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
           </div>
         )}
 
+        {/* Sticky Subscription Grace Period / Expiration Notice */}
+        <SubscriptionGraceBanner />
+
         {/* Viewport Content */}
         <main className="flex-1 overflow-y-auto pb-16 lg:pb-0">
           {children}
@@ -614,6 +623,9 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
             onStatusUpdated={(newStatus) => setOperatingStatus(newStatus)}
           />
         )}
+
+        {/* Subscription Expiration / Renewal Paywall Blocker */}
+        <SubscriptionBlockerModal />
       </div>
     </div>
   );

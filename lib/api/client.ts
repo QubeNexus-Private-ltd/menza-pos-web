@@ -90,14 +90,27 @@ apiClient.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// Response Interceptor: Handle 401 Unauthorized
+// Response Interceptor: Handle 401 Unauthorized & 402 Subscription Expired
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401 && typeof window !== 'undefined') {
-      const isAuthEndpoint = error.config?.url?.includes('/Auth/');
-      if (!isAuthEndpoint && !window.location.pathname.includes('/login')) {
-        console.warn('[ApiClient] 401 Unauthorized encountered. Session may be expired.');
+    if (typeof window !== 'undefined') {
+      if (error.response?.status === 401) {
+        const isAuthEndpoint = error.config?.url?.includes('/Auth/');
+        if (!isAuthEndpoint && !window.location.pathname.includes('/login')) {
+          console.warn('[ApiClient] 401 Unauthorized encountered. Session may be expired.');
+        }
+      } else if (
+        error.response?.status === 402 ||
+        error.response?.data?.errorCode === 'SUBSCRIPTION_EXPIRED' ||
+        (typeof error.response?.data?.message === 'string' && error.response.data.message.includes('SUBSCRIPTION_EXPIRED'))
+      ) {
+        try {
+          const { useSubscriptionStore } = require('@/stores/useSubscriptionStore');
+          useSubscriptionStore.getState().setExpired(true);
+        } catch {
+          // Ignore dynamic require failure
+        }
       }
     }
     return Promise.reject(error);

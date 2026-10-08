@@ -34,6 +34,7 @@ import { WebWhatsAppService } from '@/services/whatsAppService';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { usePrinterStore } from '@shared/presentation/state/usePrinterStore';
 import { useNotificationStore } from '@shared/presentation/state/useNotificationStore';
+import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
 import { CatalogRemoteDataSource } from '@shared/data/datasources/CatalogRemoteDataSource';
 import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
 import { OrderRepositoryImpl } from '@shared/data/repositories/OrderRepositoryImpl';
@@ -65,6 +66,7 @@ export default function PosPage() {
   const { activeRestaurant, restaurants } = useAuthStore();
   const { markOrderAsKnown } = useNotificationStore();
   const { paperWidth, customFooter, autoPrintReceipt, autoPrintKot } = usePrinterStore();
+  const { canTakeOrders, openRenewalModal } = useSubscriptionStore();
 
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
@@ -219,6 +221,12 @@ export default function PosPage() {
   // Place Order Execution (Send KOT vs Pay & Settle)
   const executeOrder = async (isPostPaidKOT: boolean) => {
     if (cart.length === 0 || isPlacingOrder) return;
+
+    if (!canTakeOrders()) {
+      alert('Your restaurant subscription has expired beyond the grace period. Order taking and billing are locked until your plan is renewed.');
+      openRenewalModal();
+      return;
+    }
 
     if (orderType === 'DINE_IN' && !selectedTable) {
       alert('Please select a dining table for Dine-in orders.');

@@ -277,6 +277,42 @@ export class SubscriptionService {
     }
   }
 
+  static async assignSubscription(
+    restaurantId: number,
+    subscriptionConfigurationId: number,
+    durationInDays: number = 30,
+    amountPaid: number = 0
+  ): Promise<{ success: boolean; message?: string }> {
+    try {
+      const startDate = new Date();
+      const endDate = new Date();
+      endDate.setDate(startDate.getDate() + (durationInDays || 30));
+
+      const payload = {
+        restaurantId,
+        subscriptionConfigurationId,
+        startDate: startDate.toISOString(),
+        endDate: endDate.toISOString(),
+        amountPaid,
+        paymentReferenceNo: `SUB_WEB_${Date.now()}`,
+        status: 'ACTIVE',
+      };
+
+      const response = await apiClient.post('/Subscription/RestaurantSubscription', payload);
+      if (response.status === 200 || response.status === 201) {
+        return {
+          success: true,
+          message: response.data?.message || 'Subscription activated successfully.',
+        };
+      }
+      return { success: false, message: response.data?.message || 'Failed to activate subscription.' };
+    } catch (error: any) {
+      const serverMsg = error.response?.data?.message || error.response?.data;
+      const message = typeof serverMsg === 'string' ? serverMsg : (error.message || 'Failed to activate subscription.');
+      return { success: false, message };
+    }
+  }
+
   static async getSubscriptionHistory(restaurantId: number): Promise<RestaurantSubscriptionHistory[]> {
     try {
       const response = await apiClient.get(`/Subscription/History/Restaurant/${restaurantId}`);

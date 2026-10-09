@@ -17,6 +17,12 @@ import {
   Utensils,
   CheckCircle2,
   QrCode,
+  Printer,
+  Trash2,
+  Loader2,
+  AlertCircle,
+  Phone,
+  User,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
@@ -24,22 +30,30 @@ import { TableQrModal } from '@/components/tables/TableQrModal';
 import { StorefrontQrModal } from '@/components/tables/StorefrontQrModal';
 import { OrderSettleModal } from '@/components/orders/OrderSettleModal';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
+import { usePrinterStore } from '@shared/presentation/state/usePrinterStore';
 import { TableRemoteDataSource } from '@shared/data/datasources/TableRemoteDataSource';
 import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
+import { RestaurantConfigRemoteDataSource } from '@shared/data/datasources/RestaurantConfigRemoteDataSource';
 import { TableMaster } from '@shared/domain/models/Table';
 import { OrderMaster } from '@shared/domain/models/Order';
+import { RestaurantConfig } from '@shared/domain/models/RestaurantConfig';
+import { ReceiptData } from '@shared/core/printer/EscPosBuilder';
+import { WebPrinterService } from '@/services/webPrinterService';
 import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
 
 const tableDataSource = new TableRemoteDataSource();
 const orderDataSource = new OrderRemoteDataSource();
+const configDataSource = new RestaurantConfigRemoteDataSource();
 
 export default function TablesPage() {
   const router = useRouter();
   const { activeRestaurant, restaurants } = useAuthStore();
+  const { paperWidth, customFooter } = usePrinterStore();
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
   const [tables, setTables] = useState<TableMaster[]>([]);
   const [activeOrders, setActiveOrders] = useState<OrderMaster[]>([]);
+  const [restaurantConfig, setRestaurantConfig] = useState<RestaurantConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedSection, setSelectedSection] = useState<string>('ALL');
 
@@ -52,6 +66,8 @@ export default function TablesPage() {
 
   // Table Detail Action Sheet Modal
   const [actionTable, setActionTable] = useState<TableMaster | null>(null);
+  const [activeTableOrder, setActiveTableOrder] = useState<OrderMaster | null>(null);
+  const [loadingActiveOrder, setLoadingActiveOrder] = useState(false);
   const [qrTable, setQrTable] = useState<TableMaster | null>(null);
   const [storefrontQrOpen, setStorefrontQrOpen] = useState(false);
   const [settlingOrder, setSettlingOrder] = useState<OrderMaster | null>(null);
@@ -60,9 +76,10 @@ export default function TablesPage() {
     if (!currentRestId) return;
     try {
       setLoading(true);
-      const [tablesRes, ordersRes] = await Promise.allSettled([
+      const [tablesRes, ordersRes, cfgRes] = await Promise.allSettled([
         tableDataSource.getTables(currentRestId),
         orderDataSource.getTodayOrders(currentRestId, 'ALL', 1, 50),
+        configDataSource.getConfig(currentRestId),
       ]);
 
       if (tablesRes.status === 'fulfilled' && Array.isArray(tablesRes.value)) {
@@ -70,6 +87,9 @@ export default function TablesPage() {
       }
       if (ordersRes.status === 'fulfilled' && ordersRes.value?.items) {
         setActiveOrders(ordersRes.value.items);
+      }
+      if (cfgRes.status === 'fulfilled' && cfgRes.value) {
+        setRestaurantConfig(cfgRes.value);
       }
     } catch (err) {
       console.warn('Failed to load table floor', err);
@@ -128,7 +148,115 @@ export default function TablesPage() {
     );
   };
 
-  const occupiedCount = tables.filter((t) => t.status?.toUpperCase() === 'OCCUPIED' || Boolean(t.activeOrderId)).length;
+  const handleSelectTable = async (tbl: TableMaster) => {
+    setActionTable(tbl);
+    setActiveTableOrder(null);
+    const existingOrder = getOrderForTable(tbl);
+    const statusUpper = (tbl.status || '').toUpperCase();
+    const isOccupied = statusUpper === 'OCCUPIED' || statusUpper === 'BILLED' || Boolean(tbl.activeOrderId) || Boolean(existingOrder);
+    if (isOccupied) {
+      try {
+        setLoadingActiveOrder(true);
+        const fetched = await orderDataSource.getActiveOrderByTable(tbl.id, currentRestId);
+        setActiveTableOrder(fetched || existingOrder || null);
+      } catch (err) {
+        console.warn('Failed to load active table order:', err);
+        setActiveTableOrder(existingOrder || null);
+      } finally {
+        setLoadingActiveOrder(false);
+      }
+    }
+  };
+
+  const handlePrintGuestCheck = (order: OrderMaster, table: TableMaster) => {
+    const receiptData: ReceiptData = {
+      orderId: order.id,
+      orderNumber: String(order.orderNumber || order.id),
+      pickupToken: String(order.pickupToken || order.id),
+      restaurantName: restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant',
+      address: restaurantConfig?.address || activeRestaurant?.address || '',
+      city: restaurantConfig?.city || activeRestaurant?.city || '',
+      state: restaurantConfig?.state || activeRestaurant?.state || '',
+      contactPhone: restaurantConfig?.contactNumber || (activeRestaurant as any)?.contactNumber || activeRestaurant?.ownerMobile || '',
+      gstNumber: restaurantConfig?.gstNumber || undefined,
+      customerName: order.customerName || 'Dine-In Guest',
+      customerPhone: order.mobileNumber || undefined,
+      orderType: 'DINE_IN',
+      tableName: `Table ${table.tableNumber}`,
+      sectionName: table.sectionName || undefined,
+      items: (order.items || []).map((c: any) => ({
+        itemName: c.itemName || 'Dish',
+        quantity: c.quantity || 1,
+        unitPrice: c.unitPrice || c.amount || 0,
+        totalPrice: c.totalPrice || c.totalAmount || (c.quantity * (c.unitPrice || 0)) || 0,
+      })),
+      subtotal: order.subtotal || order.totalAmount || 0,
+      discountAmount: order.discountAmount || 0,
+      cgstAmount: order.cgst || undefined,
+      sgstAmount: order.sgst || undefined,
+      taxAmount: (order.cgst || 0) + (order.sgst || 0),
+      grandTotal: Number(order.totalAmount || 0),
+      paymentMode: 'PAY LATER (GUEST CHECK)',
+      date: new Date().toLocaleString('en-IN'),
+      footerMessage: customFooter || 'Thank you! Please visit again.',
+    };
+
+    WebPrinterService.printReceipt(receiptData, paperWidth).catch((err) => {
+      alert('Thermal printer notice: ' + (err?.message || err));
+    });
+  };
+
+  const handleUpdateTableStatus = async (tableId: number, newStatus: string) => {
+    setTables((prev) => prev.map((t) => (t.id === tableId ? { ...t, status: newStatus } : t)));
+    if (actionTable && actionTable.id === tableId) {
+      setActionTable((prev) => (prev ? { ...prev, status: newStatus } : null));
+    }
+    try {
+      await tableDataSource.updateTableStatus(tableId, newStatus);
+    } catch (e) {
+      console.warn('Update table status error:', e);
+    }
+  };
+
+  const handleFreeTable = async (tableId: number, transitionToCleaning: boolean = false) => {
+    const newStatus = transitionToCleaning ? 'Cleaning' : 'Available';
+    setTables((prev) =>
+      prev.map((t) =>
+        t.id === tableId
+          ? { ...t, status: newStatus, activeOrderId: undefined }
+          : t
+      )
+    );
+    setActionTable(null);
+    setActiveTableOrder(null);
+    try {
+      await tableDataSource.freeTable(tableId, {
+        restaurantId: currentRestId,
+        transitionToCleaning,
+        settleActiveOrder: false,
+        releasedByRole: 'STAFF',
+      });
+      loadData();
+    } catch (e) {
+      console.warn('Free table error:', e);
+    }
+  };
+
+  const handleDeleteTable = async (table: TableMaster) => {
+    if (!window.confirm(`Are you sure you want to delete Table T-${table.tableNumber}?`)) return;
+    try {
+      await tableDataSource.deleteTable(table.id);
+      setActionTable(null);
+      loadData();
+    } catch (err: any) {
+      alert(err?.message || 'Failed to delete table');
+    }
+  };
+
+  const occupiedCount = tables.filter((t) => {
+    const st = (t.status || '').toUpperCase();
+    return st === 'OCCUPIED' || st === 'BILLED' || Boolean(t.activeOrderId);
+  }).length;
 
   return (
     <AuthGuard>
@@ -213,15 +341,22 @@ export default function TablesPage() {
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
               {filteredTables.map((tbl) => {
                 const activeOrder = getOrderForTable(tbl);
-                const isOccupied = tbl.status?.toUpperCase() === 'OCCUPIED' || Boolean(tbl.activeOrderId) || Boolean(activeOrder);
+                const statusUpper = (tbl.status || '').toUpperCase();
+                const isBilled = statusUpper === 'BILLED';
+                const isCleaning = statusUpper === 'CLEANING';
+                const isOccupied = statusUpper === 'OCCUPIED' || Boolean(tbl.activeOrderId) || Boolean(activeOrder);
 
                 return (
                   <div
                     key={tbl.id}
-                    onClick={() => setActionTable(tbl)}
+                    onClick={() => handleSelectTable(tbl)}
                     className={`group relative flex flex-col justify-between rounded-3xl border p-4 shadow-sm transition-all cursor-pointer select-none ${
                       isOccupied
                         ? 'border-amber-400/80 bg-gradient-to-br from-amber-500/10 to-[#FFFFFF] dark:to-[#1B2127] hover:border-[#DE8626] hover:shadow-md'
+                        : isBilled
+                        ? 'border-amber-500/80 bg-amber-500/5 hover:border-amber-500 hover:shadow-md'
+                        : isCleaning
+                        ? 'border-blue-400/80 bg-blue-500/5 hover:border-blue-500 hover:shadow-md'
                         : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] hover:border-[#DE8626] hover:shadow-md'
                     }`}
                   >
@@ -246,12 +381,16 @@ export default function TablesPage() {
                           </button>
                           <span
                             className={`rounded-full px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wider ${
-                              isOccupied
+                              isBilled
                                 ? 'bg-amber-500 text-white'
+                                : isCleaning
+                                ? 'bg-blue-500 text-white'
+                                : isOccupied
+                                ? 'bg-red-500 text-white'
                                 : 'bg-emerald-500/10 text-emerald-600'
                             }`}
                           >
-                            {isOccupied ? 'Occupied' : 'Available'}
+                            {tbl.status || (isOccupied ? 'Occupied' : 'Available')}
                           </span>
                         </div>
                       </div>
@@ -308,26 +447,49 @@ export default function TablesPage() {
 
         {/* 1. Table Action Sheet Modal */}
         {actionTable && (() => {
-          const activeOrder = getOrderForTable(actionTable);
-          const isOccupied = actionTable.status?.toUpperCase() === 'OCCUPIED' || Boolean(actionTable.activeOrderId) || Boolean(activeOrder);
-          const isServed = activeOrder?.status?.toUpperCase() === 'SERVED';
+          const existingOrder = getOrderForTable(actionTable);
+          const activeOrder = activeTableOrder || existingOrder;
+          const statusUpper = (actionTable.status || '').toUpperCase();
+          const isOccupied = statusUpper === 'OCCUPIED' || Boolean(actionTable.activeOrderId) || Boolean(activeOrder);
+          const isBilled = statusUpper === 'BILLED';
+          const isCleaning = statusUpper === 'CLEANING';
 
           return (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-              <div className="w-full max-w-sm rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-6 shadow-2xl">
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+              <div className="w-full max-w-md rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-6 shadow-2xl max-h-[90vh] flex flex-col">
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-2">
                     <TableIcon className="h-5 w-5 text-[#DE8626]" />
                     <h3 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">
                       Table T-{actionTable.tableNumber}
                     </h3>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wider ${
+                        isBilled
+                          ? 'bg-amber-500 text-white'
+                          : isCleaning
+                          ? 'bg-blue-500 text-white'
+                          : isOccupied
+                          ? 'bg-red-500 text-white'
+                          : 'bg-emerald-500/10 text-emerald-600'
+                      }`}
+                    >
+                      {actionTable.status || (isOccupied ? 'Occupied' : 'Available')}
+                    </span>
                   </div>
-                  <button onClick={() => setActionTable(null)} className="rounded-lg p-1 text-[#667085]">
+                  <button
+                    onClick={() => {
+                      setActionTable(null);
+                      setActiveTableOrder(null);
+                    }}
+                    className="rounded-lg p-1 text-[#667085] hover:bg-black/5"
+                  >
                     <X className="h-4 w-4" />
                   </button>
                 </div>
 
-                <div className="rounded-2xl bg-[#FAF7F2] dark:bg-[#151A20] p-4 space-y-2 text-xs mb-5">
+                {/* Table Details & Active Order Card */}
+                <div className="rounded-2xl bg-[#FAF7F2] dark:bg-[#151A20] p-4 space-y-2.5 text-xs mb-4 overflow-y-auto max-h-[45vh]">
                   <div className="flex justify-between">
                     <span className="text-[#667085]">Section:</span>
                     <span className="font-bold">{actionTable.sectionName || 'Main Dining'}</span>
@@ -336,46 +498,48 @@ export default function TablesPage() {
                     <span className="text-[#667085]">Capacity:</span>
                     <span className="font-bold">{actionTable.seatingCapacity || 4} Guests</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-[#667085]">Current Status:</span>
-                    <span
-                      className={`font-bold uppercase ${
-                        isOccupied ? 'text-amber-600' : 'text-emerald-600'
-                      }`}
-                    >
-                      {isOccupied ? 'Occupied' : 'Available'}
-                    </span>
-                  </div>
-                  {activeOrder && (
+
+                  {loadingActiveOrder ? (
+                    <div className="flex items-center justify-center py-4 gap-2 text-xs text-[#DE8626]">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <span>Fetching live table tab & items...</span>
+                    </div>
+                  ) : activeOrder ? (
                     <>
-                      <div className="pt-2 border-t border-[#E7E1DA] dark:border-[#2B3540] flex justify-between">
-                        <span className="text-[#667085]">Active Order:</span>
+                      <div className="pt-2 border-t border-[#E7E1DA] dark:border-[#2B3540] flex justify-between items-center">
+                        <span className="text-[#667085]">Guest & Order:</span>
                         <span className="font-bold text-[#1E2930] dark:text-[#F3F4F6]">
-                          #{activeOrder.id}
+                          {activeOrder.customerName || 'Dine-In Guest'}
+                          {activeOrder.mobileNumber ? ` • ${activeOrder.mobileNumber}` : ''}
                         </span>
                       </div>
-                      <div className="flex justify-between">
-                        <span className="text-[#667085]">Order State:</span>
-                        <span
-                          className={`font-bold uppercase px-2 py-0.5 rounded-md text-[10px] ${
-                            isServed
-                              ? 'bg-emerald-500/15 text-emerald-600 border border-emerald-500/30'
-                              : 'bg-amber-500/10 text-[#DE8626]'
-                          }`}
-                        >
-                          {isServed ? 'Served (Ready for Bill)' : activeOrder.status || 'Active'}
-                        </span>
-                      </div>
-                      <div className="flex justify-between text-sm font-extrabold text-[#DE8626] pt-1">
-                        <span>Total Bill:</span>
-                        <span>₹{activeOrder.totalAmount}</span>
+
+                      {/* Itemized Order List */}
+                      {activeOrder.items && activeOrder.items.length > 0 && (
+                        <div className="mt-2 pt-2 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60 max-h-36 overflow-y-auto space-y-1.5 text-xs">
+                          <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#667085] block mb-1">
+                            Ordered Dishes ({activeOrder.items.length})
+                          </span>
+                          {activeOrder.items.map((it: any, idx: number) => (
+                            <div key={idx} className="flex justify-between items-center text-[11px] text-[#1E2930] dark:text-[#F3F4F6]">
+                              <span>{it.quantity}x {it.itemName}</span>
+                              <span className="font-semibold">₹{(it.unitPrice || it.amount || 0) * (it.quantity || 1)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="flex justify-between text-sm font-extrabold text-[#DE8626] pt-2 border-t border-[#E7E1DA] dark:border-[#2B3540]">
+                        <span>Total Bill Amount:</span>
+                        <span>₹{activeOrder.totalAmount || 0}</span>
                       </div>
                     </>
-                  )}
+                  ) : null}
                 </div>
 
-                <div className="space-y-2">
-                  {/* Settle Bill Button if table has active order */}
+                {/* Action Buttons */}
+                <div className="space-y-2 mt-auto">
+                  {/* Settle Bill Button */}
                   {activeOrder && (
                     <button
                       onClick={() => {
@@ -390,43 +554,114 @@ export default function TablesPage() {
                     </button>
                   )}
 
-                  <button
-                    onClick={() => {
-                      if (!useSubscriptionStore.getState().canTakeOrders()) {
-                        useSubscriptionStore.getState().openRenewalModal();
-                        return;
-                      }
-                      setActionTable(null);
-                      router.push('/pos');
-                    }}
-                    className={`flex w-full items-center justify-center gap-2 rounded-2xl py-3 text-xs font-bold transition-colors ${
-                      activeOrder
-                        ? 'border border-[#DE8626] text-[#DE8626] hover:bg-amber-500/10'
-                        : 'bg-[#DE8626] text-white shadow-md hover:bg-[#C4721C]'
-                    }`}
-                  >
-                    <ShoppingBag className="h-4 w-4" />
-                    <span>{activeOrder ? 'Add Items (Open POS)' : 'Start Order (Open POS)'}</span>
-                  </button>
+                  {/* Print Guest Check & Add Items Row */}
+                  <div className="grid grid-cols-2 gap-2">
+                    {activeOrder && (
+                      <button
+                        type="button"
+                        onClick={() => handlePrintGuestCheck(activeOrder, actionTable)}
+                        className="flex items-center justify-center gap-1.5 rounded-2xl border border-[#DE8626] bg-amber-500/10 py-2.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-colors"
+                        title="Print Guest Slip / Proforma Bill"
+                      >
+                        <Printer className="h-4 w-4" />
+                        <span>Print Bill Slip</span>
+                      </button>
+                    )}
 
-                  <button
-                    onClick={() => {
-                      const target = actionTable;
-                      setActionTable(null);
-                      setQrTable(target);
-                    }}
-                    className="flex w-full items-center justify-center gap-2 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] py-2.5 text-xs font-semibold text-[#667085] hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-                  >
-                    <QrCode className="h-4 w-4" />
-                    <span>Print Table QR Sticker</span>
-                  </button>
+                    <button
+                      onClick={() => {
+                        if (!useSubscriptionStore.getState().canTakeOrders()) {
+                          useSubscriptionStore.getState().openRenewalModal();
+                          return;
+                        }
+                        const targetId = actionTable.id;
+                        setActionTable(null);
+                        router.push(`/pos?tableId=${targetId}`);
+                      }}
+                      className={`flex items-center justify-center gap-1.5 rounded-2xl py-2.5 text-xs font-bold transition-colors ${
+                        activeOrder
+                          ? 'border border-[#E7E1DA] dark:border-[#2B3540] text-[#1E2930] dark:text-[#F3F4F6] hover:border-[#DE8626]'
+                          : 'col-span-2 bg-[#DE8626] text-white shadow-md hover:bg-[#C4721C]'
+                      }`}
+                    >
+                      <ShoppingBag className="h-4 w-4" />
+                      <span>{activeOrder ? '+ Add Dishes (POS)' : 'Seat Guests (Open POS)'}</span>
+                    </button>
+                  </div>
 
-                  <button
-                    onClick={() => setActionTable(null)}
-                    className="w-full rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] py-2.5 text-xs font-semibold text-[#667085] hover:bg-black/5"
-                  >
-                    Close
-                  </button>
+                  {/* Table Lifecycle Status Controls */}
+                  {isOccupied && !isBilled && (
+                    <button
+                      onClick={() => handleUpdateTableStatus(actionTable.id, 'Billed')}
+                      className="flex w-full items-center justify-center gap-2 rounded-2xl border border-amber-400 bg-amber-500/10 py-2 text-xs font-semibold text-amber-700 dark:text-amber-300 hover:bg-amber-500/20 transition-colors"
+                    >
+                      <Receipt className="h-3.5 w-3.5" />
+                      <span>Mark as Billed (Customer Asked for Bill)</span>
+                    </button>
+                  )}
+
+                  {(isOccupied || isBilled) && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => handleFreeTable(actionTable.id, true)}
+                        className="flex items-center justify-center gap-1.5 rounded-2xl border border-blue-400/50 bg-blue-500/10 py-2 text-xs font-semibold text-blue-700 dark:text-blue-300 hover:bg-blue-500/20 transition-colors"
+                      >
+                        <Sparkles className="h-3.5 w-3.5" />
+                        <span>Mark for Cleaning</span>
+                      </button>
+                      <button
+                        onClick={() => handleFreeTable(actionTable.id, false)}
+                        className="flex items-center justify-center gap-1.5 rounded-2xl border border-red-400/50 bg-red-500/10 py-2 text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-500/20 transition-colors"
+                      >
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        <span>Force Free Table</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {isCleaning && (
+                    <button
+                      onClick={() => handleFreeTable(actionTable.id, false)}
+                      className="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 py-2.5 text-xs font-bold text-white shadow-md hover:bg-emerald-700 transition-colors"
+                    >
+                      <CheckCircle2 className="h-4 w-4" />
+                      <span>Cleaning Done • Make Available</span>
+                    </button>
+                  )}
+
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      onClick={() => {
+                        const target = actionTable;
+                        setActionTable(null);
+                        setQrTable(target);
+                      }}
+                      className="flex-1 flex items-center justify-center gap-1.5 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] py-2 text-xs font-semibold text-[#667085] hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                    >
+                      <QrCode className="h-3.5 w-3.5" />
+                      <span>QR Sticker</span>
+                    </button>
+
+                    {!isOccupied && !isBilled && (
+                      <button
+                        onClick={() => handleDeleteTable(actionTable)}
+                        className="flex items-center justify-center gap-1.5 rounded-2xl border border-red-500/30 px-3 py-2 text-xs font-semibold text-red-500 hover:bg-red-500/10 transition-colors"
+                        title="Delete Table"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+
+                    <button
+                      onClick={() => {
+                        setActionTable(null);
+                        setActiveTableOrder(null);
+                      }}
+                      className="flex-1 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] py-2 text-xs font-semibold text-[#667085] hover:bg-black/5"
+                    >
+                      Close
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

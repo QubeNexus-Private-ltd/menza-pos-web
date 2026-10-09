@@ -16,6 +16,8 @@ import {
   IndianRupee,
   Utensils,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   AlertCircle,
   QrCode,
   ArrowRight,
@@ -25,10 +27,14 @@ import {
   Table as TableIcon,
   Sparkles,
   MessageCircle,
+  Store,
+  Layers,
+  ShieldAlert,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
 import { DishImage } from '@/components/common/DishImage';
+import { StoreOperatingStatusModal } from '@/components/pos/StoreOperatingStatusModal';
 import { WebPrinterService } from '@/services/webPrinterService';
 import { WebWhatsAppService } from '@/services/whatsAppService';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
@@ -43,12 +49,18 @@ import { RestaurantConfigRemoteDataSource } from '@shared/data/datasources/Resta
 import { MenuItem } from '@shared/domain/models/Item';
 import { Category } from '@shared/domain/models/Category';
 import { TableMaster } from '@shared/domain/models/Table';
-import { RestaurantConfig } from '@shared/domain/models/RestaurantConfig';
-import { BillingModes, PosCheckoutModes } from '@shared/domain/models/Order';
+import { RestaurantConfig, StoreOperatingStatus } from '@shared/domain/models/RestaurantConfig';
+import { BillingModes, PosCheckoutModes, OrderMaster } from '@shared/domain/models/Order';
 import { ReceiptData } from '@shared/core/printer/EscPosBuilder';
+import {
+  startPosSignalRConnection,
+  onStoreOperatingStatusChanged,
+  onWalletBalanceChanged,
+} from '@/lib/signalr/signalrService';
 
 const catalogDataSource = new CatalogRemoteDataSource();
-const orderRepository = new OrderRepositoryImpl(new OrderRemoteDataSource());
+const orderRemoteDataSource = new OrderRemoteDataSource();
+const orderRepository = new OrderRepositoryImpl(orderRemoteDataSource);
 const tableDataSource = new TableRemoteDataSource();
 const configDataSource = new RestaurantConfigRemoteDataSource();
 
@@ -74,7 +86,14 @@ export default function PosPage() {
   const [items, setItems] = useState<MenuItem[]>([]);
   const [tables, setTables] = useState<TableMaster[]>([]);
   const [restaurantConfig, setRestaurantConfig] = useState<RestaurantConfig | null>(null);
+  const [operatingStatus, setOperatingStatus] = useState<StoreOperatingStatus | null>(null);
+  const [operatingModalOpen, setOperatingModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  // Active Dining Table State
+  const [activeTableOrder, setActiveTableOrder] = useState<OrderMaster | null>(null);
+  const [loadingActiveTable, setLoadingActiveTable] = useState(false);
+  const [showRunningTableDetails, setShowRunningTableDetails] = useState(false);
 
   // Filters & State
   const [selectedCategory, setSelectedCategory] = useState<number | null>(null); // null = all
@@ -97,19 +116,24 @@ export default function PosPage() {
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
   const [orderSuccessData, setOrderSuccessData] = useState<any | null>(null);
 
-  // Load menu items, categories, tables, and config
+  // Load menu items, categories, tables, config, and operating status
   useEffect(() => {
     if (!currentRestId) return;
+
+    let isMounted = true;
 
     const loadData = async () => {
       try {
         setLoading(true);
-        const [catsRes, itemsRes, tablesRes, cfgRes] = await Promise.allSettled([
+        const [catsRes, itemsRes, tablesRes, cfgRes, opRes] = await Promise.allSettled([
           catalogDataSource.getCategories(currentRestId),
           catalogDataSource.getMenuItems(currentRestId),
           tableDataSource.getTables(currentRestId),
           configDataSource.getConfig(currentRestId),
+          configDataSource.getOperatingStatus(currentRestId),
         ]);
+
+        if (!isMounted) return;
 
         if (catsRes.status === 'fulfilled' && Array.isArray(catsRes.value)) {
           setCategories(catsRes.value);
@@ -119,19 +143,93 @@ export default function PosPage() {
         }
         if (tablesRes.status === 'fulfilled' && Array.isArray(tablesRes.value)) {
           setTables(tablesRes.value);
+          if (typeof window !== 'undefined') {
+            const qTableId = new URLSearchParams(window.location.search).get('tableId');
+            if (qTableId) {
+              const matched = tablesRes.value.find((t) => t.id === Number(qTableId));
+              if (matched) {
+                setOrderType('DINE_IN');
+                setSelectedTable(matched);
+              }
+            }
+          }
         }
         if (cfgRes.status === 'fulfilled' && cfgRes.value) {
           setRestaurantConfig(cfgRes.value);
         }
+        if (opRes.status === 'fulfilled' && opRes.value) {
+          setOperatingStatus(opRes.value);
+        }
       } catch (err) {
         console.warn('POS data load failed', err);
       } finally {
-        setLoading(false);
+        if (isMounted) setLoading(false);
       }
     };
 
     loadData();
+
+    // Start Real-Time SignalR Connection for Live Store & Order Sync
+    startPosSignalRConnection(currentRestId).catch(() => {});
+
+    const unsubStatus = onStoreOperatingStatusChanged((status) => {
+      if (status && isMounted) {
+        setOperatingStatus(status);
+      }
+    });
+
+    const unsubWallet = onWalletBalanceChanged((data) => {
+      if (data?.newBalance !== undefined && isMounted) {
+        setRestaurantConfig((prev) =>
+          prev ? { ...prev, walletBalance: Number(data.newBalance) } : prev
+        );
+        setOperatingStatus((prev) =>
+          prev ? { ...prev, walletBalance: Number(data.newBalance) } : prev
+        );
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      unsubStatus();
+      unsubWallet();
+    };
   }, [currentRestId]);
+
+  // Load active dining table order whenever a table is selected
+  const loadActiveTableOrder = useCallback(
+    async (tableId: number) => {
+      if (!currentRestId || !tableId) {
+        setActiveTableOrder(null);
+        return;
+      }
+      try {
+        setLoadingActiveTable(true);
+        const active = await orderRepository.getActiveOrderByTable(tableId, currentRestId);
+        setActiveTableOrder(active);
+        if (active?.customerName && !customerName) {
+          setCustomerName(active.customerName);
+        }
+        if (active?.mobileNumber && !customerPhone) {
+          setCustomerPhone(active.mobileNumber);
+        }
+      } catch (err) {
+        console.warn('Failed to load active table order:', err);
+        setActiveTableOrder(null);
+      } finally {
+        setLoadingActiveTable(false);
+      }
+    },
+    [currentRestId, customerName, customerPhone]
+  );
+
+  useEffect(() => {
+    if (orderType === 'DINE_IN' && selectedTable?.id) {
+      loadActiveTableOrder(selectedTable.id);
+    } else {
+      setActiveTableOrder(null);
+    }
+  }, [orderType, selectedTable, loadActiveTableOrder]);
 
   // Filtered Menu Items
   const filteredItems = useMemo(() => {
@@ -201,32 +299,169 @@ export default function PosPage() {
     setTenderedAmount('');
   };
 
-  // Calculations
+  // GST & Tax Calculations
+  const hasGstNumber = Boolean(
+    restaurantConfig?.gstNumber && restaurantConfig.gstNumber.trim().length > 0
+  );
+  const sgstRate = hasGstNumber ? Number(restaurantConfig?.sgstPercentage ?? 2.5) : 0;
+  const cgstRate = hasGstNumber ? Number(restaurantConfig?.cgstPercentage ?? 2.5) : 0;
+  const totalGstRate = sgstRate + cgstRate;
+
   const subtotal = useMemo(() => {
     return cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
   }, [cart]);
 
-  // Tax calculation (CGST + SGST from config, or standard 2.5% + 2.5% = 5%)
-  const cgstRate = restaurantConfig?.cgstPercentage ?? 2.5;
-  const sgstRate = restaurantConfig?.sgstPercentage ?? 2.5;
-  const cgstAmount = Math.round((subtotal * cgstRate) / 100);
-  const sgstAmount = Math.round((subtotal * sgstRate) / 100);
-  const totalTax = cgstAmount + sgstAmount;
-  const grandTotal = Math.max(0, subtotal + totalTax - discountAmount);
+  const sgstAmount = hasGstNumber ? Math.round(((subtotal * sgstRate) / 100) * 100) / 100 : 0;
+  const cgstAmount = hasGstNumber ? Math.round(((subtotal * cgstRate) / 100) * 100) / 100 : 0;
+  const totalTax = hasGstNumber ? Math.round((sgstAmount + cgstAmount) * 100) / 100 : 0;
 
-  // Cash change
+  // Grand Total for currently staged cart items
+  const grandTotal = hasGstNumber
+    ? Math.max(0, Math.round((subtotal + totalTax - discountAmount) * 100) / 100)
+    : Math.max(0, Math.round((subtotal - discountAmount) * 100) / 100);
+
+  // Consolidated dining total (Existing running table items + new cart items)
+  const existingTableTotal = activeTableOrder ? Number(activeTableOrder.totalAmount || 0) : 0;
+  const consolidatedGrandTotal = Math.round((existingTableTotal + grandTotal) * 100) / 100;
+  const payableGrandTotal = activeTableOrder ? consolidatedGrandTotal : grandTotal;
+
+  // Cash change calculation
   const numericTendered = parseFloat(tenderedAmount) || 0;
-  const changeToReturn = Math.max(0, numericTendered - grandTotal);
+  const changeToReturn = Math.max(0, Math.round((numericTendered - payableGrandTotal) * 100) / 100);
 
   // Place Order Execution (Send KOT vs Pay & Settle)
   const executeOrder = async (isPostPaidKOT: boolean) => {
-    if (cart.length === 0 || isPlacingOrder) return;
+    if (isPlacingOrder) return;
 
+    // Direct settlement of an existing active table when cart is empty
+    if (cart.length === 0) {
+      if (activeTableOrder && !isPostPaidKOT) {
+        try {
+          setIsPlacingOrder(true);
+          await orderRemoteDataSource.settleOrder(activeTableOrder.id, {
+            orderId: activeTableOrder.id,
+            paymentMode,
+            discountAmount,
+            tenderedAmount: paymentMode === 'CASH' && numericTendered > 0 ? numericTendered : undefined,
+            changeAmount: paymentMode === 'CASH' && changeToReturn > 0 ? changeToReturn : undefined,
+            billingMode: BillingModes.PRE_PAID,
+            orderStatus: 'Settled',
+          });
+
+          // Print settled invoice
+          const receiptData: ReceiptData = {
+            orderId: activeTableOrder.id,
+            orderNumber: String(activeTableOrder.orderNumber || activeTableOrder.id),
+            pickupToken: String(activeTableOrder.pickupToken || activeTableOrder.id),
+            restaurantName: restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant',
+            address: restaurantConfig?.address || activeRestaurant?.address || '',
+            city: restaurantConfig?.city || activeRestaurant?.city || '',
+            state: restaurantConfig?.state || activeRestaurant?.state || '',
+            contactPhone: restaurantConfig?.contactNumber || (activeRestaurant as any)?.contactNumber || activeRestaurant?.ownerMobile || '',
+            gstNumber: hasGstNumber ? (restaurantConfig?.gstNumber || '') : undefined,
+            customerName: activeTableOrder.customerName || 'Dine-In Guest',
+            customerPhone: activeTableOrder.mobileNumber || undefined,
+            orderType: 'DINE_IN',
+            tableName: selectedTable ? `Table ${selectedTable.tableNumber}` : activeTableOrder.tableName,
+            sectionName: selectedTable?.sectionName || (activeTableOrder as any)?.sectionName,
+            items: (activeTableOrder.items || []).map((c: any) => ({
+              itemName: c.itemName || 'Dish',
+              quantity: c.quantity || 1,
+              unitPrice: c.unitPrice || c.amount || 0,
+              totalPrice: c.totalPrice || c.totalAmount || (c.quantity * c.unitPrice) || 0,
+            })),
+            subtotal: activeTableOrder.subtotal || existingTableTotal,
+            discountAmount: discountAmount || activeTableOrder.discountAmount || 0,
+            cgstPercentage: hasGstNumber ? cgstRate : undefined,
+            cgstAmount: hasGstNumber ? (activeTableOrder.cgst || 0) : undefined,
+            sgstPercentage: hasGstNumber ? sgstRate : undefined,
+            sgstAmount: hasGstNumber ? (activeTableOrder.sgst || 0) : undefined,
+            taxAmount: hasGstNumber ? ((activeTableOrder.cgst || 0) + (activeTableOrder.sgst || 0)) : 0,
+            grandTotal: payableGrandTotal,
+            paymentMode,
+            tenderedAmount: numericTendered,
+            changeAmount: changeToReturn,
+            date: new Date().toLocaleString('en-IN'),
+            footerMessage: customFooter || 'Thank you! Please visit again.',
+          };
+
+          if (autoPrintReceipt) {
+            WebPrinterService.printReceipt(receiptData, paperWidth).catch(() => {});
+          }
+
+          setOrderSuccessData({
+            orderId: activeTableOrder.id,
+            orderType: 'DINE_IN',
+            table: selectedTable?.tableNumber,
+            customerName: activeTableOrder.customerName,
+            customerPhone: activeTableOrder.mobileNumber,
+            items: activeTableOrder.items || [],
+            subtotal: activeTableOrder.subtotal || existingTableTotal,
+            totalTax: hasGstNumber ? ((activeTableOrder.cgst || 0) + (activeTableOrder.sgst || 0)) : 0,
+            grandTotal: payableGrandTotal,
+            paymentMode,
+            tendered: numericTendered,
+            change: changeToReturn,
+            date: new Date().toLocaleTimeString(),
+            receiptData,
+          });
+
+          setActiveTableOrder(null);
+          clearCart();
+          setSettleModalOpen(false);
+          return;
+        } catch (err: any) {
+          alert(err?.message || 'Failed to settle table order.');
+          return;
+        } finally {
+          setIsPlacingOrder(false);
+        }
+      }
+
+      alert('Please add dishes to the cart before placing an order.');
+      return;
+    }
+
+    // 1. Subscription Safeguard
     if (!canTakeOrders()) {
       openRenewalModal();
       return;
     }
 
+    // 2. Inactive Restaurant Safeguard
+    if (activeRestaurant?.isActive === false || restaurantConfig?.isActive === false) {
+      alert('This store is currently marked as inactive in Menza Admin. You cannot take or place orders while inactive.');
+      return;
+    }
+
+    // 3. Store Operating Status Safeguard (Closed / Paused)
+    if (operatingStatus && !operatingStatus.canPlaceOrder) {
+      alert(
+        operatingStatus.statusMessage ||
+          'This restaurant outlet is currently marked as closed or paused for taking orders. Please resume or open the store in Store Controls before taking orders.'
+      );
+      setOperatingModalOpen(true);
+      return;
+    }
+
+    // 4. Prepaid Wallet Zero / Negative Safeguard
+    const walletBal = operatingStatus?.walletBalance ?? restaurantConfig?.walletBalance;
+    if (operatingStatus?.status === 'WALLET_EXHAUSTED' || (walletBal !== undefined && walletBal <= 0)) {
+      alert(
+        `Prepaid Wallet Exhausted 💳\n\nYour restaurant's prepaid wallet balance is ₹${(walletBal ?? 0).toFixed(2)}. Orders and billing cannot be processed while the wallet balance is zero or negative.\n\nPlease recharge your wallet to continue taking orders.`
+      );
+      router.push('/wallet');
+      return;
+    }
+
+    // 5. Customer Phone Validation
+    const cleanPhone = customerPhone.replace(/[^0-9]/g, '').trim();
+    if (cleanPhone.length > 0 && cleanPhone.length !== 10) {
+      alert('Customer mobile number must be exactly 10 digits.');
+      return;
+    }
+
+    // 6. Dine-In Plan Entitlement & Table Selection
     if (orderType === 'DINE_IN' && !hasEntitlement('IsTableOrderingEnabled')) {
       alert('Table / Dine-in ordering is not included in your active subscription plan. Please upgrade your plan to unlock.');
       openRenewalModal();
@@ -253,10 +488,12 @@ export default function PosPage() {
       const orderTypeId =
         orderType === 'DINE_IN' ? 1 : orderType === 'TAKEAWAY' ? 2 : orderType === 'DELIVERY' ? 3 : 4;
 
+      const effectiveCustomerName = customerName.trim() || (selectedTable ? `Table ${selectedTable.tableNumber}` : 'Walk-in Customer');
+
       const orderPayload: any = {
         restaurantId: currentRestId,
-        name: customerName.trim() || (selectedTable ? `Table ${selectedTable.tableNumber}` : 'Counter Customer'),
-        mobileNumber: customerPhone.trim() || undefined,
+        name: effectiveCustomerName,
+        mobileNumber: cleanPhone || undefined,
         tableId: selectedTable?.id,
         tableNumber: selectedTable?.tableNumber,
         sectionName: selectedTable?.sectionName,
@@ -279,6 +516,23 @@ export default function PosPage() {
       if (orderId && orderId > 0) {
         markOrderAsKnown(orderId, isPostPaidKOT ? 'Pending' : 'Confirmed');
 
+        // If this was an instant settle order, mark it as settled
+        if (!isPostPaidKOT) {
+          try {
+            await orderRemoteDataSource.settleOrder(orderId, {
+              orderId,
+              paymentMode,
+              discountAmount,
+              tenderedAmount: paymentMode === 'CASH' && numericTendered > 0 ? numericTendered : undefined,
+              changeAmount: paymentMode === 'CASH' && changeToReturn > 0 ? changeToReturn : undefined,
+              billingMode: BillingModes.PRE_PAID,
+              orderStatus: 'Settled',
+            });
+          } catch (settleErr) {
+            console.warn('Instant settle warning:', settleErr);
+          }
+        }
+
         const receiptData: ReceiptData = {
           orderId,
           orderNumber: String(orderId),
@@ -288,9 +542,9 @@ export default function PosPage() {
           city: restaurantConfig?.city || activeRestaurant?.city || '',
           state: restaurantConfig?.state || activeRestaurant?.state || '',
           contactPhone: restaurantConfig?.contactNumber || (activeRestaurant as any)?.contactNumber || activeRestaurant?.ownerMobile || '',
-          gstNumber: restaurantConfig?.gstNumber || '',
-          customerName: orderPayload.name || 'Walk-in Customer',
-          customerPhone: customerPhone.trim() || undefined,
+          gstNumber: hasGstNumber ? (restaurantConfig?.gstNumber || '') : undefined,
+          customerName: effectiveCustomerName,
+          customerPhone: cleanPhone || undefined,
           orderType,
           tableName: selectedTable ? `Table ${selectedTable.tableNumber}` : undefined,
           sectionName: selectedTable?.sectionName || undefined,
@@ -303,10 +557,10 @@ export default function PosPage() {
           })),
           subtotal,
           discountAmount,
-          cgstPercentage: cgstRate,
-          cgstAmount,
-          sgstPercentage: sgstRate,
-          sgstAmount,
+          cgstPercentage: hasGstNumber ? cgstRate : undefined,
+          cgstAmount: hasGstNumber ? cgstAmount : undefined,
+          sgstPercentage: hasGstNumber ? sgstRate : undefined,
+          sgstAmount: hasGstNumber ? sgstAmount : undefined,
           taxAmount: totalTax,
           grandTotal,
           paymentMode: isPostPaidKOT ? 'KOT (Pay Later)' : paymentMode,
@@ -317,12 +571,12 @@ export default function PosPage() {
         };
 
         // Automatic Thermal Printing if enabled in Settings
-        if (autoPrintReceipt) {
+        if (autoPrintReceipt && !isPostPaidKOT) {
           WebPrinterService.printReceipt(receiptData, paperWidth).catch((err) =>
             console.warn('Auto print receipt error:', err)
           );
         }
-        if (autoPrintKot) {
+        if (autoPrintKot || isPostPaidKOT) {
           WebPrinterService.printKot(receiptData, paperWidth).catch((err) =>
             console.warn('Auto print KOT error:', err)
           );
@@ -333,7 +587,7 @@ export default function PosPage() {
           orderType,
           table: selectedTable?.tableNumber,
           customerName: orderPayload.name,
-          customerPhone: customerPhone.trim(),
+          customerPhone: cleanPhone,
           items: cart,
           subtotal,
           totalTax,
@@ -347,6 +601,11 @@ export default function PosPage() {
 
         clearCart();
         setSettleModalOpen(false);
+
+        // If it was a table order, re-fetch active table tab
+        if (selectedTable?.id) {
+          loadActiveTableOrder(selectedTable.id);
+        }
       }
     } catch (err: any) {
       alert(err?.message || 'Failed to place order. Please try again.');
@@ -411,40 +670,75 @@ export default function PosPage() {
           <div className="flex-1 flex flex-col overflow-hidden border-r border-[#E7E1DA] dark:border-[#2B3540]">
             {/* Top POS Action Toolbar */}
             <div className="border-b border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-3 sm:p-4 space-y-3">
-              {/* Row 1: Order Type Selector & Table Picker */}
+              {/* Row 1: Order Type Selector, Table Picker & Store Status */}
               <div className="flex flex-wrap items-center justify-between gap-3">
-                {/* Service Type Switcher */}
-                <div className="flex items-center gap-1.5 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-1">
-                  {(['COUNTER', 'DINE_IN', 'TAKEAWAY', 'DELIVERY'] as const).map((type) => (
-                    <button
-                      key={type}
-                      onClick={() => {
-                        setOrderType(type);
-                        if (type === 'DINE_IN' && !selectedTable) {
-                          setTableModalOpen(true);
-                        }
-                      }}
-                      className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-all ${
-                        orderType === type
-                          ? 'bg-[#DE8626] text-white shadow-sm shadow-[#DE8626]/30'
-                          : 'text-[#667085] dark:text-[#94A3B8] hover:text-[#1E2930] dark:hover:text-[#F3F4F6]'
-                      }`}
-                    >
-                      {type === 'DINE_IN' ? 'Dine-In' : type === 'TAKEAWAY' ? 'Takeaway' : type === 'DELIVERY' ? 'Delivery' : 'Counter'}
-                    </button>
-                  ))}
-                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* Service Type Switcher */}
+                  <div className="flex items-center gap-1.5 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-1">
+                    {(['COUNTER', 'DINE_IN', 'TAKEAWAY', 'DELIVERY'] as const).map((type) => (
+                      <button
+                        key={type}
+                        onClick={() => {
+                          setOrderType(type);
+                          if (type === 'DINE_IN' && !selectedTable) {
+                            setTableModalOpen(true);
+                          }
+                        }}
+                        className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-all ${
+                          orderType === type
+                            ? 'bg-[#DE8626] text-white shadow-sm shadow-[#DE8626]/30'
+                            : 'text-[#667085] dark:text-[#94A3B8] hover:text-[#1E2930] dark:hover:text-[#F3F4F6]'
+                        }`}
+                      >
+                        {type === 'DINE_IN' ? 'Dine-In' : type === 'TAKEAWAY' ? 'Takeaway' : type === 'DELIVERY' ? 'Delivery' : 'Counter'}
+                      </button>
+                    ))}
+                  </div>
 
-                {/* Table Picker Button (If Dine-In) */}
-                {orderType === 'DINE_IN' && (
+                  {/* Table Picker Button (If Dine-In) */}
+                  {orderType === 'DINE_IN' && (
+                    <button
+                      onClick={() => setTableModalOpen(true)}
+                      className="flex items-center gap-2 rounded-xl border border-[#DE8626] bg-amber-500/10 px-3 py-1.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-colors"
+                    >
+                      <TableIcon className="h-4 w-4" />
+                      <span>{selectedTable ? `Table #${selectedTable.tableNumber}` : 'Assign Table'}</span>
+                    </button>
+                  )}
+
+                  {/* Store Operating Status Indicator Pill */}
                   <button
-                    onClick={() => setTableModalOpen(true)}
-                    className="flex items-center gap-2 rounded-xl border border-[#DE8626] bg-amber-500/10 px-3 py-1.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-colors"
+                    onClick={() => setOperatingModalOpen(true)}
+                    className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-bold transition-all ${
+                      operatingStatus?.status === 'OPEN' || (!operatingStatus && restaurantConfig?.isActive !== false)
+                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/20'
+                        : operatingStatus?.status === 'PAUSED'
+                        ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400 hover:bg-amber-500/20'
+                        : 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400 hover:bg-red-500/20'
+                    }`}
+                    title="Manage Store Operating Status (Open / Pause / Close)"
                   >
-                    <TableIcon className="h-4 w-4" />
-                    <span>{selectedTable ? `Table #${selectedTable.tableNumber}` : 'Assign Table'}</span>
+                    <span
+                      className={`h-2 w-2 rounded-full ${
+                        operatingStatus?.status === 'OPEN' || (!operatingStatus && restaurantConfig?.isActive !== false)
+                          ? 'bg-emerald-500 animate-pulse'
+                          : operatingStatus?.status === 'PAUSED'
+                          ? 'bg-amber-500 animate-pulse'
+                          : 'bg-red-500'
+                      }`}
+                    />
+                    <Store className="h-3.5 w-3.5" />
+                    <span>
+                      {operatingStatus?.status === 'PAUSED'
+                        ? 'Store Paused'
+                        : operatingStatus?.status === 'CLOSED'
+                        ? 'Store Closed'
+                        : operatingStatus?.status === 'WALLET_EXHAUSTED'
+                        ? 'Wallet Empty'
+                        : 'Store Open'}
+                    </span>
                   </button>
-                )}
+                </div>
 
                 {/* Veg / Non-Veg Toggle Filter */}
                 <div className="flex items-center gap-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-1 text-xs">
@@ -658,6 +952,49 @@ export default function PosPage() {
                   </button>
                 </div>
               )}
+
+              {/* Running Table Order Banner (If Table has an Active Tab) */}
+              {activeTableOrder && (
+                <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-2.5 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <Utensils className="h-4 w-4 text-[#DE8626] shrink-0" />
+                      <div>
+                        <span className="text-xs font-bold text-[#DE8626] block">
+                          Table #{selectedTable?.tableNumber} • Running Tab #{activeTableOrder.orderNumber || activeTableOrder.id}
+                        </span>
+                        <span className="text-[10px] text-[#667085] dark:text-[#94A3B8]">
+                          {activeTableOrder.items?.length || 0} active item{(activeTableOrder.items?.length || 0) !== 1 ? 's' : ''} in kitchen
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowRunningTableDetails(!showRunningTableDetails)}
+                      className="flex items-center gap-1 text-[11px] font-bold text-[#DE8626] hover:underline"
+                    >
+                      <span>{showRunningTableDetails ? 'Hide' : 'View'}</span>
+                      {showRunningTableDetails ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                    </button>
+                  </div>
+
+                  {/* Running Table Items Accordion */}
+                  {showRunningTableDetails && (
+                    <div className="mt-1 pt-1.5 border-t border-amber-500/20 max-h-36 overflow-y-auto space-y-1 text-xs">
+                      {(activeTableOrder.items || []).map((it: any, idx: number) => (
+                        <div key={idx} className="flex justify-between items-center text-[11px] text-[#1E2930] dark:text-[#F3F4F6]">
+                          <span>{it.quantity}x {it.itemName}</span>
+                          <span className="font-semibold">₹{(it.unitPrice || it.amount || 0) * (it.quantity || 1)}</span>
+                        </div>
+                      ))}
+                      <div className="flex justify-between font-bold pt-1 border-t border-amber-500/20 text-[#DE8626]">
+                        <span>Previous Tab Total:</span>
+                        <span>₹{existingTableTotal}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Cart Items List */}
@@ -712,17 +1049,29 @@ export default function PosPage() {
             {/* Bill Summary & Sticky Checkout Buttons */}
             <div className="border-t border-[#E7E1DA] dark:border-[#2B3540] p-4 bg-[#FAF7F2] dark:bg-[#151A20] space-y-3">
               <div className="space-y-1.5 text-xs">
-                <div className="flex justify-between text-[#667085] dark:text-[#94A3B8]">
-                  <span>Subtotal</span>
-                  <span className="font-semibold text-[#1E2930] dark:text-[#F3F4F6]">₹{subtotal}</span>
-                </div>
-                <div className="flex justify-between text-[#667085] dark:text-[#94A3B8]">
-                  <span>Taxes (CGST + SGST)</span>
-                  <span className="font-semibold text-[#1E2930] dark:text-[#F3F4F6]">₹{totalTax}</span>
-                </div>
+                {activeTableOrder && (
+                  <div className="flex justify-between text-amber-600 dark:text-amber-400 font-semibold">
+                    <span>Running Tab Total</span>
+                    <span>₹{existingTableTotal}</span>
+                  </div>
+                )}
+                {cart.length > 0 && (
+                  <>
+                    <div className="flex justify-between text-[#667085] dark:text-[#94A3B8]">
+                      <span>{activeTableOrder ? 'New Items Subtotal' : 'Subtotal'}</span>
+                      <span className="font-semibold text-[#1E2930] dark:text-[#F3F4F6]">₹{subtotal}</span>
+                    </div>
+                    {hasGstNumber && (
+                      <div className="flex justify-between text-[#667085] dark:text-[#94A3B8]">
+                        <span>Taxes (CGST + SGST)</span>
+                        <span className="font-semibold text-[#1E2930] dark:text-[#F3F4F6]">₹{totalTax}</span>
+                      </div>
+                    )}
+                  </>
+                )}
                 <div className="flex justify-between text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6] pt-1.5 border-t border-[#E7E1DA] dark:border-[#2B3540]">
-                  <span>Grand Total</span>
-                  <span className="text-[#DE8626]">₹{grandTotal}</span>
+                  <span>Total Payable</span>
+                  <span className="text-[#DE8626]">₹{payableGrandTotal}</span>
                 </div>
               </div>
 
@@ -740,12 +1089,16 @@ export default function PosPage() {
 
                 {/* Pay & Settle Button */}
                 <button
-                  disabled={cart.length === 0 || isPlacingOrder}
+                  disabled={(cart.length === 0 && !activeTableOrder) || isPlacingOrder}
                   onClick={() => setSettleModalOpen(true)}
                   className="flex items-center justify-center gap-1.5 rounded-xl bg-[#DE8626] py-2.5 text-xs font-bold text-white shadow-md shadow-[#DE8626]/20 hover:bg-[#C4721C] disabled:opacity-40 disabled:cursor-not-allowed transition-all"
                 >
                   <IndianRupee className="h-4 w-4" />
-                  <span>Settle ₹{grandTotal}</span>
+                  <span>
+                    {cart.length === 0 && activeTableOrder
+                      ? `Settle Tab ₹${payableGrandTotal}`
+                      : `Settle ₹${payableGrandTotal}`}
+                  </span>
                 </button>
               </div>
             </div>
@@ -812,7 +1165,12 @@ export default function PosPage() {
               {/* Amount Display */}
               <div className="rounded-2xl bg-amber-500/10 p-4 text-center mb-5">
                 <span className="text-xs font-semibold text-[#DE8626] uppercase">Payable Bill Amount</span>
-                <h2 className="text-3xl font-extrabold text-[#DE8626]">₹{grandTotal}</h2>
+                <h2 className="text-3xl font-extrabold text-[#DE8626]">₹{payableGrandTotal}</h2>
+                {activeTableOrder && (
+                  <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] mt-1">
+                    Consolidated: Tab ₹{existingTableTotal} + Current ₹{grandTotal}
+                  </p>
+                )}
               </div>
 
               {/* Payment Mode Options */}
@@ -840,26 +1198,65 @@ export default function PosPage() {
               {/* Cash Tendered & Change Return (If Cash) */}
               {paymentMode === 'CASH' && (
                 <div className="space-y-3 mb-5 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] p-3.5 bg-[#FAF7F2] dark:bg-[#151A20]">
-                  <div>
-                    <label className="block text-xs font-semibold text-[#667085] mb-1">Cash Tendered by Customer</label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-xs">₹</span>
-                      <input
-                        type="number"
-                        value={tenderedAmount}
-                        onChange={(e) => setTenderedAmount(e.target.value)}
-                        placeholder={String(grandTotal)}
-                        className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] pl-8 pr-3 py-2 text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6] outline-none"
-                      />
-                    </div>
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-[#667085] dark:text-[#94A3B8]">
+                      Cash Tendered by Customer
+                    </label>
+                    {numericTendered > 0 && (
+                      <span
+                        className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
+                          numericTendered >= payableGrandTotal
+                            ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                            : 'bg-red-500/10 text-red-600 dark:text-red-400'
+                        }`}
+                      >
+                        {numericTendered >= payableGrandTotal
+                          ? `Change: ₹${changeToReturn.toFixed(2)}`
+                          : `Short: ₹${(payableGrandTotal - numericTendered).toFixed(2)}`}
+                      </span>
+                    )}
                   </div>
 
-                  {changeToReturn > 0 && (
-                    <div className="flex justify-between items-center text-xs font-bold text-emerald-600 dark:text-emerald-400">
-                      <span>Change to Return:</span>
-                      <span className="text-sm">₹{changeToReturn}</span>
-                    </div>
-                  )}
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-xs text-[#DE8626]">₹</span>
+                    <input
+                      type="number"
+                      value={tenderedAmount}
+                      onChange={(e) => setTenderedAmount(e.target.value)}
+                      placeholder={String(payableGrandTotal)}
+                      className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] pl-8 pr-3 py-2 text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
+                    />
+                  </div>
+
+                  {/* Quick Cash Preset Chips */}
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setTenderedAmount(payableGrandTotal.toFixed(0))}
+                      className="rounded-lg border border-[#DE8626] bg-amber-500/10 px-2.5 py-1 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20"
+                    >
+                      Exact (₹{payableGrandTotal})
+                    </button>
+                    {[
+                      Math.ceil((payableGrandTotal + 1) / 50) * 50,
+                      Math.ceil((payableGrandTotal + 1) / 100) * 100,
+                      500,
+                      1000,
+                      2000,
+                    ]
+                      .filter((val, idx, arr) => val > payableGrandTotal && arr.indexOf(val) === idx)
+                      .slice(0, 3)
+                      .map((val) => (
+                        <button
+                          key={`cash-chip-${val}`}
+                          type="button"
+                          onClick={() => setTenderedAmount(val.toString())}
+                          className="rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-2.5 py-1 text-xs font-semibold text-[#1E2930] dark:text-[#F3F4F6] hover:border-[#DE8626]"
+                        >
+                          ₹{val}
+                        </button>
+                      ))}
+                  </div>
                 </div>
               )}
 
@@ -869,7 +1266,7 @@ export default function PosPage() {
                 onClick={() => executeOrder(false)}
                 className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#DE8626] py-3.5 text-sm font-bold text-white shadow-md shadow-[#DE8626]/20 hover:bg-[#C4721C] disabled:opacity-50 transition-all"
               >
-                <span>{isPlacingOrder ? 'Processing Bill...' : `Confirm & Collect ₹${grandTotal}`}</span>
+                <span>{isPlacingOrder ? 'Processing Bill...' : `Confirm & Collect ₹${payableGrandTotal}`}</span>
                 <ArrowRight className="h-4 w-4" />
               </button>
             </div>
@@ -953,6 +1350,16 @@ export default function PosPage() {
             </div>
           </div>
         )}
+
+        {/* 4. Store Operating Status Controls Modal */}
+        <StoreOperatingStatusModal
+          isOpen={operatingModalOpen}
+          onClose={() => setOperatingModalOpen(false)}
+          restaurantId={currentRestId}
+          restaurantName={restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant'}
+          status={operatingStatus}
+          onStatusUpdated={(updated) => setOperatingStatus(updated)}
+        />
       </AppShell>
     </AuthGuard>
   );

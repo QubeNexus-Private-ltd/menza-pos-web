@@ -5,7 +5,12 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const monorepoSrcDir = path.resolve(__dirname, '../../src');
+const possibleSrcDirs = [
+  path.resolve(__dirname, '../../Menza/src'),
+  path.resolve('F:/Menza/src'),
+  path.resolve(__dirname, '../../src'),
+];
+const monorepoSrcDir = possibleSrcDirs.find((d) => fs.existsSync(d)) || possibleSrcDirs[0];
 const localSharedDir = path.resolve(__dirname, '../shared');
 
 function copyFolderSync(src, dest) {
@@ -38,7 +43,12 @@ function copyFolderSync(src, dest) {
   }
 }
 
-const monorepoPaymentsDir = path.resolve(__dirname, '../../payments');
+const possiblePaymentsDirs = [
+  path.resolve(__dirname, '../../Menza/payments'),
+  path.resolve('F:/Menza/payments'),
+  path.resolve(__dirname, '../../payments'),
+];
+const monorepoPaymentsDir = possiblePaymentsDirs.find((d) => fs.existsSync(d)) || possiblePaymentsDirs[0];
 const localPaymentsDir = path.resolve(__dirname, '../payments');
 
 if (fs.existsSync(monorepoSrcDir)) {

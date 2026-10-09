@@ -1,7 +1,28 @@
-const DEFAULT_API_BASE_URL =
-  'https://restadmin20260810182511-b7gaaqbfesdxa3cu.centralindia-01.azurewebsites.net/api';
-const DEFAULT_CUSTOMER_ORDERING_BASE_URL =
-  'https://lemon-mud-097d55a00.7.azurestaticapps.net';
+const resolveApiBaseUrl = (): string => {
+  const url =
+    process.env.NEXT_PUBLIC_API_BASE_URL ||
+    process.env.EXPO_PUBLIC_API_BASE_URL ||
+    process.env.API_BASE_URL ||
+    process.env.NEXT_PUBLIC_API_URL;
+  if (!url) {
+    const errorMsg =
+      '[Configuration Error] Missing NEXT_PUBLIC_API_BASE_URL. Please define it in your .env.local file or Vercel Environment Variables.';
+    if (typeof window !== 'undefined') {
+      console.error(errorMsg);
+    }
+    return '';
+  }
+  return url.replace(/\/+$/, '');
+};
+
+const resolveCustomerOrderingUrl = (): string => {
+  return (
+    process.env.NEXT_PUBLIC_CUSTOMER_ORDERING_BASE_URL ||
+    process.env.EXPO_PUBLIC_CUSTOMER_ORDERING_BASE_URL ||
+    process.env.CUSTOMER_ORDERING_BASE_URL ||
+    ''
+  ).replace(/\/+$/, '');
+};
 
 export const APP_CONSTANTS = {
   APP_NAME:
@@ -11,17 +32,9 @@ export const APP_CONSTANTS = {
     'Menza',
   APP_TAGLINE: 'Smart Multi-Tenant Restaurant Suite',
   // Live Azure Web API Endpoint (Configurable via .env, Vercel & EAS)
-  API_BASE_URL:
-    process.env.NEXT_PUBLIC_API_BASE_URL ||
-    process.env.EXPO_PUBLIC_API_BASE_URL ||
-    process.env.API_BASE_URL ||
-    DEFAULT_API_BASE_URL,
+  API_BASE_URL: resolveApiBaseUrl(),
   // Configurable Customer QR Ordering Web App URL
-  CUSTOMER_ORDERING_BASE_URL:
-    process.env.NEXT_PUBLIC_CUSTOMER_ORDERING_BASE_URL ||
-    process.env.EXPO_PUBLIC_CUSTOMER_ORDERING_BASE_URL ||
-    process.env.CUSTOMER_ORDERING_BASE_URL ||
-    DEFAULT_CUSTOMER_ORDERING_BASE_URL,
+  CUSTOMER_ORDERING_BASE_URL: resolveCustomerOrderingUrl(),
   // Cashfree Environment (SANDBOX or PRODUCTION)
   CASHFREE_ENV:
     process.env.NEXT_PUBLIC_CASHFREE_ENV ||

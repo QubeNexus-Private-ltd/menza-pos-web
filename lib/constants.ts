@@ -1,8 +1,13 @@
+const resolvedApiUrl =
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  '';
+
 export const APP_CONSTANTS = {
-  APP_NAME: 'Menza Web POS',
+  APP_NAME: process.env.NEXT_PUBLIC_APP_NAME || 'Menza Web POS',
   VERSION: '1.0.0',
-  DEFAULT_API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api',
-  API_BASE_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api',
+  DEFAULT_API_URL: resolvedApiUrl,
+  API_BASE_URL: resolvedApiUrl,
   STORAGE_KEYS: {
     AUTH_TOKEN: 'menza_auth_token',
     REFRESH_TOKEN: 'menza_refresh_token',

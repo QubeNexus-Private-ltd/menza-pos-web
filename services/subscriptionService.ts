@@ -322,4 +322,92 @@ export class SubscriptionService {
       return [];
     }
   }
+
+  static async initiateCashFreePayment(
+    restaurantId: number,
+    subscriptionConfigurationId: number,
+    amount: number,
+    mobileNumber?: string
+  ): Promise<{
+    success: boolean;
+    orderId?: string;
+    paymentSessionId?: string;
+    paymentLink?: string;
+    message?: string;
+  }> {
+    try {
+      const payload = {
+        type: 1, // PaymentType.Subscription = 1
+        Type: 1,
+        restaurantId,
+        RestaurantId: restaurantId,
+        subscriptionConfigurationId,
+        SubscriptionConfigurationId: subscriptionConfigurationId,
+        amount,
+        Amount: amount,
+        ownerPhone: mobileNumber || '9999999999',
+        OwnerPhone: mobileNumber || '9999999999',
+        paymentPurpose: `Subscription Plan #${subscriptionConfigurationId} for Restaurant #${restaurantId}`,
+        orderMeta: {
+          returnUrl: typeof window !== 'undefined' ? `${window.location.origin}/settings/billing` : 'https://menza-web.vercel.app/settings/billing',
+          notifyUrl: 'https://api.menza.com/api/CashFreepayment/webhook/cashfree',
+        },
+      };
+
+      const response = await apiClient.post('/CashFreepayment/create-order', payload);
+      const data = response.data || {};
+      const orderId = data.orderId || data.OrderId || data.order_id || data.cfOrderId || `ORD_SUB_${Date.now()}`;
+      const paymentSessionId = data.paymentSessionId || data.PaymentSessionId || data.payment_session_id || '';
+      const paymentLink = data.paymentLink || data.PaymentLink || data.payment_link || data.instrumentResponseUrl || '';
+
+      return {
+        success: true,
+        orderId,
+        paymentSessionId,
+        paymentLink,
+        message: data.message || 'Payment order created via CashFree',
+      };
+    } catch (error: any) {
+      const serverMsg = error.response?.data?.message || error.response?.data;
+      const message = typeof serverMsg === 'string' ? serverMsg : (error.message || 'Failed to initiate CashFree payment.');
+      return { success: false, message };
+    }
+  }
+
+  static async verifyCashFreePayment(orderId: string): Promise<{ success: boolean; isPaid: boolean; message?: string }> {
+    try {
+      const response = await apiClient.post('/CashFreepayment/verify', { cfOrderId: orderId });
+      const paymentStatus = (response.data?.paymentStatus || response.data?.status || '').toUpperCase();
+      const isPaid = paymentStatus === 'SUCCESS' || response.data?.success === true || response.data?.gatewayOrderStatus === 'PAID';
+      return {
+        success: true,
+        isPaid,
+        message: response.data?.message || (isPaid ? 'Payment verified successfully.' : 'Payment pending or incomplete.'),
+      };
+    } catch (error: any) {
+      return { success: false, isPaid: false, message: error.message || 'Payment verification failed.' };
+    }
+  }
+
+  static async activateSubscription(
+    restaurantId: number,
+    subscriptionConfigurationId: number,
+    orderId?: string
+  ): Promise<{ success: boolean; message?: string }> {
+    try {
+      const response = await apiClient.post('/Subscription/Activate', {
+        restaurantId,
+        subscriptionConfigurationId,
+        orderId: orderId || `AUTO_${Date.now()}`,
+        status: 'ACTIVE',
+      });
+      return {
+        success: response.status === 200 || response.data?.success === true,
+        message: response.data?.message || 'Subscription activated successfully.',
+      };
+    } catch {
+      // Fallback to assignSubscription
+      return await this.assignSubscription(restaurantId, subscriptionConfigurationId, 30, 0);
+    }
+  }
 }

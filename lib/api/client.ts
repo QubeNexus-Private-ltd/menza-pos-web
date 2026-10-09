@@ -1,10 +1,33 @@
 import axios, { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
 import { APP_CONSTANTS } from '@/lib/constants';
+import { logger } from '@/lib/logger';
 
-const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+/**
+ * Resolves API Base URL strictly from environment variables.
+ * Emits an explicit, informative error if not configured,
+ * preventing silent fallback to local ports or exposed hardcoded endpoints.
+ */
+function getApiBaseUrl(): string {
+  const envUrl = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL;
+  if (!envUrl) {
+    const errorMsg =
+      '[Configuration Error] Missing required environment variable: NEXT_PUBLIC_API_BASE_URL. ' +
+      'Please configure NEXT_PUBLIC_API_BASE_URL in your .env.local file or in the Vercel Project Settings > Environment Variables.';
+    if (typeof window !== 'undefined') {
+      console.error(errorMsg);
+      logger.error('CRITICAL_ENV_MISSING', new Error(errorMsg), { variable: 'NEXT_PUBLIC_API_BASE_URL' });
+    }
+    // Return empty string during static build analysis; throw at runtime if invoked
+    if (typeof window !== 'undefined') {
+      throw new Error(errorMsg);
+    }
+    return '';
+  }
+  return envUrl.replace(/\/+$/, '');
+}
 
 export const apiClient: AxiosInstance = axios.create({
-  baseURL,
+  baseURL: getApiBaseUrl(),
   headers: {
     'Content-Type': 'application/json',
   },
@@ -47,20 +70,28 @@ class ApiCacheManager {
 
 export const apiCacheManager = new ApiCacheManager();
 
-// Request Interceptor: Inject JWT Token & Active Restaurant ID
+// Request Interceptor: Inject JWT Token & Active Restaurant ID + Production/Testing Logging
 apiClient.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
+    const startTime = Date.now();
+    (config as any)._startTime = startTime;
+    (config as any)._requestId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+
     if (typeof window !== 'undefined') {
       try {
-        // Try getting token from direct storage key
-        let token = localStorage.getItem(APP_CONSTANTS.STORAGE_KEYS.AUTH_TOKEN);
+        // 1. Resolve token from global context, session storage, or fallback keys
+        let token: string | null =
+          (globalThis as any).__MENZA_AUTH_TOKEN__ ||
+          localStorage.getItem('@menza_session_token') ||
+          localStorage.getItem(APP_CONSTANTS.STORAGE_KEYS.AUTH_TOKEN);
 
-        // Fallback: check zustand persisted storage
         if (!token) {
           const authStorageStr = localStorage.getItem('menza_auth_store');
           if (authStorageStr) {
-            const parsed = JSON.parse(authStorageStr);
-            token = parsed?.state?.token;
+            try {
+              const parsed = JSON.parse(authStorageStr);
+              token = parsed?.state?.token;
+            } catch {}
           }
         }
 
@@ -68,48 +99,110 @@ apiClient.interceptors.request.use(
           config.headers.Authorization = `Bearer ${token.trim()}`;
         }
 
-        // Try getting active restaurant ID
-        let restId = localStorage.getItem(APP_CONSTANTS.STORAGE_KEYS.ACTIVE_RESTAURANT);
+        // 2. Resolve active restaurant ID from global context, session storage, or fallback keys
+        let restId: string | null =
+          (globalThis as any).__MENZA_ACTIVE_REST_ID__?.toString() ||
+          localStorage.getItem(APP_CONSTANTS.STORAGE_KEYS.ACTIVE_RESTAURANT);
+
+        if (!restId) {
+          const rawSessionRest = localStorage.getItem('@menza_session_active_restaurant');
+          if (rawSessionRest) {
+            try {
+              const parsed = JSON.parse(rawSessionRest);
+              restId = parsed?.restaurantId?.toString();
+            } catch {}
+          }
+        }
+
         if (!restId) {
           const authStorageStr = localStorage.getItem('menza_auth_store');
           if (authStorageStr) {
-            const parsed = JSON.parse(authStorageStr);
-            restId = parsed?.state?.activeRestaurant?.restaurantId?.toString();
+            try {
+              const parsed = JSON.parse(authStorageStr);
+              restId = parsed?.state?.activeRestaurant?.restaurantId?.toString();
+            } catch {}
           }
         }
 
         if (restId && config.headers && !config.headers['X-Restaurant-Id']) {
           config.headers['X-Restaurant-Id'] = restId;
+          config.headers['X-Active-Restaurant-Id'] = restId;
         }
       } catch {
-        // Ignore localStorage access errors during SSR or private browsing
+        // Storage access safe
       }
     }
+
+    logger.api('REQUEST', config.method || 'GET', config.url || '', {
+      hasParams: Boolean(config.params),
+      hasBody: Boolean(config.data),
+      requestId: (config as any)._requestId,
+    });
+
     return config;
   },
-  (error) => Promise.reject(error)
+  (error) => {
+    logger.api('ERROR', 'REQUEST_INIT', error?.config?.url || 'unknown', { error: error?.message });
+    return Promise.reject(error);
+  }
 );
 
-// Response Interceptor: Handle 401 Unauthorized & 402 Subscription Expired
+// Response Interceptor: Handle 401 Unauthorized, 402 Subscription Expired + Observability
 apiClient.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    const config = response.config as any;
+    const durationMs = config?._startTime ? Date.now() - config._startTime : 0;
+    const method = (config?.method || 'GET').toUpperCase();
+    const url = config?.url || '';
+
+    if (durationMs > 4000) {
+      logger.api('SLOW', method, url, {
+        status: response.status,
+        durationMs,
+        requestId: config?._requestId,
+      });
+    } else {
+      logger.api('RESPONSE', method, url, {
+        status: response.status,
+        durationMs,
+        requestId: config?._requestId,
+      });
+    }
+
+    return response;
+  },
   (error) => {
+    const config = error.config as any;
+    const durationMs = config?._startTime ? Date.now() - config._startTime : 0;
+    const method = (config?.method || 'GET').toUpperCase();
+    const url = config?.url || '';
+    const status = error.response?.status;
+
+    logger.api('ERROR', method, url, {
+      status,
+      durationMs,
+      message: error?.message,
+      responseData: error.response?.data,
+      requestId: config?._requestId,
+    });
+
     if (typeof window !== 'undefined') {
-      if (error.response?.status === 401) {
-        const isAuthEndpoint = error.config?.url?.includes('/Auth/');
+      if (status === 401) {
+        const isAuthEndpoint = url.includes('/Auth/');
         if (!isAuthEndpoint && !window.location.pathname.includes('/login')) {
-          console.warn('[ApiClient] 401 Unauthorized encountered. Session may be expired.');
+          logger.warn(`[ApiClient] 401 Unauthorized encountered on ${url}. Session may be expired.`);
         }
       } else if (
-        error.response?.status === 402 ||
+        status === 402 ||
         error.response?.data?.errorCode === 'SUBSCRIPTION_EXPIRED' ||
-        (typeof error.response?.data?.message === 'string' && error.response.data.message.includes('SUBSCRIPTION_EXPIRED'))
+        (typeof error.response?.data?.message === 'string' &&
+          error.response.data.message.includes('SUBSCRIPTION_EXPIRED'))
       ) {
         try {
           const { useSubscriptionStore } = require('@/stores/useSubscriptionStore');
           useSubscriptionStore.getState().setExpired(true);
         } catch {
-          // Ignore dynamic require failure
+          // Dynamic require fallback
         }
       }
     }

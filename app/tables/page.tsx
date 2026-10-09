@@ -28,6 +28,7 @@ import { TableRemoteDataSource } from '@shared/data/datasources/TableRemoteDataS
 import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
 import { TableMaster } from '@shared/domain/models/Table';
 import { OrderMaster } from '@shared/domain/models/Order';
+import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
 
 const tableDataSource = new TableRemoteDataSource();
 const orderDataSource = new OrderRemoteDataSource();
@@ -391,6 +392,10 @@ export default function TablesPage() {
 
                   <button
                     onClick={() => {
+                      if (!useSubscriptionStore.getState().canTakeOrders()) {
+                        useSubscriptionStore.getState().openRenewalModal();
+                        return;
+                      }
                       setActionTable(null);
                       router.push('/pos');
                     }}

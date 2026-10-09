@@ -21,6 +21,7 @@ interface SubscriptionStoreState {
   isInGracePeriod: boolean;
   graceDaysRemaining: number;
   isExpired: boolean;
+  isNoSubscription: boolean;
 
   // UI Flow State
   isRenewalModalOpen: boolean;
@@ -38,7 +39,21 @@ interface SubscriptionStoreState {
     durationDays?: number,
     price?: number
   ) => Promise<{ success: boolean; message?: string }>;
+  initiateCashFreePayment: (
+    restaurantId: number,
+    planId: number,
+    amount: number,
+    mobileNumber?: string
+  ) => Promise<{
+    success: boolean;
+    orderId?: string;
+    paymentSessionId?: string;
+    paymentLink?: string;
+    message?: string;
+  }>;
+  verifyPayment: (orderId: string) => Promise<{ success: boolean; isPaid: boolean; message?: string }>;
   canTakeOrders: () => boolean;
+  hasEntitlement: (configKey: string) => boolean;
   reset: () => void;
 }
 
@@ -55,6 +70,7 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
   isInGracePeriod: false,
   graceDaysRemaining: 0,
   isExpired: false,
+  isNoSubscription: true,
 
   isRenewalModalOpen: false,
   selectedPlan: null,
@@ -72,6 +88,7 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
         isInGracePeriod: false,
         graceDaysRemaining: 0,
         isExpired: false,
+        isNoSubscription: true,
         hasLoaded: false,
       });
       return null;
@@ -81,6 +98,7 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
       set({ isLoading: true, error: null });
       const sub = await SubscriptionService.getRestaurantSubscription(targetRestId);
 
+      // If restaurant has no subscription record at all
       if (!sub) {
         set({
           subscription: null,
@@ -88,7 +106,8 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
           daysRemaining: 0,
           isInGracePeriod: false,
           graceDaysRemaining: 0,
-          isExpired: false,
+          isExpired: true,
+          isNoSubscription: true,
           hasLoaded: true,
           isLoading: false,
         });
@@ -100,9 +119,14 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
       const rawDaysRem = Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
       const daysRem = sub.daysRemaining !== undefined ? sub.daysRemaining : rawDaysRem;
 
-      const inGrace = Boolean(sub.isInGracePeriod || sub.lifecycleState === 'GRACE_PERIOD' || sub.status === 'Grace Period');
-      const graceRem = sub.graceDaysRemaining !== undefined ? sub.graceDaysRemaining : (inGrace ? Math.max(0, 3 + daysRem) : 0);
-      const expired = Boolean(sub.isExpired || sub.lifecycleState === 'EXPIRED' || sub.status === 'Expired' || (!inGrace && daysRem <= 0));
+      const inGrace = Boolean(
+        sub.isInGracePeriod || sub.lifecycleState === 'GRACE_PERIOD' || sub.status === 'Grace Period'
+      );
+      const graceRem =
+        sub.graceDaysRemaining !== undefined ? sub.graceDaysRemaining : inGrace ? Math.max(0, 3 + daysRem) : 0;
+      const expired = Boolean(
+        sub.isExpired || sub.lifecycleState === 'EXPIRED' || sub.status === 'Expired' || (!inGrace && daysRem <= 0)
+      );
 
       let lifecycle: SubscriptionLifecycleState = sub.lifecycleState || 'ACTIVE';
       if (expired) lifecycle = 'EXPIRED';
@@ -126,6 +150,7 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
         isInGracePeriod: inGrace,
         graceDaysRemaining: graceRem,
         isExpired: expired,
+        isNoSubscription: false,
         hasLoaded: true,
         isLoading: false,
       });
@@ -145,9 +170,7 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
     try {
       set({ isPlansLoading: true });
       const rawPlans = await SubscriptionService.getPlans();
-      const activePlans = Array.isArray(rawPlans)
-        ? rawPlans.filter((p) => p.isActive)
-        : [];
+      const activePlans = Array.isArray(rawPlans) ? rawPlans.filter((p) => p.isActive) : [];
       set({ plans: activePlans, isPlansLoading: false });
       return activePlans;
     } catch {
@@ -173,7 +196,7 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
   setExpired: (expired: boolean) => {
     set((state) => ({
       isExpired: expired,
-      lifecycleState: expired ? 'EXPIRED' : (state.lifecycleState === 'EXPIRED' ? 'ACTIVE' : state.lifecycleState),
+      lifecycleState: expired ? 'EXPIRED' : state.lifecycleState === 'EXPIRED' ? 'ACTIVE' : state.lifecycleState,
       isRenewalModalOpen: expired ? true : state.isRenewalModalOpen,
     }));
   },
@@ -181,12 +204,7 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
   assignPlan: async (restaurantId: number, planId: number, durationDays = 30, price = 0) => {
     try {
       set({ isLoading: true, error: null });
-      const res = await SubscriptionService.assignSubscription(
-        restaurantId,
-        planId,
-        durationDays,
-        price
-      );
+      const res = await SubscriptionService.assignSubscription(restaurantId, planId, durationDays, price);
 
       if (res.success) {
         await get().fetchSubscriptionStatus(restaurantId);
@@ -204,9 +222,31 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
     }
   },
 
+  initiateCashFreePayment: async (restaurantId: number, planId: number, amount: number, mobileNumber?: string) => {
+    return await SubscriptionService.initiateCashFreePayment(restaurantId, planId, amount, mobileNumber);
+  },
+
+  verifyPayment: async (orderId: string) => {
+    return await SubscriptionService.verifyCashFreePayment(orderId);
+  },
+
   canTakeOrders: () => {
-    const { lifecycleState, isExpired } = get();
-    return !isExpired && lifecycleState !== 'EXPIRED';
+    const { subscription, lifecycleState, isExpired } = get();
+    // If no subscription at all, or expired, orders must be strictly blocked
+    if (!subscription || lifecycleState === 'NONE' || lifecycleState === 'EXPIRED' || isExpired) {
+      return false;
+    }
+    return true;
+  },
+
+  hasEntitlement: (configKey: string): boolean => {
+    const { subscription, lifecycleState, isExpired } = get();
+    if (!subscription || lifecycleState === 'NONE' || lifecycleState === 'EXPIRED' || isExpired) {
+      return false;
+    }
+    const entitlements = subscription.entitlements || [];
+    const item = entitlements.find((e) => (e.configKey || '').toLowerCase() === configKey.toLowerCase());
+    return item ? Boolean(item.isAllowed) : true;
   },
 
   reset: () => {
@@ -222,6 +262,7 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
       isInGracePeriod: false,
       graceDaysRemaining: 0,
       isExpired: false,
+      isNoSubscription: true,
       isRenewalModalOpen: false,
       selectedPlan: null,
     });

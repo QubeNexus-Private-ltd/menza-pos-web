@@ -21,7 +21,7 @@ import {
 import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { SubscriptionPlan } from '@/types/subscription';
-import { startCashfreePayment, setPaymentCallbacks, removePaymentCallbacks } from '@/payments/cashfreeService.web';
+import { PaymentGatewayService } from '@/payments/paymentGatewayService.web';
 
 export const SubscriptionBlockerModal: React.FC = () => {
   const router = useRouter();
@@ -39,6 +39,7 @@ export const SubscriptionBlockerModal: React.FC = () => {
     closeRenewalModal,
     assignPlan,
     initiateCashFreePayment,
+    verifyPayment,
     hasLoaded,
   } = useSubscriptionStore();
 
@@ -107,7 +108,7 @@ export const SubscriptionBlockerModal: React.FC = () => {
         }
       }
 
-      // 1. Initiate CashFree Payment Order
+      // 1. Initiate Payment Order (Backend checks header / config for Razorpay vs Cashfree)
       const initRes = await initiateCashFreePayment(
         currentRestId,
         plan.id,
@@ -115,7 +116,7 @@ export const SubscriptionBlockerModal: React.FC = () => {
         user?.mobile || '9999999999'
       );
 
-      if (!initRes.success || (!initRes.paymentSessionId && !initRes.paymentLink)) {
+      if (!initRes.success || (!initRes.paymentSessionId && !initRes.paymentLink && !initRes.orderId)) {
         // Fallback to direct activation if payment gateway is bypassed in sandbox
         const fallbackRes = await assignPlan(currentRestId, plan.id, duration, price);
         if (fallbackRes.success) {
@@ -139,38 +140,75 @@ export const SubscriptionBlockerModal: React.FC = () => {
         return;
       }
 
-      // 2. Register CashFree Callback Handlers
-      setPaymentCallbacks(
-        async (orderId: any) => {
+      // 2. Open Unified Payment Gateway Checkout (Razorpay if isRazorpay=true, else Cashfree)
+      const paymentResult = await PaymentGatewayService.startPayment({
+        orderId: initRes.orderId || `SUB_${Date.now()}`,
+        amount: initRes.amount || price,
+        currency: initRes.currency || 'INR',
+        gateway: initRes.gateway,
+        keyId: initRes.keyId,
+        paymentSessionId: initRes.paymentSessionId,
+        paymentLink: initRes.paymentLink,
+        customerName: user?.name || activeRestaurant?.restaurantName || 'Restaurant Owner',
+        customerPhone: user?.mobile || '9999999999',
+        customerEmail: (user as any)?.email || undefined,
+        orderNotes: `Subscription Plan: ${plan.subscriptionName || plan.planName} (Outlet #${currentRestId})`,
+      });
+
+      if (!paymentResult.success) {
+        setStatusMessage({
+          type: 'error',
+          text: paymentResult.error || 'Payment checkout was cancelled or failed.',
+        });
+        setSubmitting(false);
+        return;
+      }
+
+      // 3. Verify Payment with backend
+      setStatusMessage({
+        type: 'success',
+        text: 'Payment received! Verifying and activating your subscription...',
+      });
+
+      const verifyRes = await verifyPayment(
+        paymentResult.orderId,
+        currentRestId,
+        plan.id,
+        price,
+        paymentResult.razorpayPaymentId,
+        paymentResult.razorpaySignature
+      );
+
+      if (verifyRes?.success) {
+        setStatusMessage({
+          type: 'success',
+          text: 'Subscription activated successfully! POS unlocked.',
+        });
+        await fetchSubscriptionStatus(currentRestId);
+        setTimeout(() => {
+          closeRenewalModal();
+          setSubmitting(false);
+        }, 1500);
+      } else {
+        await fetchSubscriptionStatus(currentRestId);
+        const latestSub = useSubscriptionStore.getState().subscription;
+        if (latestSub && !useSubscriptionStore.getState().isExpired) {
           setStatusMessage({
             type: 'success',
-            text: 'Payment verified! Activating restaurant subscription...',
+            text: 'Subscription activated successfully! POS unlocked.',
           });
-          await fetchSubscriptionStatus(currentRestId);
           setTimeout(() => {
             closeRenewalModal();
             setSubmitting(false);
-            removePaymentCallbacks();
-          }, 1500);
-        },
-        (errMsg: any) => {
+          }, 1200);
+        } else {
           setStatusMessage({
             type: 'error',
-            text: errMsg || 'Payment checkout was cancelled or failed.',
+            text: verifyRes?.message || 'Payment verification failed. Please contact support if your account was debited.',
           });
           setSubmitting(false);
-          removePaymentCallbacks();
         }
-      );
-
-      // 3. Open CashFree Web Drop Modal
-      const cfEnv = process.env.NEXT_PUBLIC_CASHFREE_ENV || 'SANDBOX';
-      await startCashfreePayment({
-        paymentSessionId: initRes.paymentSessionId,
-        orderId: initRes.orderId || `ORD_${Date.now()}`,
-        environment: cfEnv,
-        paymentLink: initRes.paymentLink,
-      });
+      }
     } catch (err: any) {
       setStatusMessage({
         type: 'error',

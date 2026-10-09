@@ -1,6 +1,7 @@
 import { apiClient } from '../../core/network/apiClient';
 import { RestaurantWallet, WalletTransaction, WalletRechargeResponse } from '../../domain/models/Wallet';
 import { WalletEvents } from '../../core/utils/walletEvents';
+import { APP_CONSTANTS } from '../../core/constants/appConstants';
 
 // In-memory cache & fallback store for wallet balance & transactions
 const walletCache: Record<number, { balance: number; transactions: WalletTransaction[] }> = {};
@@ -131,18 +132,30 @@ export class WalletRemoteDataSource {
         },
       };
 
-      const response = await apiClient.post('/CashFreepayment/create-order', payload);
+      const headers: Record<string, string> = {};
+      if (APP_CONSTANTS.IS_RAZORPAY) {
+        headers['X-Payment-Gateway'] = 'Razorpay';
+      }
+
+      const response = await apiClient.post('/CashFreepayment/create-order', payload, { headers });
       const data = response.data || {};
       const orderId = data.orderId || data.OrderId || data.cfOrderId || `ORD_WAL_${restaurantId}_${Date.now()}`;
       const paymentSessionId = data.paymentSessionId || data.PaymentSessionId || '';
       const instrumentResponseUrl = data.paymentLink || data.instrumentResponseUrl || '';
+      const gateway = data.gateway || data.Gateway || (APP_CONSTANTS.IS_RAZORPAY ? 'Razorpay' : 'Cashfree');
+      const keyId = data.keyId || data.KeyId || data.key || '';
+      const currency = data.currency || data.Currency || 'INR';
 
       return {
         success: true,
         orderId,
         paymentSessionId,
         instrumentResponseUrl,
-        message: data.message || 'Wallet recharge order created successfully',
+        gateway,
+        keyId,
+        amount: data.amount || amount,
+        currency,
+        message: data.message || `Wallet recharge order created via ${gateway}`,
       };
     } catch (error: any) {
       const serverMsg = error.response?.data?.message || error.response?.data;
@@ -158,15 +171,31 @@ export class WalletRemoteDataSource {
   async verifyRecharge(
     orderId: string,
     restaurantId: number,
-    amountPaid: number
+    amountPaid: number,
+    razorpayPaymentId?: string,
+    razorpaySignature?: string
   ): Promise<{ success: boolean; message?: string }> {
     try {
-      const response = await apiClient.post('/CashFreepayment/verify', {
+      const payload: any = {
         orderId,
+        OrderId: orderId,
         restaurantId,
+        RestaurantId: restaurantId,
         amountPaid,
+        AmountPaid: amountPaid,
         type: 4,
-      });
+        Type: 4,
+      };
+      if (razorpayPaymentId) {
+        payload.razorpayPaymentId = razorpayPaymentId;
+        payload.RazorpayPaymentId = razorpayPaymentId;
+      }
+      if (razorpaySignature) {
+        payload.razorpaySignature = razorpaySignature;
+        payload.RazorpaySignature = razorpaySignature;
+      }
+
+      const response = await apiClient.post('/CashFreepayment/verify', payload);
 
       const paymentStatus = (response.data?.paymentStatus || response.data?.status || '').toUpperCase();
       const isSuccess = paymentStatus === 'SUCCESS' || response.data?.success === true || response.data?.gatewayOrderStatus === 'PAID';

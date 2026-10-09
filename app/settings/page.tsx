@@ -66,7 +66,7 @@ export default function SettingsHubPage() {
       href: '/wallet',
       icon: Wallet,
       title: 'Prepaid Wallet & SMS Credits',
-      desc: 'Top up SMS credits, commission balance, and Cashfree gateway transactions',
+      desc: 'Top up SMS credits, commission balance, and payment gateway transactions',
     },
     {
       href: '/terms',

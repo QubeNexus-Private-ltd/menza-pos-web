@@ -49,9 +49,20 @@ interface SubscriptionStoreState {
     orderId?: string;
     paymentSessionId?: string;
     paymentLink?: string;
+    gateway?: string;
+    keyId?: string;
+    amount?: number;
+    currency?: string;
     message?: string;
   }>;
-  verifyPayment: (orderId: string) => Promise<{ success: boolean; isPaid: boolean; message?: string }>;
+  verifyPayment: (
+    orderId: string,
+    restaurantId?: number,
+    subscriptionConfigurationId?: number,
+    amountPaid?: number,
+    razorpayPaymentId?: string,
+    razorpaySignature?: string
+  ) => Promise<{ success: boolean; isPaid: boolean; message?: string }>;
   canTakeOrders: () => boolean;
   hasEntitlement: (configKey: string) => boolean;
   reset: () => void;
@@ -226,8 +237,22 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
     return await SubscriptionService.initiateCashFreePayment(restaurantId, planId, amount, mobileNumber);
   },
 
-  verifyPayment: async (orderId: string) => {
-    return await SubscriptionService.verifyCashFreePayment(orderId);
+  verifyPayment: async (
+    orderId: string,
+    restaurantId?: number,
+    subscriptionConfigurationId?: number,
+    amountPaid?: number,
+    razorpayPaymentId?: string,
+    razorpaySignature?: string
+  ) => {
+    return await SubscriptionService.verifyCashFreePayment(
+      orderId,
+      restaurantId,
+      subscriptionConfigurationId,
+      amountPaid,
+      razorpayPaymentId,
+      razorpaySignature
+    );
   },
 
   canTakeOrders: () => {

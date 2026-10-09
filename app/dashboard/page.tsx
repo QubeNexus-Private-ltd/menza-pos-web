@@ -356,7 +356,7 @@ export default function DashboardPage() {
                 </div>
                 <h4 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">Prepaid Wallet</h4>
                 <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-1">
-                  Commission ledger, Cashfree gateway top-ups, and SMS balances
+                  Commission ledger, instant gateway top-ups, and SMS balances
                 </p>
               </div>
 

@@ -1,6 +1,7 @@
 import { apiClient } from '../../core/network/apiClient';
 import { SubscriptionPlan, UserSubscriptionStatus } from '../../domain/models/Subscription';
 import { useAuthStore } from '../../presentation/state/useAuthStore';
+import { APP_CONSTANTS } from '../../core/constants/appConstants';
 
 export class SubscriptionRemoteDataSource {
   async getPlans(): Promise<SubscriptionPlan[]> {
@@ -296,13 +297,23 @@ export class SubscriptionRemoteDataSource {
     return response.data?.success || false;
   }
 
-  // CashFree Payment Gateway Integration Methods
+  // Payment Gateway Integration Methods (Razorpay & CashFree)
   async initiateCashFreePayment(
     restaurantId: number,
     subscriptionConfigurationId: number,
     amount: number,
     mobileNumber?: string
-  ): Promise<{ success: boolean; orderId: string; paymentSessionId?: string; instrumentResponseUrl?: string; message?: string }> {
+  ): Promise<{
+    success: boolean;
+    orderId: string;
+    paymentSessionId?: string;
+    instrumentResponseUrl?: string;
+    gateway?: string;
+    keyId?: string;
+    amount?: number;
+    currency?: string;
+    message?: string;
+  }> {
     const lockKey = `${restaurantId}_${subscriptionConfigurationId}`;
     if (this.initiatingLock.has(lockKey)) {
       return { success: false, orderId: '', message: 'Payment initiation already in progress. Please wait.' };
@@ -329,22 +340,34 @@ export class SubscriptionRemoteDataSource {
         },
       };
 
-      const response = await apiClient.post('/CashFreepayment/create-order', payload);
+      const headers: Record<string, string> = {};
+      if (APP_CONSTANTS.IS_RAZORPAY) {
+        headers['X-Payment-Gateway'] = 'Razorpay';
+      }
+
+      const response = await apiClient.post('/CashFreepayment/create-order', payload, { headers });
       const data = response.data || {};
       const orderId = data.orderId || data.OrderId || data.order_id || data.cfOrderId || `ORD_SUB_${Date.now()}`;
       const paymentSessionId = data.paymentSessionId || data.PaymentSessionId || data.payment_session_id || '';
       const instrumentResponseUrl = data.paymentLink || data.PaymentLink || data.payment_link || data.instrumentResponseUrl || '';
+      const gateway = data.gateway || data.Gateway || (APP_CONSTANTS.IS_RAZORPAY ? 'Razorpay' : 'Cashfree');
+      const keyId = data.keyId || data.KeyId || data.key || '';
+      const currency = data.currency || data.Currency || 'INR';
 
       return {
         success: true,
         orderId,
         paymentSessionId,
         instrumentResponseUrl,
-        message: data.message || 'Payment order created via CashFree',
+        gateway,
+        keyId,
+        amount: data.amount || amount,
+        currency,
+        message: data.message || `Payment order created via ${gateway}`,
       };
     } catch (error: any) {
       const serverMsg = error.response?.data?.message || error.response?.data;
-      const message = typeof serverMsg === 'string' ? serverMsg : (error.message || 'Failed to initiate CashFree payment.');
+      const message = typeof serverMsg === 'string' ? serverMsg : (error.message || 'Failed to initiate payment.');
 
       return {
         success: false,
@@ -358,29 +381,53 @@ export class SubscriptionRemoteDataSource {
 
   async verifyCashFreePayment(
     orderId: string,
-    restaurantId: number,
-    subscriptionConfigurationId: number,
-    amountPaid: number
+    restaurantId?: number,
+    subscriptionConfigurationId?: number,
+    amountPaid?: number,
+    razorpayPaymentId?: string,
+    razorpaySignature?: string
   ): Promise<{ success: boolean; message?: string }> {
     try {
-      const response = await apiClient.post('/CashFreepayment/verify', {
+      const payload: any = {
         orderId,
-        restaurantId,
-        subscriptionConfigurationId,
-        amountPaid,
-      });
+        OrderId: orderId,
+        type: 1,
+        Type: 1,
+      };
+      if (restaurantId) {
+        payload.restaurantId = restaurantId;
+        payload.RestaurantId = restaurantId;
+      }
+      if (subscriptionConfigurationId) {
+        payload.subscriptionConfigurationId = subscriptionConfigurationId;
+        payload.SubscriptionConfigurationId = subscriptionConfigurationId;
+      }
+      if (amountPaid) {
+        payload.amountPaid = amountPaid;
+        payload.AmountPaid = amountPaid;
+      }
+      if (razorpayPaymentId) {
+        payload.razorpayPaymentId = razorpayPaymentId;
+        payload.RazorpayPaymentId = razorpayPaymentId;
+      }
+      if (razorpaySignature) {
+        payload.razorpaySignature = razorpaySignature;
+        payload.RazorpaySignature = razorpaySignature;
+      }
+
+      const response = await apiClient.post('/CashFreepayment/verify', payload);
       const paymentStatus = (response.data?.paymentStatus || response.data?.status || '').toUpperCase();
       const isSuccess = paymentStatus === 'SUCCESS' || response.data?.success === true || response.data?.gatewayOrderStatus === 'PAID';
 
       return {
         success: isSuccess,
         message: isSuccess
-          ? 'CashFree payment verified & subscription activated successfully.'
-          : (response.data?.failureReason || 'CashFree verification pending or failed.'),
+          ? 'Payment verified & subscription activated successfully.'
+          : (response.data?.failureReason || 'Payment verification pending or failed.'),
       };
     } catch (error: any) {
       const serverMsg = error.response?.data?.message || error.response?.data;
-      const message = typeof serverMsg === 'string' ? serverMsg : (error.message || 'CashFree verification failed.');
+      const message = typeof serverMsg === 'string' ? serverMsg : (error.message || 'Payment verification failed.');
       return { success: false, message };
     }
   }

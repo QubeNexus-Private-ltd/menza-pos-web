@@ -110,27 +110,99 @@ export class WebWalletService {
     }
   }
 
-  static async initiateRecharge(restaurantId: number, amount: number, ownerPhone: string = '9999999999'): Promise<{ success: boolean; paymentLink?: string; orderId?: string; message?: string }> {
+  static async initiateRecharge(
+    restaurantId: number,
+    amount: number,
+    ownerPhone: string = '9999999999'
+  ): Promise<{
+    success: boolean;
+    orderId?: string;
+    paymentSessionId?: string;
+    paymentLink?: string;
+    gateway?: string;
+    keyId?: string;
+    amount?: number;
+    currency?: string;
+    message?: string;
+  }> {
     try {
-      const response = await apiClient.post(`/Restaurant/${restaurantId}/Wallet/Recharge/Initiate`, {
+      const payload = {
+        type: 4, // PaymentType.Wallet = 4
+        Type: 4,
         restaurantId,
+        RestaurantId: restaurantId,
         amount,
+        Amount: amount,
         ownerPhone,
-      }, {
-        headers: { 'X-Restaurant-Id': restaurantId.toString() },
+        OwnerPhone: ownerPhone,
+        paymentPurpose: `Platform Fee Wallet Top-up (₹${amount}) for Restaurant #${restaurantId}`,
+        orderMeta: {
+          returnUrl: typeof window !== 'undefined' ? `${window.location.origin}/wallet` : 'https://menza-web.vercel.app/wallet',
+          notifyUrl: 'https://api.menza.com/api/CashFreepayment/webhook/cashfree',
+        },
+      };
+
+      const response = await apiClient.post('/CashFreepayment/create-order', payload, {
+        headers: {
+          'X-Restaurant-Id': restaurantId.toString(),
+          'X-Payment-Gateway': 'Razorpay',
+        },
       });
 
       const data = response.data || {};
+      const orderId = data.orderId || data.OrderId || data.cfOrderId || `ORD_WAL_${restaurantId}_${Date.now()}`;
+      const paymentSessionId = data.paymentSessionId || data.PaymentSessionId || '';
+      const paymentLink = data.paymentLink || data.PaymentLink || data.instrumentResponseUrl || '';
+      const gateway = data.gateway || data.Gateway || (data.keyId ? 'Razorpay' : 'Cashfree');
+      const keyId = data.keyId || data.KeyId;
+
       return {
         success: true,
-        paymentLink: data.paymentLink || data.instrumentResponseUrl || '',
-        orderId: data.orderId || data.OrderId || '',
-        message: data.message || 'Recharge initiated',
+        orderId,
+        paymentSessionId,
+        paymentLink,
+        gateway,
+        keyId,
+        amount,
+        currency: data.currency || 'INR',
+        message: data.message || 'Wallet recharge order created',
       };
     } catch (err: any) {
       return {
         success: false,
         message: err.response?.data?.message || err.message || 'Failed to initiate wallet recharge',
+      };
+    }
+  }
+
+  static async verifyRecharge(
+    orderId: string,
+    restaurantId: number,
+    amountPaid: number,
+    razorpayPaymentId?: string,
+    razorpaySignature?: string
+  ): Promise<{ success: boolean; message?: string }> {
+    try {
+      const response = await apiClient.post('/CashFreepayment/verify', {
+        orderId,
+        restaurantId,
+        amountPaid,
+        type: 4,
+        razorpayPaymentId,
+        razorpaySignature,
+      });
+
+      const paymentStatus = (response.data?.paymentStatus || response.data?.status || '').toUpperCase();
+      const isSuccess = paymentStatus === 'SUCCESS' || response.data?.success === true || response.data?.gatewayOrderStatus === 'PAID';
+
+      return {
+        success: isSuccess,
+        message: isSuccess ? 'Wallet recharged successfully!' : (response.data?.failureReason || 'Recharge verification pending.'),
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: err.response?.data?.message || err.message || 'Wallet recharge verification failed.',
       };
     }
   }

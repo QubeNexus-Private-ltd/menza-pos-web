@@ -41,6 +41,25 @@ export const APP_CONSTANTS = {
     process.env.EXPO_PUBLIC_CASHFREE_ENV ||
     process.env.CASHFREE_ENV ||
     'SANDBOX',
+  // Active Payment Gateway Configuration (RAZORPAY or CASHFREE)
+  PAYMENT_GATEWAY:
+    process.env.NEXT_PUBLIC_PAYMENT_GATEWAY ||
+    process.env.EXPO_PUBLIC_PAYMENT_GATEWAY ||
+    process.env.PAYMENT_GATEWAY ||
+    'RAZORPAY',
+  IS_RAZORPAY:
+    (
+      process.env.NEXT_PUBLIC_IS_RAZORPAY ||
+      process.env.EXPO_PUBLIC_IS_RAZORPAY ||
+      process.env.IS_RAZORPAY ||
+      'true'
+    ).toLowerCase() === 'true' ||
+    (
+      process.env.NEXT_PUBLIC_PAYMENT_GATEWAY ||
+      process.env.EXPO_PUBLIC_PAYMENT_GATEWAY ||
+      process.env.PAYMENT_GATEWAY ||
+      'RAZORPAY'
+    ).toUpperCase() === 'RAZORPAY',
 
   ROLES: {
     SUPER_ADMIN: 'SuperAdmin',

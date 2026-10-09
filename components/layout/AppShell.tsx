@@ -31,8 +31,12 @@ import {
   ChefHat,
   CalendarDays,
   Receipt,
+  Printer,
+  TrendingUp,
 } from 'lucide-react';
 import { StoreShiftModal } from '../common/StoreShiftModal';
+import { WalletBalanceWidget } from '../common/WalletBalanceWidget';
+import { WalletRechargeModal } from '../common/WalletRechargeModal';
 import { SubscriptionGraceBanner } from '../subscription/SubscriptionGraceBanner';
 import { SubscriptionBlockerModal } from '../subscription/SubscriptionBlockerModal';
 import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
@@ -63,6 +67,14 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
   const { user, activeRestaurant, restaurants, setActiveRestaurant, logout } = useAuthStore();
   const { theme, toggleTheme, isDark } = useWebTheme();
   const {
+    subscription,
+    isExpired,
+    lifecycleState,
+    daysRemaining,
+    isInGracePeriod,
+    openRenewalModal,
+  } = useSubscriptionStore();
+  const {
     unreadCount,
     notifications,
     latestIncomingOrder,
@@ -78,6 +90,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
   const [notifDrawerOpen, setNotifDrawerOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [shiftModalOpen, setShiftModalOpen] = useState(false);
+  const [walletModalOpen, setWalletModalOpen] = useState(false);
   const [operatingStatus, setOperatingStatus] = useState<StoreOperatingStatus | null>(null);
   const [todaySales, setTodaySales] = useState<{ revenue: number; orderCount: number }>({ revenue: 0, orderCount: 0 });
   const [walletBalance, setWalletBalance] = useState<number | null>(null);
@@ -372,66 +385,84 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       {/* 3. Main Workspace Area */}
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Top Header Bar */}
-        <header className="flex h-16 items-center justify-between border-b border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] px-4 lg:px-6">
-          <div className="flex items-center gap-3">
+        <header className="sticky top-0 z-30 flex h-16 w-full items-center justify-between border-b border-[#E7E1DA] dark:border-[#2B3540] bg-white/95 dark:bg-[#1B2127]/95 backdrop-blur-md px-3 sm:px-5 lg:px-6 transition-colors">
+          {/* LEFT: Mobile Toggle + Outlet Switcher + Operating Shift + Live Cloud */}
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <button
               onClick={() => setSidebarOpen(true)}
-              className="rounded-lg p-2 text-[#667085] hover:bg-black/5 dark:hover:bg-white/5 lg:hidden"
+              className="rounded-full p-2 text-[#667085] hover:bg-black/5 dark:hover:bg-white/5 transition-colors lg:hidden"
+              aria-label="Toggle navigation menu"
             >
               <Menu className="h-5 w-5" />
             </button>
 
-            {/* Restaurant Multi-Store Selector Dropdown */}
+            {/* Restaurant Outlet Selector Pill */}
             {!isSuperAdmin && restaurants.length > 0 && (
               <div className="relative" ref={outletMenuRef}>
                 <button
+                  type="button"
                   onClick={() => setOutletMenuOpen(!outletMenuOpen)}
-                  className="flex items-center gap-2 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3 py-1.5 text-xs font-semibold hover:border-[#DE8626] transition-colors"
+                  className="group inline-flex h-[36px] items-center gap-2 rounded-full border border-[#E7E0D6] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] pl-2 pr-3 text-xs font-bold transition-all shadow-xs hover:border-[#DE8626] hover:bg-white dark:hover:bg-[#1B2127]"
+                  title="Switch Active Restaurant Outlet"
                 >
-                  <Store className="h-4 w-4 text-[#DE8626]" />
-                  <span className="max-w-[140px] truncate sm:max-w-[200px]">
+                  <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-[#DE8626]">
+                    <Store className="h-3 w-3" />
+                  </div>
+                  <span className="truncate max-w-[110px] sm:max-w-[180px] font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
                     {activeRestaurant?.restaurantName || 'Select Outlet'}
                   </span>
-                  <ChevronDown className="h-3.5 w-3.5 text-[#667085]" />
+                  <ChevronDown className="h-3 w-3 shrink-0 text-[#667085] group-hover:text-[#DE8626] transition-colors" />
                 </button>
 
                 {outletMenuOpen && (
-                  <div className="absolute left-0 mt-2 w-64 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-1.5 shadow-xl z-50">
-                    <p className="px-2.5 py-1 text-[11px] font-semibold text-[#667085] uppercase tracking-wider">
-                      Switch Outlet ({restaurants.length})
-                    </p>
-                    {restaurants.map((r) => {
-                      const isSelected = r.restaurantId === activeRestaurant?.restaurantId;
-                      return (
-                        <button
-                          key={r.restaurantId}
-                          onClick={() => handleSelectRestaurant(r)}
-                          className={`flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-xs transition-colors ${
-                            isSelected
-                              ? 'bg-amber-500/10 font-semibold text-[#DE8626]'
-                              : 'text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5'
-                          }`}
-                        >
-                          <div className="text-left truncate">
-                            <p className="truncate font-medium">{r.restaurantName}</p>
-                            <p className="text-[10px] text-[#667085] dark:text-[#94A3B8]">{r.address || 'Outlet'}</p>
-                          </div>
-                          {isSelected && <Check className="h-4 w-4 text-[#DE8626]" />}
-                        </button>
-                      );
-                    })}
+                  <div className="absolute left-0 mt-2 w-72 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-2 shadow-2xl z-50 animate-in fade-in zoom-in-95 duration-150">
+                    <div className="flex items-center justify-between px-3 py-1.5 border-b border-[#E7E1DA]/60 dark:border-[#2B3540]/60 mb-1">
+                      <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#667085]">
+                        Switch Outlet ({restaurants.length})
+                      </span>
+                      <span className="text-[10px] text-emerald-600 font-bold flex items-center gap-1">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        Live
+                      </span>
+                    </div>
+                    <div className="max-h-60 overflow-y-auto space-y-1">
+                      {restaurants.map((r) => {
+                        const isSelected = r.restaurantId === activeRestaurant?.restaurantId;
+                        return (
+                          <button
+                            key={r.restaurantId}
+                            onClick={() => handleSelectRestaurant(r)}
+                            className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs transition-colors text-left ${
+                              isSelected
+                                ? 'bg-amber-500/10 font-bold text-[#DE8626]'
+                                : 'text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5'
+                            }`}
+                          >
+                            <div className="truncate min-w-0 pr-2">
+                              <p className="truncate font-bold">{r.restaurantName}</p>
+                              <p className="text-[10px] text-[#667085] truncate">{r.address || r.city || 'Outlet'}</p>
+                            </div>
+                            {isSelected && <Check className="h-4 w-4 shrink-0 text-[#DE8626]" />}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
               </div>
             )}
 
-            {/* Store Operating Status Badge */}
+            {/* Store Operating Shift Indicator Pill */}
             {operatingStatus && !isSuperAdmin && (
               <button
                 type="button"
                 onClick={() => setShiftModalOpen(true)}
-                title="Click to change store shift or operating timings"
-                className="hidden sm:flex items-center gap-1.5 rounded-full border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-2.5 py-1 text-[11px] font-medium hover:border-[#DE8626] transition-colors cursor-pointer"
+                title="Store Operating Status • Click to Open Shift / Edit Timings"
+                className={`hidden sm:inline-flex h-[36px] items-center gap-1.5 rounded-full border px-3 text-[11px] font-extrabold transition-all shadow-xs cursor-pointer ${
+                  operatingStatus.isOpen
+                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/15'
+                    : 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400 hover:bg-red-500/15'
+                }`}
               >
                 <span
                   className={`h-2 w-2 rounded-full ${
@@ -441,40 +472,102 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                 <span>{operatingStatus.isOpen ? 'Store Open' : 'Store Closed'}</span>
               </button>
             )}
+
+            {/* SignalR Cloud Live Sync Badge (Desktop) */}
+            <div
+              title={isLiveConnected ? 'Connected to Menza Live Real-Time Gateway' : 'Connecting to Live Gateway...'}
+              className="hidden 2xl:flex items-center gap-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 text-[10px] font-extrabold text-emerald-700 dark:text-emerald-400"
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span>Live Cloud</span>
+            </div>
           </div>
 
-          {/* Right Action Icons */}
-          <div className="flex items-center gap-2 sm:gap-3">
-            {/* Quick POS Terminal Button on Tablet/Desktop */}
+          {/* RIGHT: Telemetry + Plans + Wallet + Printer + Bell + Theme + New Sale */}
+          <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+            {/* Today's Sales Telemetry Pill */}
             {!isSuperAdmin && (
-              <button
-                onClick={() => router.push('/pos')}
-                className="hidden md:flex items-center gap-2 rounded-xl bg-[#DE8626] px-3.5 py-1.5 text-xs font-bold text-white shadow-sm shadow-[#DE8626]/30 hover:bg-[#C4721C] transition-colors"
+              <div
+                title={`Today's Revenue: ₹${todaySales.revenue.toLocaleString('en-IN')} across ${todaySales.orderCount} orders`}
+                className="hidden xl:inline-flex h-[36px] items-center gap-2 rounded-full border border-[#E7E0D6] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3.5 text-xs shadow-xs"
               >
-                <ShoppingBag className="h-4 w-4" />
-                <span>New Sale (POS)</span>
-              </button>
-            )}
-
-            {/* Today's Sales Pill */}
-            {!isSuperAdmin && (
-              <div className="hidden lg:flex items-center gap-2 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3 py-1 text-xs">
+                <TrendingUp className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
                 <span className="text-[#667085] dark:text-[#94A3B8]">Today:</span>
-                <span className="font-bold text-[#1E2930] dark:text-[#F3F4F6]">₹{todaySales.revenue.toLocaleString('en-IN')}</span>
-                <span className="text-[11px] text-[#667085]">({todaySales.orderCount} orders)</span>
+                <strong className="font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                  ₹{todaySales.revenue.toLocaleString('en-IN')}
+                </strong>
+                <span className="rounded-full bg-black/5 dark:bg-white/5 px-1.5 py-0.5 text-[10px] font-semibold text-[#667085]">
+                  {todaySales.orderCount}
+                </span>
               </div>
             )}
 
-            {/* Real-time Order Notification Bell */}
+            {/* 1. Subscription & Licensing Pill (Renew or Explore Other Plans) */}
+            {!isSuperAdmin && currentRestId > 0 && (
+              <button
+                type="button"
+                onClick={() => openRenewalModal(undefined, 'renew')}
+                title="Subscription & Licensing • Click to Renew or Explore Other Plans"
+                className={`group inline-flex h-[36px] items-center gap-2 rounded-full border pl-2.5 pr-1.5 text-xs font-extrabold transition-all cursor-pointer shadow-xs active:scale-[0.98] ${
+                  isExpired || lifecycleState === 'EXPIRED'
+                    ? 'border-red-500/40 bg-red-500/10 text-red-600 ring-1 ring-red-500/30 animate-pulse'
+                    : isInGracePeriod || (daysRemaining > 0 && daysRemaining <= 3)
+                    ? 'border-amber-400 bg-[#FFF7EE] dark:bg-amber-950/30 text-amber-900 dark:text-amber-200 ring-1 ring-amber-400/30'
+                    : 'border-[#E7E0D6] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#1C1917] dark:text-[#F3F4F6] hover:border-[#DE8626] hover:shadow-sm'
+                }`}
+              >
+                <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-[#DE8626]">
+                  <Crown className="h-3 w-3" />
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="truncate max-w-[85px] sm:max-w-[130px] font-extrabold">
+                    {subscription?.planName || 'Store Plan'}
+                  </span>
+                  {daysRemaining > 0 && (
+                    <span className="text-[11px] font-semibold text-[#667085] dark:text-[#94A3B8]">
+                      ({daysRemaining}d)
+                    </span>
+                  )}
+                </div>
+                <span className="rounded-full bg-amber-500/15 group-hover:bg-[#DE8626] group-hover:text-white px-2 py-0.5 text-[10px] font-extrabold uppercase text-[#DE8626] transition-colors tracking-tight">
+                  Renew / Plans
+                </span>
+              </button>
+            )}
+
+            {/* 2. Prepaid Platform Fee Wallet Pill (Identical UX to F:\Menza) */}
+            {!isSuperAdmin && currentRestId > 0 && (
+              <WalletBalanceWidget
+                restaurantId={currentRestId}
+                variant="pill"
+                onPress={() => setWalletModalOpen(true)}
+              />
+            )}
+
+            {/* 3. Quick Bluetooth / Thermal Printer Status Action (parity with F:\Menza) */}
+            {!isSuperAdmin && (
+              <button
+                type="button"
+                onClick={() => router.push('/settings/printer')}
+                title="Printer Setup & ESC/POS Status • Click to Configure"
+                className="inline-flex h-[36px] w-[36px] items-center justify-center rounded-full border border-[#E7E0D6] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#667085] hover:border-[#DE8626] hover:text-[#DE8626] transition-all relative shadow-xs"
+              >
+                <Printer className="h-4 w-4" />
+                <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-[#1B2127]" />
+              </button>
+            )}
+
+            {/* 4. Real-time Order Alerts Notification Bell */}
             <div className="relative" ref={notifMenuRef}>
               <button
+                type="button"
                 onClick={() => setNotifDrawerOpen(!notifDrawerOpen)}
-                className="relative rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] p-2 text-[#667085] dark:text-[#94A3B8] hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-                title="Order Alerts"
+                className="inline-flex h-[36px] w-[36px] items-center justify-center rounded-full border border-[#E7E0D6] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#667085] hover:border-[#DE8626] hover:text-[#DE8626] transition-all relative shadow-xs"
+                title="Live Order Alerts"
               >
                 <Bell className="h-4 w-4" />
                 {unreadCount > 0 && (
-                  <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white shadow-sm animate-pulse">
+                  <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-extrabold text-white shadow-sm animate-pulse">
                     {unreadCount > 99 ? '99+' : unreadCount}
                   </span>
                 )}
@@ -482,8 +575,8 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
 
               {/* Notification Drawer Popover */}
               {notifDrawerOpen && (
-                <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] shadow-2xl z-50 overflow-hidden">
-                  <div className="flex items-center justify-between border-b border-[#E7E1DA] dark:border-[#2B3540] px-4 py-3 bg-[#FAF7F2] dark:bg-[#151A20]">
+                <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] shadow-2xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+                  <div className="flex items-center justify-between border-b border-[#E7E1DA] dark:border-[#2B3540] px-4 py-3.5 bg-[#FAF7F2] dark:bg-[#151A20]">
                     <div className="flex items-center gap-2">
                       <Bell className="h-4 w-4 text-[#DE8626]" />
                       <span className="text-xs font-bold uppercase tracking-wider">Live Order Alerts</span>
@@ -533,14 +626,27 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
               )}
             </div>
 
-            {/* Theme Toggle Button */}
+            {/* 5. Theme Toggle Button */}
             <button
+              type="button"
               onClick={toggleTheme}
-              className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] p-2 text-[#667085] dark:text-[#94A3B8] hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-              title="Toggle Theme"
+              className="inline-flex h-[36px] w-[36px] items-center justify-center rounded-full border border-[#E7E0D6] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#667085] hover:border-[#DE8626] hover:text-[#DE8626] transition-all shadow-xs"
+              title="Toggle Day / Night Mode"
             >
               {isDark ? <Sun className="h-4 w-4 text-amber-400" /> : <Moon className="h-4 w-4" />}
             </button>
+
+            {/* 6. Quick POS Terminal Button (when not on POS page) */}
+            {!isSuperAdmin && pathname !== '/pos' && (
+              <button
+                type="button"
+                onClick={() => router.push('/pos')}
+                className="hidden sm:inline-flex h-[36px] items-center gap-1.5 rounded-full bg-gradient-to-r from-[#DE8626] to-[#CB741B] px-3.5 text-xs font-extrabold text-white shadow-md shadow-[#DE8626]/20 hover:from-[#C4721C] hover:to-[#B66415] transition-all hover:scale-[1.02] active:scale-[0.98]"
+              >
+                <ShoppingBag className="h-3.5 w-3.5" />
+                <span>New Sale</span>
+              </button>
+            )}
           </div>
         </header>
 
@@ -626,6 +732,15 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
 
         {/* Subscription Expiration / Renewal Paywall Blocker */}
         <SubscriptionBlockerModal />
+
+        {/* Prepaid Platform Fee Wallet Recharge Modal */}
+        {walletModalOpen && (
+          <WalletRechargeModal
+            isOpen={walletModalOpen}
+            onClose={() => setWalletModalOpen(false)}
+            restaurantId={currentRestId}
+          />
+        )}
       </div>
     </div>
   );

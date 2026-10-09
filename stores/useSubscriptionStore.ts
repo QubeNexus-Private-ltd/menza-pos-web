@@ -26,11 +26,12 @@ interface SubscriptionStoreState {
   // UI Flow State
   isRenewalModalOpen: boolean;
   selectedPlan: SubscriptionPlan | null;
+  activeModalTab: 'renew' | 'explore';
 
   // Actions
   fetchSubscriptionStatus: (restaurantId?: number) => Promise<UserSubscriptionStatus | null>;
   fetchPlans: () => Promise<SubscriptionPlan[]>;
-  openRenewalModal: (plan?: SubscriptionPlan) => void;
+  openRenewalModal: (plan?: SubscriptionPlan, initialTab?: 'renew' | 'explore') => void;
   closeRenewalModal: () => void;
   setExpired: (expired: boolean) => void;
   assignPlan: (
@@ -85,6 +86,7 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
 
   isRenewalModalOpen: false,
   selectedPlan: null,
+  activeModalTab: 'renew',
 
   fetchSubscriptionStatus: async (restaurantId?: number) => {
     const authRestId = useAuthStore.getState().activeRestaurant?.restaurantId;
@@ -117,7 +119,7 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
           daysRemaining: 0,
           isInGracePeriod: false,
           graceDaysRemaining: 0,
-          isExpired: true,
+          isExpired: false,
           isNoSubscription: true,
           hasLoaded: true,
           isLoading: false,
@@ -190,10 +192,12 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
     }
   },
 
-  openRenewalModal: (plan?: SubscriptionPlan) => {
+  openRenewalModal: (plan?: SubscriptionPlan, initialTab?: 'renew' | 'explore') => {
+    const hasSub = Boolean(get().subscription);
     set({
       isRenewalModalOpen: true,
       selectedPlan: plan || null,
+      activeModalTab: initialTab || (hasSub ? 'renew' : 'explore'),
     });
   },
 

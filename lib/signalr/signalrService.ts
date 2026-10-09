@@ -12,10 +12,23 @@ const kitchenStatusListeners = new Set<(status: any) => void>();
 const walletBalanceListeners = new Set<(balance: any) => void>();
 
 function getHubUrl(restaurantId: number): string {
-  const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+  const customHubUrl = process.env.NEXT_PUBLIC_SIGNALR_HUB_URL;
+  if (customHubUrl) {
+    return `${customHubUrl}?restaurantId=${restaurantId}`;
+  }
+
+  const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL;
+  if (!apiBase) {
+    const errorMsg =
+      '[SignalR Config Error] Missing NEXT_PUBLIC_SIGNALR_HUB_URL and NEXT_PUBLIC_API_BASE_URL. ' +
+      'Please configure your environment variables in .env.local or Vercel Settings.';
+    console.error(errorMsg);
+    throw new Error(errorMsg);
+  }
+
   // Strip trailing /api or /api/
   const hostBase = apiBase.replace(/\/api\/?$/, '');
-  return `${hostBase}/orderNotificationHub?restaurantId=${restaurantId}`;
+  return `${hostBase}/hubs/order?restaurantId=${restaurantId}`;
 }
 
 export async function startPosSignalRConnection(restaurantId: number): Promise<void> {

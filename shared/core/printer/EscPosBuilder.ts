@@ -52,6 +52,8 @@ export interface ReceiptData {
   date?: string | Date;
   footerMessage?: string;
   isKot?: boolean;
+  isDuplicate?: boolean;
+  isProforma?: boolean;
 }
 
 export type PaperWidth = '58mm' | '80mm';
@@ -312,6 +314,7 @@ export class EscPosBuilder {
       builder.printBitmap(data.logoBitmap.widthBytes, data.logoBitmap.heightDots, data.logoBitmap.bytes);
     }
 
+
     // 1. Restaurant Header
     if (data.restaurantName && data.restaurantName.trim().length > 0) {
       builder.align('center');
@@ -346,6 +349,21 @@ export class EscPosBuilder {
     }
 
     builder.separator('=');
+
+    if (data.isProforma) {
+      builder.align('center');
+      builder.bold(true);
+      builder.textLine('*** PROFORMA / GUEST CHECK ***');
+      builder.textLine('(NOT A TAX INVOICE)');
+      builder.bold(false);
+      builder.separator('-');
+    } else if (data.isDuplicate) {
+      builder.align('center');
+      builder.bold(true);
+      builder.textLine('*** DUPLICATE RECEIPT ***');
+      builder.bold(false);
+      builder.separator('-');
+    }
 
     // 2. Order Metadata / Pickup Token
     builder.align('center');
@@ -472,25 +490,26 @@ export class EscPosBuilder {
 
     // 5. Taxes / Breakdown if GST Number exists
     const hasGst = Boolean(data.gstNumber && data.gstNumber.trim().length > 0);
-    const effectiveSubtotal = data.subtotal !== undefined ? data.subtotal : computedSubtotal;
+    const effectiveSubtotal = data.subtotal !== undefined ? Number(data.subtotal) : computedSubtotal;
 
     if (hasGst) {
-      builder.twoColumns('Subtotal:', `Rs ${effectiveSubtotal.toFixed(2)}`);
+      builder.twoColumns('Subtotal:', `Rs ${(Number(effectiveSubtotal) || 0).toFixed(2)}`);
 
       const cgstRate = data.cgstPercentage ?? 2.5;
       const sgstRate = data.sgstPercentage ?? 2.5;
-      const cgstAmt = data.cgstAmount !== undefined ? data.cgstAmount : (effectiveSubtotal * cgstRate) / 100;
-      const sgstAmt = data.sgstAmount !== undefined ? data.sgstAmount : (effectiveSubtotal * sgstRate) / 100;
+      const cgstAmt = data.cgstAmount !== undefined ? Number(data.cgstAmount) : ((Number(effectiveSubtotal) || 0) * cgstRate) / 100;
+      const sgstAmt = data.sgstAmount !== undefined ? Number(data.sgstAmount) : ((Number(effectiveSubtotal) || 0) * sgstRate) / 100;
 
-      builder.twoColumns(`CGST (${cgstRate}%):`, `Rs ${cgstAmt.toFixed(2)}`);
-      builder.twoColumns(`SGST (${sgstRate}%):`, `Rs ${sgstAmt.toFixed(2)}`);
+      builder.twoColumns(`CGST (${cgstRate}%):`, `Rs ${(Number(cgstAmt) || 0).toFixed(2)}`);
+      builder.twoColumns(`SGST (${sgstRate}%):`, `Rs ${(Number(sgstAmt) || 0).toFixed(2)}`);
       builder.separator('-');
     }
 
     // 6. Grand Total (Large & Bold)
     builder.bold(true);
     builder.textSize('double-height');
-    builder.twoColumns('GRAND TOTAL:', `Rs ${data.grandTotal.toFixed(2)}`, true);
+    const grandTotalNum = Number(data.grandTotal) || 0;
+    builder.twoColumns('GRAND TOTAL:', `Rs ${grandTotalNum.toFixed(2)}`, true);
     builder.textSize('normal');
     if (!hasGst) {
       builder.align('right');
@@ -505,22 +524,26 @@ export class EscPosBuilder {
     if (data.paymentMode) {
       builder.twoColumns('Payment Mode:', data.paymentMode.toUpperCase());
     }
-    if (data.tenderedAmount !== undefined && data.tenderedAmount > 0) {
-      builder.twoColumns('Cash Tendered:', `Rs ${data.tenderedAmount.toFixed(2)}`);
-      if (data.changeAmount !== undefined && data.changeAmount >= 0) {
+    if (data.tenderedAmount !== undefined && Number(data.tenderedAmount) > 0) {
+      builder.twoColumns('Cash Tendered:', `Rs ${(Number(data.tenderedAmount) || 0).toFixed(2)}`);
+      if (data.changeAmount !== undefined && Number(data.changeAmount) >= 0) {
         builder.bold(true);
-        builder.twoColumns('Change Returned:', `Rs ${data.changeAmount.toFixed(2)}`);
+        builder.twoColumns('Change Returned:', `Rs ${(Number(data.changeAmount) || 0).toFixed(2)}`);
         builder.bold(false);
       }
     }
 
     builder.separator('-');
 
-    // 8. Footer Greeting
-    if (data.footerMessage && data.footerMessage.trim()) {
-      builder.align('center');
-      builder.textLine(data.footerMessage.trim());
-    }
+    // 8. Footer Greeting & Menza Branding
+    builder.align('center');
+    builder.textLine('Please Visit Again');
+    builder.feed(1);
+    builder.textLine('Powered by Menza');
+    builder.feed(1);
+    try {
+      builder.printMenzaLogo();
+    } catch {}
 
     builder.finish();
     return builder.getBytes();
@@ -545,7 +568,7 @@ export class EscPosBuilder {
 
     builder.textSize('double-both');
     builder.bold(true);
-    builder.textLine(`TOKEN ${formattedToken}`);
+    builder.textLine(formattedToken);
 
     builder.textSize('normal');
     builder.bold(false);

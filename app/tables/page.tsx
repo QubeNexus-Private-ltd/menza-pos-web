@@ -23,6 +23,7 @@ import {
   AlertCircle,
   Phone,
   User,
+  MoveRight,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
@@ -71,6 +72,13 @@ export default function TablesPage() {
   const [qrTable, setQrTable] = useState<TableMaster | null>(null);
   const [storefrontQrOpen, setStorefrontQrOpen] = useState(false);
   const [settlingOrder, setSettlingOrder] = useState<OrderMaster | null>(null);
+
+  // Table Shift / Transfer Modal
+  const [shiftModalOpen, setShiftModalOpen] = useState(false);
+  const [shiftSourceTable, setShiftSourceTable] = useState<TableMaster | null>(null);
+  const [shiftTargetTableId, setShiftTargetTableId] = useState<number | null>(null);
+  const [shiftReason, setShiftReason] = useState('');
+  const [isShifting, setIsShifting] = useState(false);
 
   const loadData = useCallback(async () => {
     if (!currentRestId) return;
@@ -250,6 +258,33 @@ export default function TablesPage() {
       loadData();
     } catch (err: any) {
       alert(err?.message || 'Failed to delete table');
+    }
+  };
+
+  const handleTransferTable = async () => {
+    if (!shiftSourceTable || !shiftTargetTableId || !currentRestId) {
+      alert('Please select an available destination table to transfer the order to.');
+      return;
+    }
+    try {
+      setIsShifting(true);
+      await tableDataSource.transferTable({
+        restaurantId: currentRestId,
+        sourceTableId: shiftSourceTable.id,
+        targetTableId: shiftTargetTableId,
+        reason: shiftReason.trim() || 'Guest requested table change',
+      });
+      setShiftModalOpen(false);
+      setShiftSourceTable(null);
+      setShiftTargetTableId(null);
+      setShiftReason('');
+      setActionTable(null);
+      setActiveTableOrder(null);
+      await loadData();
+    } catch (err: any) {
+      alert(err?.message || 'Failed to transfer table');
+    } finally {
+      setIsShifting(false);
     }
   };
 
@@ -589,6 +624,24 @@ export default function TablesPage() {
                     </button>
                   </div>
 
+                  {/* Shift / Move Table Button */}
+                  {activeOrder && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShiftSourceTable(actionTable);
+                        setShiftTargetTableId(null);
+                        setShiftReason('');
+                        setShiftModalOpen(true);
+                      }}
+                      className="flex w-full items-center justify-center gap-2 rounded-2xl border border-indigo-400/60 bg-indigo-500/10 py-2.5 text-xs font-bold text-indigo-700 dark:text-indigo-400 hover:bg-indigo-500/20 transition-colors"
+                      title="Move active order and guests to another table"
+                    >
+                      <MoveRight className="h-4 w-4" />
+                      <span>Shift Table (Move Order & Guests)</span>
+                    </button>
+                  )}
+
                   {/* Table Lifecycle Status Controls */}
                   {isOccupied && !isBilled && (
                     <button
@@ -779,6 +832,127 @@ export default function TablesPage() {
               setSettlingOrder(null);
             }}
           />
+        )}
+
+        {/* 6. Shift / Transfer Table Modal */}
+        {shiftModalOpen && shiftSourceTable && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+            <div className="w-full max-w-md rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-6 shadow-2xl">
+              <div className="flex items-center justify-between mb-4 pb-3 border-b border-[#E7E1DA] dark:border-[#2B3540]">
+                <div className="flex items-center gap-2">
+                  <MoveRight className="h-5 w-5 text-[#DE8626]" />
+                  <div>
+                    <h3 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                      Shift Table T-{shiftSourceTable.tableNumber}
+                    </h3>
+                    <p className="text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                      Move running order and guests to another available table
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShiftModalOpen(false)}
+                  className="rounded-lg p-1 text-[#667085] hover:bg-black/5"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {/* Destination Table Picker */}
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-[#667085] uppercase mb-2">
+                    Select Target Available Table *
+                  </label>
+                  {(() => {
+                    const availableTables = tables.filter(
+                      (t) =>
+                        t.id !== shiftSourceTable.id &&
+                        (t.status || '').toUpperCase() === 'AVAILABLE' &&
+                        !t.activeOrderId
+                    );
+
+                    if (availableTables.length === 0) {
+                      return (
+                        <div className="rounded-2xl border border-dashed border-[#E7E1DA] dark:border-[#2B3540] p-4 text-center text-xs text-[#667085]">
+                          No other available tables currently on the floor. Please free or clean a table first.
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="grid grid-cols-3 gap-2.5 max-h-48 overflow-y-auto p-1">
+                        {availableTables.map((t) => {
+                          const isSelected = shiftTargetTableId === t.id;
+                          return (
+                            <button
+                              key={t.id}
+                              type="button"
+                              onClick={() => setShiftTargetTableId(t.id)}
+                              className={`flex flex-col items-center justify-center rounded-2xl border p-3 text-center transition-all ${
+                                isSelected
+                                  ? 'border-[#DE8626] bg-[#DE8626] text-white shadow-md'
+                                  : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#1E2930] dark:text-[#F3F4F6] hover:border-[#DE8626]'
+                              }`}
+                            >
+                              <span className="text-base font-extrabold">T-{t.tableNumber}</span>
+                              <span className="text-[10px] opacity-75">{t.seatingCapacity || 4} Seats</span>
+                              <span className="text-[9px] opacity-60 truncate max-w-[80px]">
+                                {t.sectionName || 'Main'}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* Transfer Reason */}
+                <div>
+                  <label className="block text-xs font-semibold text-[#667085] uppercase mb-1">
+                    Reason for Shift (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={shiftReason}
+                    onChange={(e) => setShiftReason(e.target.value)}
+                    placeholder="e.g. Guest requested AC section / larger seating"
+                    className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3.5 py-2 text-xs font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
+                  />
+                </div>
+
+                {/* Confirm & Cancel Buttons */}
+                <div className="pt-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShiftModalOpen(false)}
+                    className="flex-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] py-2.5 text-xs font-semibold text-[#667085]"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!shiftTargetTableId || isShifting}
+                    onClick={handleTransferTable}
+                    className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-[#DE8626] py-2.5 text-xs font-bold text-white shadow-md hover:bg-[#C4721C] disabled:opacity-50"
+                  >
+                    {isShifting ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <span>Shifting...</span>
+                      </>
+                    ) : (
+                      <>
+                        <MoveRight className="h-4 w-4" />
+                        <span>Confirm Shift</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
         )}
       </AppShell>
     </AuthGuard>

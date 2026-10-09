@@ -1,7 +1,6 @@
 import { apiClient } from '../../core/network/apiClient';
 import { RestaurantWallet, WalletTransaction, WalletRechargeResponse } from '../../domain/models/Wallet';
 import { WalletEvents } from '../../core/utils/walletEvents';
-import { APP_CONSTANTS } from '../../core/constants/appConstants';
 
 // In-memory cache & fallback store for wallet balance & transactions
 const walletCache: Record<number, { balance: number; transactions: WalletTransaction[] }> = {};
@@ -125,26 +124,20 @@ export class WalletRemoteDataSource {
         amount,
         Amount: amount,
         ownerPhone: ownerPhone || '9999999999',
-        paymentPurpose: `Commission Wallet Top-up (₹${amount}) for Restaurant #${restaurantId}`,
+        paymentPurpose: `Platform Fee Wallet Top-up (₹${amount}) for Restaurant #${restaurantId}`,
         orderMeta: {
           returnUrl: 'https://admin.menza.com/wallet-status?order_id={order_id}',
           notifyUrl: 'https://api.menza.com/api/CashFreepayment/webhook/cashfree',
         },
       };
 
-      const headers: Record<string, string> = {};
-      if (APP_CONSTANTS.IS_RAZORPAY) {
-        headers['X-Payment-Gateway'] = 'Razorpay';
-      }
-
-      const response = await apiClient.post('/CashFreepayment/create-order', payload, { headers });
+      const response = await apiClient.post('/CashFreepayment/create-order', payload);
       const data = response.data || {};
       const orderId = data.orderId || data.OrderId || data.cfOrderId || `ORD_WAL_${restaurantId}_${Date.now()}`;
       const paymentSessionId = data.paymentSessionId || data.PaymentSessionId || '';
-      const instrumentResponseUrl = data.paymentLink || data.instrumentResponseUrl || '';
-      const gateway = data.gateway || data.Gateway || (APP_CONSTANTS.IS_RAZORPAY ? 'Razorpay' : 'Cashfree');
-      const keyId = data.keyId || data.KeyId || data.key || '';
-      const currency = data.currency || data.Currency || 'INR';
+      const instrumentResponseUrl = data.paymentLink || data.PaymentLink || data.instrumentResponseUrl || '';
+      const gateway = data.gateway || data.Gateway || (data.keyId ? 'Razorpay' : 'Cashfree');
+      const keyId = data.keyId || data.KeyId;
 
       return {
         success: true,
@@ -153,9 +146,9 @@ export class WalletRemoteDataSource {
         instrumentResponseUrl,
         gateway,
         keyId,
-        amount: data.amount || amount,
-        currency,
-        message: data.message || `Wallet recharge order created via ${gateway}`,
+        amount,
+        currency: data.currency || 'INR',
+        message: data.message || 'Wallet recharge order created successfully',
       };
     } catch (error: any) {
       const serverMsg = error.response?.data?.message || error.response?.data;
@@ -176,26 +169,14 @@ export class WalletRemoteDataSource {
     razorpaySignature?: string
   ): Promise<{ success: boolean; message?: string }> {
     try {
-      const payload: any = {
+      const response = await apiClient.post('/CashFreepayment/verify', {
         orderId,
-        OrderId: orderId,
         restaurantId,
-        RestaurantId: restaurantId,
         amountPaid,
-        AmountPaid: amountPaid,
         type: 4,
-        Type: 4,
-      };
-      if (razorpayPaymentId) {
-        payload.razorpayPaymentId = razorpayPaymentId;
-        payload.RazorpayPaymentId = razorpayPaymentId;
-      }
-      if (razorpaySignature) {
-        payload.razorpaySignature = razorpaySignature;
-        payload.RazorpaySignature = razorpaySignature;
-      }
-
-      const response = await apiClient.post('/CashFreepayment/verify', payload);
+        razorpayPaymentId,
+        razorpaySignature,
+      });
 
       const paymentStatus = (response.data?.paymentStatus || response.data?.status || '').toUpperCase();
       const isSuccess = paymentStatus === 'SUCCESS' || response.data?.success === true || response.data?.gatewayOrderStatus === 'PAID';

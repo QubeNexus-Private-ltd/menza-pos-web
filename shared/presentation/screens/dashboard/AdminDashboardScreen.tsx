@@ -62,15 +62,21 @@ import {
   BellRing,
   QrCode,
   Share2,
+  ArrowUpCircle,
 } from 'lucide-react-native';
 import { Colors } from '../../../core/theme/colors';
 import { Typography } from '../../../core/theme/typography';
 import { Spacing } from '../../../core/theme/spacing';
 import { useTheme } from '../../../core/theme/ThemeContext';
+import { appPermissions } from '../../../core/permissions/AppPermissionsService';
 import { StatusBadge } from '../../components/StatusBadge';
 import { useAuthStore } from '../../state/useAuthStore';
 import { usePrinterStore } from '../../state/usePrinterStore';
 import { useNotificationStore } from '../../state/useNotificationStore';
+import { useAppVersionStore } from '../../state/useAppVersionStore';
+import { useSubscriptionStore } from '../../state/useSubscriptionStore';
+import { SubscriptionGraceBanner } from '../../components/subscription/SubscriptionGraceBanner';
+import { APP_CONSTANTS } from '../../../core/constants/appConstants';
 import { isCashierOnly } from '../../../core/auth/rolePermissions';
 import { AuthRemoteDataSource } from '../../../data/datasources/AuthRemoteDataSource';
 import { SubscriptionRemoteDataSource } from '../../../data/datasources/SubscriptionRemoteDataSource';
@@ -80,6 +86,7 @@ import { SuperAdminRepositoryImpl } from '../../../data/repositories/SuperAdminR
 import { WalletRemoteDataSource } from '../../../data/datasources/WalletRemoteDataSource';
 import { WalletRepositoryImpl } from '../../../data/repositories/WalletRepositoryImpl';
 import { CashfreeSdkService } from '../../../data/datasources/CashfreeSdkService';
+import { PaymentGatewayManager } from '../../../data/datasources/PaymentGatewayManager';
 import { SubscriptionPlan, UserSubscriptionStatus } from '../../../domain/models/Subscription';
 import { RestaurantTodayRevenue } from '../../../domain/models/Order';
 import { PaymentProcessingScreen } from '../subscription/PaymentProcessingScreen';
@@ -103,6 +110,7 @@ import { TodayOrdersModal } from './TodayOrdersModal';
 import { OrderNotificationModal } from './OrderNotificationModal';
 import { OrderAlertBanner } from '../../components/OrderAlertBanner';
 import { TermsAndConditionsModal } from '../legal/TermsAndConditionsModal';
+import { PrivacyPolicyModal } from '../legal/PrivacyPolicyModal';
 import { TermsConsentCard } from '../../components/TermsConsentCard';
 import { NetworkStrengthIndicator } from '../../components/NetworkStrengthIndicator';
 import { RestaurantQrModal } from '../../components/RestaurantQrModal';
@@ -202,6 +210,14 @@ export const AdminDashboardScreen: React.FC = () => {
   const subscriptionDataSource = useMemo(() => new SubscriptionRemoteDataSource(), []);
   const orderRemoteDataSource = useMemo(() => new OrderRemoteDataSource(), []);
   const superAdminRepository = useMemo(() => new SuperAdminRepositoryImpl(new SuperAdminRemoteDataSource()), []);
+  /*
+  const {
+    updateInfo: appVersionUpdateInfo,
+    isChecking: isCheckingAppVersion,
+    checkAppVersion,
+    showUpdateModal,
+  } = useAppVersionStore();
+  */
 
   const [activeTab, setActiveTab] = useState<NavTabKey>('dashboard');
   const [restModalVisible, setRestModalVisible] = useState(false);
@@ -216,6 +232,7 @@ export const AdminDashboardScreen: React.FC = () => {
   const [activeSubscription, setActiveSubscription] = useState<UserSubscriptionStatus | null>(null);
   const [loadingSubscription, setLoadingSubscription] = useState<boolean>(true);
   const [planSelectionModalVisible, setPlanSelectionModalVisible] = useState<boolean>(false);
+  const [selectedSubscriptionDetailsModalVisible, setSelectedSubscriptionDetailsModalVisible] = useState<boolean>(false);
   const [walletModalVisible, setWalletModalVisible] = useState<boolean>(false);
   const [walletModalTab, setWalletModalTab] = useState<'recharge' | 'history'>('recharge');
   const [walletBalance, setWalletBalance] = useState<number | null>(null);
@@ -227,6 +244,9 @@ export const AdminDashboardScreen: React.FC = () => {
     amount: number;
     restaurantId: number;
     subscriptionConfigurationId: number;
+    gateway?: string;
+    paymentLink?: string;
+    keyId?: string;
   } | null>(null);
 
   // Dynamic Live Metrics State for Restaurant Operations & SuperAdmin Telemetry
@@ -240,6 +260,7 @@ export const AdminDashboardScreen: React.FC = () => {
   const [todayOrdersModalVisible, setTodayOrdersModalVisible] = useState<boolean>(false);
   const [notificationModalVisible, setNotificationModalVisible] = useState<boolean>(false);
   const [termsModalVisible, setTermsModalVisible] = useState<boolean>(false);
+  const [privacyModalVisible, setPrivacyModalVisible] = useState<boolean>(false);
   const [restaurantQrModalVisible, setRestaurantQrModalVisible] = useState<boolean>(false);
   const [operatingStatus, setOperatingStatus] = useState<StoreOperatingStatus | null>(null);
   const [operatingStatusModalVisible, setOperatingStatusModalVisible] = useState<boolean>(false);
@@ -406,11 +427,17 @@ export const AdminDashboardScreen: React.FC = () => {
 
   // Initial load when current restaurant or SuperAdmin status changes
   useEffect(() => {
+    appPermissions.requestInitialPermissions();
     if (!isSuperAdmin) {
       if (currentRestId > 0) {
         fetchSubscriptionData(currentRestId);
-        fetchTodayRevenueData(currentRestId, false);
-        fetchWalletBalance(currentRestId);
+        const t1 = setTimeout(() => fetchTodayRevenueData(currentRestId, false), 60);
+
+        const t2 = setTimeout(() => fetchWalletBalance(currentRestId), 140);
+        return () => {
+          clearTimeout(t1);
+          clearTimeout(t2);
+        };
       } else {
         setActiveSubscription(null);
         setLoadingSubscription(false);
@@ -440,10 +467,9 @@ export const AdminDashboardScreen: React.FC = () => {
     // 1. Connect SignalR WebSocket Hub for sub-second real-time notifications
     startPosSignalRConnection(currentRestId);
 
-    // 2. Initial state sync on screen mount / restaurant change
-    fetchTodayRevenueData(currentRestId, true);
-    fetchOperatingStatus(currentRestId);
-    pollRecentOrders(currentRestId);
+    // 2. Initial state sync on screen mount / restaurant change (staggered to prevent burst 429)
+    const t3 = setTimeout(() => fetchOperatingStatus(currentRestId), 180);
+    const t4 = setTimeout(() => pollRecentOrders(currentRestId), 260);
 
     // 3. Listen for store operating status updates (open/pause/closed)
     const unsubscribeStatus = onStoreOperatingStatusChanged((data) => {
@@ -531,9 +557,9 @@ export const AdminDashboardScreen: React.FC = () => {
   const fetchSubscriptionData = async (restId: number) => {
     try {
       setLoadingSubscription(true);
-      const sub = await subscriptionDataSource.getRestaurantSubscription(restId);
+      const sub = await useSubscriptionStore.getState().fetchSubscriptionStatus(restId);
       setActiveSubscription(sub);
-      if (!sub || sub.isExpired || (sub.daysRemaining ?? 0) <= 0) {
+      if (!sub || (sub.isExpired && !sub.isInGracePeriod)) {
         if (!isCashier) {
           loadSubscriptionPlans();
           setPlanSelectionModalVisible(true);
@@ -559,6 +585,27 @@ export const AdminDashboardScreen: React.FC = () => {
     }
   };
 
+  const matchedActivePlan = useMemo(() => {
+    if (!activeSubscription) return null;
+    return (
+      availablePlans.find((p) => p.id === activeSubscription.subscriptionConfigurationId) ||
+      availablePlans.find(
+        (p) =>
+          (p.subscriptionCode && p.subscriptionCode.toLowerCase() === (activeSubscription as any).subscriptionCode?.toLowerCase()) ||
+          (p.subscriptionName && p.subscriptionName.toLowerCase() === activeSubscription.planName?.toLowerCase()) ||
+          (p.planName && p.planName.toLowerCase() === activeSubscription.planName?.toLowerCase())
+      ) ||
+      null
+    );
+  }, [activeSubscription, availablePlans]);
+
+  const handleOpenSelectedSubscriptionDetails = () => {
+    if (availablePlans.length === 0) {
+      loadSubscriptionPlans();
+    }
+    setSelectedSubscriptionDetailsModalVisible(true);
+  };
+
   const handleActivatePlan = async (plan: SubscriptionPlan) => {
     if (!currentRestId) {
       Alert.alert('Selection Error', 'Please select a restaurant location first.');
@@ -579,10 +626,11 @@ export const AdminDashboardScreen: React.FC = () => {
         );
 
         if (!payRes.success || !payRes.orderId) {
-          Alert.alert('CashFree Payment Error', payRes.message || 'Could not initiate CashFree payment checkout.');
+          Alert.alert('Payment Error', payRes.message || 'Could not initiate payment checkout.');
           return;
         }
 
+        setSelectedSubscriptionDetailsModalVisible(false);
         setPlanSelectionModalVisible(false);
         setProcessingOrder({
           orderId: payRes.orderId,
@@ -590,18 +638,48 @@ export const AdminDashboardScreen: React.FC = () => {
           amount: finalPrice,
           restaurantId: currentRestId,
           subscriptionConfigurationId: plan.id,
+          gateway: payRes.gateway,
+          paymentLink: payRes.instrumentResponseUrl,
+          keyId: payRes.keyId,
         });
 
-        CashfreeSdkService.getInstance().startPayment({
-          orderId: payRes.orderId,
-          paymentSessionId: payRes.paymentSessionId || '',
-          paymentLink: payRes.instrumentResponseUrl || '',
-          environment: 'SANDBOX',
-        }).catch((sdkErr) => {
-          console.warn('CashFree Native SDK execution note:', sdkErr);
-        });
+        let paymentResult: any = null;
+        try {
+          paymentResult = await PaymentGatewayManager.getInstance().startPayment({
+            orderId: payRes.orderId,
+            paymentSessionId: payRes.paymentSessionId || '',
+            paymentLink: payRes.instrumentResponseUrl || '',
+            gateway: payRes.gateway,
+            keyId: payRes.keyId,
+            amount: finalPrice,
+            currency: payRes.currency || 'INR',
+            customerName: activeRestaurant?.restaurantName || user?.name || 'Restaurant Owner',
+            customerPhone: user?.mobile || activeRestaurant?.ownerMobile || '9999999999',
+            customerEmail: (user as any)?.email || (activeRestaurant as any)?.email || 'billing@menza.com',
+            orderNotes: `Subscription Plan: ${plan.subscriptionName || plan.planName}`,
+            environment: 'SANDBOX',
+          });
+        } catch (sdkErr) {
+          console.warn('Payment execution note:', sdkErr);
+        }
+
+        // Immediately verify and activate subscription (aligned with Wallet Recharge flow)
+        if (paymentResult?.razorpayPaymentId || paymentResult?.razorpaySignature) {
+          try {
+            await subscriptionDataSource.verifyCashFreePayment(
+              payRes.orderId,
+              currentRestId,
+              plan.id,
+              finalPrice,
+              paymentResult.razorpayPaymentId,
+              paymentResult.razorpaySignature
+            );
+          } catch (vErr) {
+            console.warn('Subscription auto-verify note:', vErr);
+          }
+        }
       } catch (err: any) {
-        Alert.alert('Payment Exception', err?.message || 'Failed to initiate CashFree PG payment.');
+        Alert.alert('Payment Exception', err?.message || 'Failed to initiate payment.');
       } finally {
         setSubscribingId(null);
       }
@@ -783,7 +861,7 @@ export const AdminDashboardScreen: React.FC = () => {
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.settingsTileTitle}>Subscription Plans & Pricing</Text>
-              <Text style={styles.settingsTileDesc}>Configure SaaS tiers, discounts, and order commission splits</Text>
+              <Text style={styles.settingsTileDesc}>Configure SaaS tiers, discounts, and order platform fee splits</Text>
             </View>
             <View style={[styles.saActionPill, { backgroundColor: '#FFF3DC', borderColor: 'rgba(229, 139, 36, 0.3)' }]}>
               <Text style={[styles.saActionPillText, { color: '#D96B14' }]}>BUILDER</Text>
@@ -847,6 +925,24 @@ export const AdminDashboardScreen: React.FC = () => {
             </View>
             <View style={[styles.saActionPill, { backgroundColor: '#FFF7ED', borderColor: 'rgba(217, 107, 20, 0.3)' }]}>
               <Text style={[styles.saActionPillText, { color: '#D96B14' }]}>LEGAL</Text>
+            </View>
+          </TouchableOpacity>
+
+          {/* Privacy Policy & Data Protection Tile */}
+          <TouchableOpacity
+            style={styles.settingsTileCard}
+            onPress={() => setPrivacyModalVisible(true)}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.settingsTileIconBox, { backgroundColor: '#ECFDF5' }]}>
+              <ShieldCheck size={20} color="#059669" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.settingsTileTitle}>Privacy Policy & Data Protection</Text>
+              <Text style={styles.settingsTileDesc}>DPDP Act 2023 compliant • Data security & grievance officer</Text>
+            </View>
+            <View style={[styles.saActionPill, { backgroundColor: '#ECFDF5', borderColor: 'rgba(5, 150, 105, 0.3)' }]}>
+              <Text style={[styles.saActionPillText, { color: '#059669' }]}>DPDP</Text>
             </View>
           </TouchableOpacity>
         </>
@@ -984,7 +1080,7 @@ export const AdminDashboardScreen: React.FC = () => {
               <Text style={styles.settingsTileDesc}>
                 {isCashier
                   ? 'View linked bank account for 100% direct QR order settlements'
-                  : 'Link bank account for 100% direct payouts via Cashfree Easy Split'}
+                  : 'Link bank account for 100% direct Payouts from QR orders'}
               </Text>
             </View>
             <ChevronRight size={16} color="#8C7A6B" />
@@ -1034,7 +1130,7 @@ export const AdminDashboardScreen: React.FC = () => {
             <ChevronRight size={16} color="#8C7A6B" />
           </TouchableOpacity>
 
-          {/* Commission Wallet & Transactions Tile */}
+          {/* Platform Fee Wallet & Transactions Tile */}
           <TouchableOpacity
             style={styles.settingsTileCard}
             onPress={() => {
@@ -1048,7 +1144,7 @@ export const AdminDashboardScreen: React.FC = () => {
             </View>
             <View style={{ flex: 1 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <Text style={styles.settingsTileTitle}>Commission Wallet & Transactions</Text>
+                <Text style={styles.settingsTileTitle}>Platform Fee Wallet & Transactions</Text>
               </View>
               <Text style={styles.settingsTileDesc}>
                 {walletBalance !== null
@@ -1091,6 +1187,22 @@ export const AdminDashboardScreen: React.FC = () => {
             <ChevronRight size={16} color="#8C7A6B" />
           </TouchableOpacity>
 
+          {/* Privacy Policy / DPDP Tile */}
+          <TouchableOpacity
+            style={styles.settingsTileCard}
+            onPress={() => setPrivacyModalVisible(true)}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.settingsTileIconBox, { backgroundColor: '#ECFDF5' }]}>
+              <ShieldCheck size={20} color="#059669" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.settingsTileTitle}>Privacy Policy & Data Protection</Text>
+              <Text style={styles.settingsTileDesc}>DPDP Act 2023 compliant • Data security & grievance redressal</Text>
+            </View>
+            <ChevronRight size={16} color="#8C7A6B" />
+          </TouchableOpacity>
+
           {/* Subscription & Billing Section (Store Owner Only) */}
           {!isCashier && (
             <>
@@ -1098,8 +1210,12 @@ export const AdminDashboardScreen: React.FC = () => {
               <TouchableOpacity
                 style={styles.settingsTileCard}
                 onPress={() => {
-                  loadSubscriptionPlans();
-                  setPlanSelectionModalVisible(true);
+                  if (activeSubscription) {
+                    handleOpenSelectedSubscriptionDetails();
+                  } else {
+                    loadSubscriptionPlans();
+                    setPlanSelectionModalVisible(true);
+                  }
                 }}
                 activeOpacity={0.8}
               >
@@ -1192,6 +1308,52 @@ export const AdminDashboardScreen: React.FC = () => {
           </View>
         </View>
       )}
+
+      {/* App Version Display (Check commented out as requested) */}
+      <View style={[styles.settingsTileCard, { marginTop: 10 }]}>
+        <View style={[styles.settingsTileIconBox, { backgroundColor: '#FFF0DE' }]}>
+          <ArrowUpCircle size={20} color="#D96B14" />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.settingsTileTitle}>Menza POS App</Text>
+          <Text style={styles.settingsTileDesc}>
+            Version {APP_CONSTANTS.APP_VERSION}
+          </Text>
+        </View>
+
+        {/* Remote version check commented out as requested
+        <TouchableOpacity
+          style={{
+            backgroundColor: '#F3F4F6',
+            paddingHorizontal: 12,
+            paddingVertical: 7,
+            borderRadius: 8,
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+          disabled={isCheckingAppVersion}
+          onPress={async () => {
+            if (appVersionUpdateInfo?.isSoftUpdateAvailable || appVersionUpdateInfo?.isForceUpdateRequired) {
+              showUpdateModal();
+              return;
+            }
+            const res = await checkAppVersion(true);
+            if (res?.isUpToDate) {
+              Alert.alert('App Up to Date', `You are running the latest version of Menza POS (v${APP_CONSTANTS.APP_VERSION}).`);
+            }
+          }}
+          activeOpacity={0.7}
+        >
+          {isCheckingAppVersion ? (
+            <ActivityIndicator size="small" color="#D96B14" />
+          ) : (
+            <Text style={{ fontSize: 11, fontWeight: '700', color: '#374151' }}>
+              {appVersionUpdateInfo?.isSoftUpdateAvailable || appVersionUpdateInfo?.isForceUpdateRequired ? 'View Update' : 'Check'}
+            </Text>
+          )}
+        </TouchableOpacity>
+        */}
+      </View>
 
       {/* Logout CTA */}
       <TouchableOpacity
@@ -1490,7 +1652,7 @@ export const AdminDashboardScreen: React.FC = () => {
                       />
                     </TouchableOpacity>
 
-                    {/* Prepaid Commission Wallet Pill */}
+                    {/* Prepaid Platform Fee Wallet Pill */}
                     {currentRestId > 0 && (
                       <WalletBalanceWidget restaurantId={currentRestId} variant="pill" onPress={() => setWalletModalVisible(true)} />
                     )}
@@ -1601,6 +1763,19 @@ export const AdminDashboardScreen: React.FC = () => {
                   <>
                     {/* RESTAURANT OWNER & CASHIER VIEW */}
 
+                    {/* LIVE SUBSCRIPTION GRACE PERIOD / EXPIRATION BANNER */}
+                    <SubscriptionGraceBanner
+                      style={{ marginHorizontal: 0, marginBottom: Spacing.md }}
+                      onRenewPress={() => {
+                        if (activeSubscription) {
+                          handleOpenSelectedSubscriptionDetails();
+                        } else {
+                          loadSubscriptionPlans();
+                          setPlanSelectionModalVisible(true);
+                        }
+                      }}
+                    />
+
                     {/* SUBSCRIPTION PROMOTION / STATUS BANNER */}
                     {!hasActiveSub && (
                       <View style={styles.subLockCard}>
@@ -1610,12 +1785,12 @@ export const AdminDashboardScreen: React.FC = () => {
                           </View>
                           <View style={{ flex: 1 }}>
                             <Text style={styles.subLockTitle}>
-                              {activeSubscription ? 'Subscription Plan Expired' : 'Standard Commission (2.5%) Active'}
+                              {activeSubscription ? 'Subscription Plan Expired' : 'No Active Subscription'}
                             </Text>
                             <Text style={styles.subLockSub}>
                               {activeSubscription
-                                ? `Plan expired on ${new Date(activeSubscription.endDate).toLocaleDateString()}. Renew to lower commission & unlock Kitchen Display System (KDS) & SMS.`
-                                : 'Subscribe to reduce platform commission (down to 1.5%) and enable Kitchen Display System (KDS) & SMS notifications.'}
+                                ? `Plan expired on ${new Date(activeSubscription.endDate).toLocaleDateString()}. Renew to lower platform fee & unlock Kitchen Display System (KDS) & SMS.`
+                                : 'Subscribe to reduce platform fee and enable Kitchen Display System (KDS) & SMS notifications.'}
                             </Text>
                           </View>
                         </View>
@@ -1643,7 +1818,7 @@ export const AdminDashboardScreen: React.FC = () => {
                       </View>
                     )}
 
-                    {/* LOW / EXHAUSTED COMMISSION WALLET BANNER */}
+                    {/* LOW / EXHAUSTED PLATFORM FEE WALLET BANNER */}
                     {walletBalance !== null && (walletBalance <= 0 || walletBalance < 200) && (
                       <View style={[styles.lowWalletBanner, walletBalance <= 0 && { backgroundColor: '#FEF2F2', borderColor: '#FECACA' }]}>
                         <View style={styles.lowWalletBannerLeft}>
@@ -1658,8 +1833,8 @@ export const AdminDashboardScreen: React.FC = () => {
                             </Text>
                             <Text style={[styles.lowWalletSubtitle, walletBalance <= 0 && { color: '#7F1D1D' }]}>
                               {walletBalance <= 0
-                                ? 'Recharge your wallet to ensure smooth automated commission deductions.'
-                                : 'Add balance for uninterrupted order placement and commission deductions.'}
+                                ? 'Recharge your wallet to ensure smooth automated platform fee deductions.'
+                                : 'Add balance for uninterrupted order placement and platform fee deductions.'}
                             </Text>
                           </View>
                         </View>
@@ -1705,7 +1880,19 @@ export const AdminDashboardScreen: React.FC = () => {
                       >
                         {/* Header Row: Status badge & Tap Hint */}
                         <View style={styles.heroHeaderRow}>
-                          <View style={styles.heroLivePill}>
+                          <TouchableOpacity
+                            style={styles.heroLivePill}
+                            onPress={() => {
+                              if (activeSubscription) {
+                                handleOpenSelectedSubscriptionDetails();
+                              } else {
+                                loadSubscriptionPlans();
+                                setPlanSelectionModalVisible(true);
+                              }
+                            }}
+                            activeOpacity={0.8}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          >
                             <View style={styles.heroLiveDot} />
                             <Text
                               style={styles.heroLivePillText}
@@ -1713,14 +1900,24 @@ export const AdminDashboardScreen: React.FC = () => {
                               ellipsizeMode="tail"
                             >
                               {hasActiveSub
-                                ? `${activeSubscription?.planName || 'Pro Plan'} • ${activeSubscription?.daysRemaining ?? 30} Days Left`
-                                : 'Standard Commission (2.5%)'}
+                                ? `${activeSubscription?.planName || 'Pro Plan'} • ${
+                                    activeSubscription?.hasQueuedRenewal
+                                      ? `${activeSubscription?.totalDaysRemaining ?? activeSubscription?.daysRemaining} Total Days`
+                                      : `${activeSubscription?.daysRemaining ?? 30} Days Left`
+                                  }`
+                                : 'No Active Plan'}
                             </Text>
-                          </View>
-                          <View style={styles.heroViewOrdersHint}>
+                            <ChevronRight size={11} color="#17845A" style={{ marginLeft: 3 }} />
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={styles.heroViewOrdersHint}
+                            onPress={() => setTodayOrdersModalVisible(true)}
+                            activeOpacity={0.7}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          >
                             <Text style={styles.heroViewOrdersHintText}>View Orders</Text>
                             <ChevronRight size={13} color="#DE8626" />
-                          </View>
+                          </TouchableOpacity>
                         </View>
 
                         {/* Middle Row: Grand Today's Revenue */}
@@ -2020,7 +2217,7 @@ export const AdminDashboardScreen: React.FC = () => {
 
                       <View style={styles.mgmtRowDivider} />
 
-                      {/* Commission Wallet & Transactions */}
+                      {/* Platform Fee Wallet & Transactions */}
                       <TouchableOpacity
                         style={styles.mgmtRowItem}
                         onPress={() => {
@@ -2033,11 +2230,11 @@ export const AdminDashboardScreen: React.FC = () => {
                           <Wallet size={18} color="#DE8626" />
                         </View>
                         <View style={{ flex: 1 }}>
-                          <Text style={styles.mgmtRowTitle}>Commission Wallet & Transactions</Text>
+                          <Text style={styles.mgmtRowTitle}>Platform Fee Wallet & Transactions</Text>
                           <Text style={styles.mgmtRowDesc}>
                             {walletBalance !== null
                               ? `Balance: ₹${walletBalance.toLocaleString('en-IN')} • View ledger statement`
-                              : 'Prepaid commission transactions & statement'}
+                              : 'Prepaid platform fee transactions & statement'}
                           </Text>
                         </View>
                         <ChevronRight size={16} color="#8C7A6B" />
@@ -2050,8 +2247,12 @@ export const AdminDashboardScreen: React.FC = () => {
                           <TouchableOpacity
                             style={styles.mgmtRowItem}
                             onPress={() => {
-                              loadSubscriptionPlans();
-                              setPlanSelectionModalVisible(true);
+                              if (activeSubscription) {
+                                handleOpenSelectedSubscriptionDetails();
+                              } else {
+                                loadSubscriptionPlans();
+                                setPlanSelectionModalVisible(true);
+                              }
                             }}
                             activeOpacity={0.7}
                           >
@@ -2086,6 +2287,26 @@ export const AdminDashboardScreen: React.FC = () => {
                           <Text style={styles.mgmtRowTitle}>Rules & Regulations (Terms)</Text>
                           <Text style={styles.mgmtRowDesc}>
                             Official 20-article compliance & legal framework
+                          </Text>
+                        </View>
+                        <ChevronRight size={16} color="#8C7A6B" />
+                      </TouchableOpacity>
+
+                      <View style={styles.mgmtRowDivider} />
+
+                      {/* Privacy Policy & DPDP */}
+                      <TouchableOpacity
+                        style={styles.mgmtRowItem}
+                        onPress={() => setPrivacyModalVisible(true)}
+                        activeOpacity={0.7}
+                      >
+                        <View style={[styles.mgmtIconBox, { backgroundColor: '#ECFDF5' }]}>
+                          <ShieldCheck size={18} color="#059669" />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.mgmtRowTitle}>Privacy Policy & Data Protection</Text>
+                          <Text style={styles.mgmtRowDesc}>
+                            DPDP Act 2023 compliance & grievance redressal
                           </Text>
                         </View>
                         <ChevronRight size={16} color="#8C7A6B" />
@@ -2157,6 +2378,322 @@ export const AdminDashboardScreen: React.FC = () => {
           </View>
         </Modal>
 
+        {/* PARTICULAR SELECTED SUBSCRIPTION DETAILS MODAL */}
+        <Modal
+          visible={selectedSubscriptionDetailsModalVisible}
+          animationType="slide"
+          transparent
+          onRequestClose={() => setSelectedSubscriptionDetailsModalVisible(false)}
+        >
+          <View style={styles.particularPlanOverlay}>
+            <View style={styles.particularPlanModalCard}>
+              {/* Header */}
+              <View style={styles.particularPlanHeader}>
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Crown size={18} color="#DE8626" />
+                    <Text style={styles.particularPlanHeaderTitle}>Subscription Details</Text>
+                  </View>
+                  <Text style={styles.particularPlanHeaderSub} numberOfLines={1}>
+                    {activeRestaurant?.restaurantName || 'My Restaurant'} • Active Store Plan
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => setSelectedSubscriptionDetailsModalVisible(false)}
+                  style={styles.modalCloseCircle}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <X size={16} color="#DE8626" />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView
+                style={{ maxHeight: Dimensions.get('window').height * 0.76 }}
+                contentContainerStyle={{ paddingBottom: Spacing.xl }}
+                showsVerticalScrollIndicator={false}
+              >
+                {/* 1. Hero Plan Identity Card */}
+                <View style={styles.particularHeroCard}>
+                  <LinearGradient
+                    colors={['#FFF9F2', '#FAF0E4']}
+                    style={styles.particularHeroGradient}
+                  >
+                    <View style={styles.particularHeroTopRow}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.particularHeroLabel}>CURRENT SUBSCRIBED PLAN</Text>
+                        <Text style={styles.particularHeroTitle}>
+                          {activeSubscription?.planName || matchedActivePlan?.subscriptionName || matchedActivePlan?.planName || 'Pro Plan'}
+                        </Text>
+                        {matchedActivePlan?.subscriptionCode ? (
+                          <View style={styles.particularCodePill}>
+                            <Text style={styles.particularCodePillText}>
+                              CODE: {matchedActivePlan.subscriptionCode}
+                            </Text>
+                          </View>
+                        ) : null}
+                      </View>
+                      <StatusBadge
+                        label={
+                          activeSubscription?.isExpired
+                            ? 'EXPIRED'
+                            : activeSubscription?.isInGracePeriod
+                            ? `GRACE (${activeSubscription.graceDaysRemaining}d)`
+                            : activeSubscription?.hasQueuedRenewal
+                            ? 'ACTIVE • RENEWED'
+                            : activeSubscription?.lifecycleState === 'PENDING'
+                            ? 'PENDING'
+                            : 'ACTIVE TIER'
+                        }
+                        variant={
+                          activeSubscription?.isExpired
+                            ? 'danger'
+                            : activeSubscription?.isInGracePeriod
+                            ? 'warning'
+                            : activeSubscription?.lifecycleState === 'PENDING'
+                            ? 'info'
+                            : 'success'
+                        }
+                      />
+                    </View>
+
+                    {/* Billing Cycle & Price Tag */}
+                    <View style={styles.particularPriceBadgeRow}>
+                      <View style={styles.particularPriceBadge}>
+                        <Text style={styles.particularPriceBadgeText}>
+                          ₹{(activeSubscription?.amountPaid ?? matchedActivePlan?.finalPrice ?? matchedActivePlan?.price ?? 0).toLocaleString('en-IN')}
+                        </Text>
+                        <Text style={styles.particularPriceCycleText}>
+                          / {matchedActivePlan?.billingCycle || 'MONTHLY'}
+                        </Text>
+                      </View>
+                      <View style={styles.particularDaysPill}>
+                        <Zap size={12} color="#DE8626" />
+                        <Text style={styles.particularDaysPillText}>
+                          {matchedActivePlan?.durationDays || matchedActivePlan?.durationInDays || 30} Days Cycle
+                        </Text>
+                      </View>
+                    </View>
+                  </LinearGradient>
+                </View>
+
+                {/* 2. Days Remaining & Coverage Breakdown */}
+                <View style={styles.particularSectionCard}>
+                  <Text style={styles.particularSectionHeader}>VALIDITY & REMAINING DAYS</Text>
+
+                  <View style={styles.particularCountdownRow}>
+                    <Text
+                      style={[
+                        styles.particularCountdownNum,
+                        activeSubscription?.isExpired && { color: '#DC2626' },
+                        activeSubscription?.isInGracePeriod && { color: '#D97706' },
+                        activeSubscription?.hasQueuedRenewal && { color: '#059669' },
+                      ]}
+                    >
+                      {activeSubscription?.isInGracePeriod
+                        ? activeSubscription.graceDaysRemaining
+                        : activeSubscription?.isExpired
+                        ? 0
+                        : (activeSubscription?.totalDaysRemaining ?? activeSubscription?.daysRemaining ?? 0)}
+                    </Text>
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <Text style={styles.particularCountdownTitle}>
+                        {activeSubscription?.isInGracePeriod
+                          ? 'Grace Period Days Remaining'
+                          : activeSubscription?.isExpired
+                          ? 'Subscription Expired'
+                          : activeSubscription?.hasQueuedRenewal
+                          ? 'Total Days Paid & Covered'
+                          : 'Days Remaining in Current Cycle'}
+                      </Text>
+                      <Text style={styles.particularCountdownSub}>
+                        {activeSubscription?.isExpired
+                          ? `Expired on: ${activeSubscription.endDate ? new Date(activeSubscription.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'N/A'}`
+                          : activeSubscription?.hasQueuedRenewal
+                          ? `Renews on: ${activeSubscription.endDate ? new Date(activeSubscription.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'N/A'}`
+                          : `Expires on: ${activeSubscription?.endDate ? new Date(activeSubscription.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'N/A'}`}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {/* Queued Renewal Banner if applicable */}
+                  {activeSubscription?.hasQueuedRenewal && (
+                    <View style={styles.particularRenewalQueuedBox}>
+                      <Sparkles size={15} color="#059669" />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.particularRenewalQueuedTitle}>Renewal Already Confirmed & Queued</Text>
+                        <Text style={styles.particularRenewalQueuedBody}>
+                          Next cycle is queued and will seamlessly take over on {activeSubscription.endDate ? new Date(activeSubscription.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : ''} with zero downtime. Total continuous coverage extends to {activeSubscription.effectiveCoverageEndDate ? new Date(activeSubscription.effectiveCoverageEndDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : ''}.
+                        </Text>
+                      </View>
+                    </View>
+                  )}
+
+                  {/* Date Grid */}
+                  <View style={styles.particularDatesGrid}>
+                    <View style={styles.particularDateCol}>
+                      <Text style={styles.particularDateLabel}>START DATE</Text>
+                      <Text style={styles.particularDateVal}>
+                        {activeSubscription?.startDate
+                          ? new Date(activeSubscription.startDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+                          : '—'}
+                      </Text>
+                    </View>
+                    <View style={styles.particularDateCol}>
+                      <Text style={styles.particularDateLabel}>CURRENT CYCLE END</Text>
+                      <Text style={styles.particularDateVal}>
+                        {activeSubscription?.endDate
+                          ? new Date(activeSubscription.endDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+                          : '—'}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+
+                {/* 3. Financial & Payment Snapshot */}
+                <View style={styles.particularSectionCard}>
+                  <Text style={styles.particularSectionHeader}>FINANCIAL & PAYMENT SUMMARY</Text>
+
+                  <View style={styles.particularInfoRow}>
+                    <Text style={styles.particularInfoLabel}>Amount Paid</Text>
+                    <Text style={styles.particularInfoValBold}>
+                      ₹{(activeSubscription?.amountPaid ?? matchedActivePlan?.finalPrice ?? matchedActivePlan?.price ?? 0).toLocaleString('en-IN')}
+                    </Text>
+                  </View>
+
+                  <View style={styles.particularInfoRow}>
+                    <Text style={styles.particularInfoLabel}>Payment Reference No</Text>
+                    <Text style={styles.particularInfoValMono} numberOfLines={1}>
+                      {activeSubscription?.paymentReferenceNo || 'Verified Online Checkout'}
+                    </Text>
+                  </View>
+
+                  <View style={styles.particularInfoRow}>
+                    <Text style={styles.particularInfoLabel}>Store Payment Status</Text>
+                    <View style={styles.particularInlineBadge}>
+                      <CheckCircle2 size={12} color="#17845A" />
+                      <Text style={styles.particularInlineBadgeText}>Payment Settled</Text>
+                    </View>
+                  </View>
+
+                  {matchedActivePlan?.includedWalletCredit && matchedActivePlan.includedWalletCredit > 0 ? (
+                    <View style={styles.particularBonusCreditRow}>
+                      <Gift size={14} color="#17845A" />
+                      <Text style={styles.particularBonusCreditText}>
+                        ₹{matchedActivePlan.includedWalletCredit.toLocaleString('en-IN')} Bonus Credit added to Store Wallet
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+
+                {/* 4. Platform Fee Model & Store Benefits */}
+                <View style={styles.particularSectionCard}>
+                  <Text style={styles.particularSectionHeader}>PLATFORM FEE & BENEFITS</Text>
+
+                  <View style={styles.particularInfoRow}>
+                    <Text style={styles.particularInfoLabel}>Platform Fee Model</Text>
+                    <Text style={styles.particularInfoVal}>
+                      {matchedActivePlan?.commissionType || 'PERCENTAGE'}
+                    </Text>
+                  </View>
+
+                  <View style={styles.particularInfoRow}>
+                    <Text style={styles.particularInfoLabel}>Effective QR Order Fee</Text>
+                    <Text style={styles.particularInfoValBold}>
+                      {matchedActivePlan?.baseCommissionPercentage ?? 0}% + ₹{matchedActivePlan?.baseFlatCommissionPerOrder ?? 0}/order
+                    </Text>
+                  </View>
+
+                  <View style={styles.particularInfoRow}>
+                    <Text style={styles.particularInfoLabel}>Per-Order Min Floor</Text>
+                    <Text style={styles.particularInfoVal}>
+                      {matchedActivePlan?.minCommissionFloorPerOrder && matchedActivePlan.minCommissionFloorPerOrder > 0
+                        ? `Floor ₹${matchedActivePlan.minCommissionFloorPerOrder.toFixed(2)}`
+                        : 'No minimum floor'}
+                    </Text>
+                  </View>
+
+                  <View style={styles.particularInfoRow}>
+                    <Text style={styles.particularInfoLabel}>Per-Order Max Cap</Text>
+                    <Text style={styles.particularInfoVal}>
+                      {matchedActivePlan?.maxCommissionCapPerOrder && matchedActivePlan.maxCommissionCapPerOrder > 0
+                        ? `Capped at ₹${matchedActivePlan.maxCommissionCapPerOrder.toFixed(2)}`
+                        : 'No upper cap'}
+                    </Text>
+                  </View>
+
+                  <View style={styles.particularInfoRow}>
+                    <Text style={styles.particularInfoLabel}>Payment Gateway Charges</Text>
+                    <Text style={[styles.particularInfoVal, { color: '#17845A', fontWeight: '700' }]}>
+                      0% (Absorbed by Menza)
+                    </Text>
+                  </View>
+                </View>
+
+                {/* 5. Entitlement Features for this Plan */}
+                <View style={styles.particularSectionCard}>
+                  <Text style={styles.particularSectionHeader}>ENABLED STORE ENTITLEMENTS</Text>
+                  <View style={styles.particularEntitlementsGrid}>
+                    {[
+                      { name: 'Table Ordering & QR Dine-in', enabled: checkEntitlement('IsTableOrderingEnabled') },
+                      { name: 'Counter POS & Fast Billing', enabled: checkEntitlement('IsCounterOrderingEnabled') },
+                      { name: 'Kitchen Display System (KDS)', enabled: checkEntitlement('IsKdsEnabled') },
+                      { name: 'Self Pickup / Takeaway', enabled: checkEntitlement('IsSelfPickupEnabled') },
+                      { name: 'Online Direct Delivery', enabled: checkEntitlement('IsDeliveryEnabled') },
+                      { name: 'SMS Alerts & Instant Receipts', enabled: checkEntitlement('IsSmsEnabled') },
+                    ].map((feat, fIdx) => (
+                      <View key={`feat-badge-${fIdx}`} style={styles.particularEntitlementChip}>
+                        <CheckCircle2 size={13} color={feat.enabled ? '#17845A' : '#9CA3AF'} />
+                        <Text style={[styles.particularEntitlementText, !feat.enabled && { color: '#9CA3AF' }]}>
+                          {feat.name}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+
+                {/* 6. Action Buttons */}
+                <View style={styles.particularActionsBox}>
+                  {matchedActivePlan && (
+                    <TouchableOpacity
+                      activeOpacity={0.88}
+                      style={styles.payBtn}
+                      onPress={() => handleActivatePlan(matchedActivePlan)}
+                      disabled={subscribingId === matchedActivePlan.id}
+                    >
+                      <LinearGradient
+                        colors={['#F59E0B', '#E58B24', '#DE8626', '#CB741B']}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 0, y: 1 }}
+                        style={styles.payBtnGradient}
+                      >
+                        {subscribingId === matchedActivePlan.id ? (
+                          <ActivityIndicator size="small" color="#FFFFFF" />
+                        ) : (
+                          <Text style={styles.payBtnText}>
+                            Renew / Extend This Plan (₹{(matchedActivePlan.finalPrice ?? matchedActivePlan.price).toLocaleString('en-IN')})
+                          </Text>
+                        )}
+                      </LinearGradient>
+                    </TouchableOpacity>
+                  )}
+
+                  <TouchableOpacity
+                    style={styles.particularExploreBtn}
+                    onPress={() => {
+                      setSelectedSubscriptionDetailsModalVisible(false);
+                      loadSubscriptionPlans();
+                      setPlanSelectionModalVisible(true);
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.particularExploreBtnText}>Explore Other Available Plans</Text>
+                  </TouchableOpacity>
+                </View>
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
+
         {/* SUBSCRIPTION PLAN SELECTION MODAL */}
         <Modal visible={planSelectionModalVisible} animationType="slide" transparent>
           <View style={styles.planModalOverlay}>
@@ -2209,18 +2746,24 @@ export const AdminDashboardScreen: React.FC = () => {
                           <Text style={styles.planDescText}>{plan.description}</Text>
                         ) : null}
 
-                        {/* Commission Breakdown Box */}
+                        {/* Platform Fee Breakdown Box */}
                         <View style={styles.ownerCommissionBox}>
                           <View style={styles.ownerCommissionRow}>
-                            <Text style={styles.ownerCommissionLabel}>Commission Model:</Text>
+                            <Text style={styles.ownerCommissionLabel}>Platform Fee Model:</Text>
                             <Text style={styles.ownerCommissionVal}>{plan.commissionType || 'PERCENTAGE'}</Text>
                           </View>
                           <View style={styles.ownerCommissionRow}>
-                            <Text style={styles.ownerCommissionLabel}>Base Order Commission:</Text>
+                            <Text style={styles.ownerCommissionLabel}>Base Platform Fee:</Text>
                             <Text style={styles.ownerCommissionVal}>
                               {plan.baseCommissionPercentage || 0}% + ₹{plan.baseFlatCommissionPerOrder || 0}/order
                             </Text>
                           </View>
+                          {plan.minCommissionFloorPerOrder && plan.minCommissionFloorPerOrder > 0 ? (
+                            <View style={styles.ownerCommissionRow}>
+                              <Text style={styles.ownerCommissionLabel}>Min Fee Floor / Order:</Text>
+                              <Text style={styles.ownerCommissionVal}>Floor ₹{plan.minCommissionFloorPerOrder.toFixed(2)}</Text>
+                            </View>
+                          ) : null}
                           {plan.maxCommissionCapPerOrder && plan.maxCommissionCapPerOrder > 0 ? (
                             <View style={styles.ownerCommissionRow}>
                               <Text style={styles.ownerCommissionLabel}>Max Fee Cap / Order:</Text>
@@ -2289,7 +2832,7 @@ export const AdminDashboardScreen: React.FC = () => {
                             {subscribingId === plan.id ? (
                               <ActivityIndicator size="small" color="#FFFFFF" />
                             ) : (
-                              <Text style={styles.payBtnText}>Pay ₹{finalPrice.toLocaleString()} via CashFree</Text>
+                              <Text style={styles.payBtnText}>Pay ₹{finalPrice.toLocaleString()} Online</Text>
                             )}
                           </LinearGradient>
                         </TouchableOpacity>
@@ -2302,7 +2845,7 @@ export const AdminDashboardScreen: React.FC = () => {
           </View>
         </Modal>
 
-        {/* CASHFREE PAYMENT PROCESSING SCREEN */}
+        {/* PAYMENT PROCESSING SCREEN */}
         {processingOrder && (
           <PaymentProcessingScreen
             visible={!!processingOrder}
@@ -2311,6 +2854,9 @@ export const AdminDashboardScreen: React.FC = () => {
             amount={processingOrder.amount}
             restaurantId={processingOrder.restaurantId}
             subscriptionConfigurationId={processingOrder.subscriptionConfigurationId}
+            gateway={processingOrder.gateway}
+            paymentLink={processingOrder.paymentLink}
+            keyId={processingOrder.keyId}
             onSuccess={() => {
               setProcessingOrder(null);
               WalletEvents.emit();
@@ -2330,7 +2876,7 @@ export const AdminDashboardScreen: React.FC = () => {
           />
         )}
 
-        {/* COMMISSION WALLET RECHARGE MODAL */}
+        {/* PLATFORM FEE WALLET RECHARGE MODAL */}
         <WalletRechargeModal
           visible={walletModalVisible}
           initialTab={walletModalTab}
@@ -2368,6 +2914,14 @@ export const AdminDashboardScreen: React.FC = () => {
         <TermsAndConditionsModal
           visible={termsModalVisible}
           onClose={() => setTermsModalVisible(false)}
+          onOpenPrivacyPolicy={() => setPrivacyModalVisible(true)}
+        />
+
+        {/* PRIVACY POLICY & DPDP DATA PROTECTION MODAL */}
+        <PrivacyPolicyModal
+          visible={privacyModalVisible}
+          onClose={() => setPrivacyModalVisible(false)}
+          onOpenTerms={() => setTermsModalVisible(true)}
         />
 
         {/* OWNER TERMS & CONDITIONS CONSENT CARD OVERLAY */}
@@ -3398,6 +3952,321 @@ const styles = StyleSheet.create({
     fontSize: Typography.fontSize.body2,
     fontWeight: Typography.fontWeight.bold,
     letterSpacing: 0.5,
+  },
+  /* PARTICULAR SELECTED SUBSCRIPTION DETAILS MODAL STYLES */
+  particularPlanOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(26, 17, 8, 0.72)',
+    justifyContent: 'flex-end',
+  },
+  particularPlanModalCard: {
+    backgroundColor: '#FAF7F2',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.lg,
+    paddingBottom: Spacing.md,
+    maxHeight: '90%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 16,
+    elevation: 10,
+  },
+  particularPlanHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingBottom: Spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E7E1DA',
+    marginBottom: Spacing.md,
+  },
+  particularPlanHeaderTitle: {
+    color: '#1F2937',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  particularPlanHeaderSub: {
+    color: '#7C6F62',
+    fontSize: 12,
+    marginTop: 2,
+    fontWeight: '500',
+  },
+  particularHeroCard: {
+    borderRadius: 16,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#EBDDCF',
+    marginBottom: Spacing.md,
+    shadowColor: '#DE8626',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  particularHeroGradient: {
+    padding: Spacing.md,
+  },
+  particularHeroTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 10,
+  },
+  particularHeroLabel: {
+    color: '#8C7A6B',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    marginBottom: 2,
+  },
+  particularHeroTitle: {
+    color: '#1F2937',
+    fontSize: 22,
+    fontWeight: '800',
+  },
+  particularCodePill: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#FFF0DE',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    marginTop: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(222, 134, 38, 0.25)',
+  },
+  particularCodePillText: {
+    color: '#B46200',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+  },
+  particularPriceBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 6,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(231, 225, 218, 0.6)',
+  },
+  particularPriceBadge: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 4,
+  },
+  particularPriceBadgeText: {
+    color: '#DE8626',
+    fontSize: 20,
+    fontWeight: '800',
+  },
+  particularPriceCycleText: {
+    color: '#7C6F62',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  particularDaysPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E7E1DA',
+  },
+  particularDaysPillText: {
+    color: '#5C4E3D',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  particularSectionCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: Spacing.md,
+    marginBottom: Spacing.md,
+    borderWidth: 1,
+    borderColor: '#E7E1DA',
+    shadowColor: '#3C2F00',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  particularSectionHeader: {
+    color: '#8C7A6B',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    marginBottom: 10,
+  },
+  particularCountdownRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  particularCountdownNum: {
+    fontSize: 34,
+    fontWeight: '900',
+    color: '#DE8626',
+  },
+  particularCountdownTitle: {
+    color: '#1F2937',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  particularCountdownSub: {
+    color: '#7C6F62',
+    fontSize: 11,
+    marginTop: 2,
+  },
+  particularRenewalQueuedBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#ECFDF5',
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    gap: 8,
+    marginVertical: 8,
+  },
+  particularRenewalQueuedTitle: {
+    color: '#065F46',
+    fontSize: 12,
+    fontWeight: '700',
+    marginBottom: 2,
+  },
+  particularRenewalQueuedBody: {
+    color: '#047857',
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  particularDatesGrid: {
+    flexDirection: 'row',
+    borderTopWidth: 1,
+    borderTopColor: '#F3EFEA',
+    paddingTop: 10,
+    marginTop: 4,
+    gap: 12,
+  },
+  particularDateCol: {
+    flex: 1,
+  },
+  particularDateLabel: {
+    color: '#8C7A6B',
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+  },
+  particularDateVal: {
+    color: '#1F2937',
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  particularInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F7F5F0',
+  },
+  particularInfoLabel: {
+    color: '#5C4E3D',
+    fontSize: 12,
+  },
+  particularInfoVal: {
+    color: '#1F2937',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  particularInfoValBold: {
+    color: '#1F2937',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  particularInfoValMono: {
+    color: '#7C6F62',
+    fontSize: 11,
+    fontWeight: '600',
+    fontFamily: 'monospace',
+    maxWidth: '55%',
+  },
+  particularInlineBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ECFDF5',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    gap: 4,
+  },
+  particularInlineBadgeText: {
+    color: '#065F46',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  particularBonusCreditRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F0FDF4',
+    padding: 10,
+    borderRadius: 8,
+    gap: 8,
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+  },
+  particularBonusCreditText: {
+    color: '#15803D',
+    fontSize: 12,
+    fontWeight: '700',
+    flex: 1,
+  },
+  particularEntitlementsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  particularEntitlementChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FAF7F2',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E7E1DA',
+    gap: 6,
+    width: '48%',
+  },
+  particularEntitlementText: {
+    color: '#1F2937',
+    fontSize: 11,
+    fontWeight: '600',
+    flex: 1,
+  },
+  particularActionsBox: {
+    marginTop: Spacing.xs,
+    gap: 10,
+  },
+  particularExploreBtn: {
+    height: 44,
+    borderRadius: Spacing.borderRadius.sm,
+    borderWidth: 1.5,
+    borderColor: '#DE8626',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFF9F2',
+  },
+  particularExploreBtnText: {
+    color: '#DE8626',
+    fontSize: Typography.fontSize.body2,
+    fontWeight: '700',
   },
   /* SETTINGS HUB STYLES */
   settingsHubScroll: {

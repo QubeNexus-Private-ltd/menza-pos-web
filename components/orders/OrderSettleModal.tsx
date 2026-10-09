@@ -269,28 +269,65 @@ export function OrderSettleModal({
             {/* Cash Tendered & Change Return */}
             {paymentMode === 'CASH' && (
               <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-3.5 space-y-2">
-                <div>
-                  <label className="block text-xs font-semibold text-[#667085] mb-1">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-semibold text-[#667085] dark:text-[#94A3B8]">
                     Cash Tendered by Customer
                   </label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-xs">₹</span>
-                    <input
-                      type="number"
-                      value={tenderedInput}
-                      onChange={(e) => setTenderedInput(e.target.value)}
-                      placeholder={String(payableAmount)}
-                      className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] pl-8 pr-3 py-2 text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6] outline-none"
-                    />
-                  </div>
+                  {tenderedInput !== '' && !isNaN(parseFloat(tenderedInput)) && (
+                    <span
+                      className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
+                        parseFloat(tenderedInput) >= payableAmount
+                          ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                          : 'bg-red-500/10 text-red-600 dark:text-red-400'
+                      }`}
+                    >
+                      {parseFloat(tenderedInput) >= payableAmount
+                        ? `Change: ₹${changeToReturn.toFixed(2)}`
+                        : `Short: ₹${(payableAmount - parseFloat(tenderedInput)).toFixed(2)}`}
+                    </span>
+                  )}
                 </div>
 
-                {changeToReturn > 0 && (
-                  <div className="flex justify-between items-center text-xs font-bold text-emerald-600 dark:text-emerald-400 pt-1">
-                    <span>Change to Return:</span>
-                    <span className="text-sm">₹{changeToReturn}</span>
-                  </div>
-                )}
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-xs text-[#DE8626]">₹</span>
+                  <input
+                    type="number"
+                    value={tenderedInput}
+                    onChange={(e) => setTenderedInput(e.target.value)}
+                    placeholder={String(payableAmount)}
+                    className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] pl-8 pr-3 py-2 text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
+                  />
+                </div>
+
+                {/* Quick Cash Preset Chips */}
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setTenderedInput(payableAmount.toFixed(0))}
+                    className="rounded-lg border border-[#DE8626] bg-amber-500/10 px-2.5 py-1 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20"
+                  >
+                    Exact (₹{payableAmount})
+                  </button>
+                  {[
+                    Math.ceil((payableAmount + 1) / 50) * 50,
+                    Math.ceil((payableAmount + 1) / 100) * 100,
+                    500,
+                    1000,
+                    2000,
+                  ]
+                    .filter((val, idx, arr) => val > payableAmount && arr.indexOf(val) === idx)
+                    .slice(0, 3)
+                    .map((val) => (
+                      <button
+                        key={`settle-chip-${val}`}
+                        type="button"
+                        onClick={() => setTenderedInput(val.toString())}
+                        className="rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-2.5 py-1 text-xs font-semibold text-[#1E2930] dark:text-[#F3F4F6] hover:border-[#DE8626]"
+                      >
+                        ₹{val}
+                      </button>
+                    ))}
+                </div>
               </div>
             )}
 

@@ -31,6 +31,8 @@ interface PrinterState {
   // Actions
   init: () => Promise<void>;
   checkStatus: () => Promise<boolean>;
+  enableBluetooth: () => Promise<boolean>;
+  openBluetoothSettings: () => Promise<boolean>;
   scanDevices: () => Promise<void>;
   connectDevice: (device: BluetoothDevice) => Promise<boolean>;
   disconnectDevice: () => Promise<boolean>;
@@ -38,6 +40,7 @@ interface PrinterState {
   setAutoPrintReceipt: (enabled: boolean) => Promise<void>;
   setAutoPrintKot: (enabled: boolean) => Promise<void>;
   setCustomFooter: (footer: string) => Promise<void>;
+  ensureConnection: () => Promise<boolean>;
   printReceipt: (data: ReceiptData) => Promise<boolean>;
   printKot: (data: ReceiptData) => Promise<boolean>;
   printBifurcatedOrder: (data: ReceiptData) => Promise<{ receiptPrinted: boolean; kotPrinted: boolean }>;
@@ -53,7 +56,7 @@ export const usePrinterStore = create<PrinterState>((set, get) => ({
   savedDevice: null,
   pairedDevices: [],
   discoveredDevices: [],
-  isBluetoothEnabled: true,
+  isBluetoothEnabled: false,
   isScanning: false,
   isConnecting: false,
   isPrinting: false,
@@ -124,7 +127,7 @@ export const usePrinterStore = create<PrinterState>((set, get) => ({
   checkStatus: async () => {
     try {
       const isEnabled = await printerService.isBluetoothEnabled();
-      const isConn = await printerService.isConnected();
+      const isConn = isEnabled ? await printerService.isConnected() : false;
       const connectedDev = isConn ? await printerService.getConnectedDevice() : null;
 
       set({
@@ -133,6 +136,29 @@ export const usePrinterStore = create<PrinterState>((set, get) => ({
       });
       return isConn;
     } catch {
+      set({ isBluetoothEnabled: false, connectedDevice: null });
+      return false;
+    }
+  },
+
+  enableBluetooth: async () => {
+    try {
+      const ok = await printerService.enableBluetooth();
+      // Recheck status after enabling
+      setTimeout(async () => {
+        const isEnabled = await printerService.isBluetoothEnabled();
+        set({ isBluetoothEnabled: isEnabled });
+      }, 1000);
+      return ok;
+    } catch {
+      return false;
+    }
+  },
+
+  openBluetoothSettings: async () => {
+    try {
+      return await printerService.openBluetoothSettings();
+    } catch {
       return false;
     }
   },
@@ -140,11 +166,40 @@ export const usePrinterStore = create<PrinterState>((set, get) => ({
   scanDevices: async () => {
     try {
       set({ isScanning: true, lastErrorMessage: null });
+
+      const isEnabled = await printerService.isBluetoothEnabled();
+      set({ isBluetoothEnabled: isEnabled });
+
+      if (!isEnabled) {
+        set({
+          isScanning: false,
+          pairedDevices: [],
+          discoveredDevices: [],
+          lastErrorMessage: 'Bluetooth is turned off. Please turn on your Bluetooth first.',
+        });
+        throw new Error('Bluetooth is turned off. Please turn on your Bluetooth first.');
+      }
+
       const paired = await printerService.getPairedDevices();
-      set({ pairedDevices: paired });
+      // Instantly show paired devices in the UI list so user doesn't wait with an empty list
+      set({
+        pairedDevices: paired,
+        discoveredDevices: paired.length > 0 ? paired : get().discoveredDevices,
+      });
 
       const discovered = await printerService.scanDevices();
-      set({ discoveredDevices: discovered, isScanning: false });
+      // Merge paired and discovered devices without duplicate MAC addresses
+      const deviceMap = new Map<string, BluetoothDevice>();
+      for (const d of discovered) {
+        if (d.address) deviceMap.set(d.address, d);
+      }
+      for (const p of paired) {
+        if (p.address && !deviceMap.has(p.address)) {
+          deviceMap.set(p.address, p);
+        }
+      }
+
+      set({ discoveredDevices: Array.from(deviceMap.values()), isScanning: false });
     } catch (err: any) {
       set({
         isScanning: false,
@@ -224,10 +279,66 @@ export const usePrinterStore = create<PrinterState>((set, get) => ({
     await AsyncStorage.setItem(STORAGE_KEYS.CUSTOM_FOOTER, footer);
   },
 
-  printReceipt: async (data: ReceiptData) => {
-    const { paperWidth, customFooter, connectedDevice } = get();
-    if (!connectedDevice) {
+  ensureConnection: async () => {
+    try {
+      const isEnabled = await printerService.isBluetoothEnabled();
+      set({ isBluetoothEnabled: isEnabled });
+      if (!isEnabled) {
+        return false;
+      }
+
+      // Check active connection
+      const isConn = await printerService.isConnected();
+      if (isConn) {
+        const currentDev = await printerService.getConnectedDevice();
+        if (currentDev) {
+          set({ connectedDevice: currentDev, isBluetoothEnabled: true });
+          return true;
+        }
+      }
+
+      // Attempt auto-reconnect using saved device
+      let saved = get().savedDevice;
+      if (!saved) {
+        const savedRaw = await AsyncStorage.getItem(STORAGE_KEYS.SAVED_DEVICE);
+        if (savedRaw) {
+          try {
+            saved = JSON.parse(savedRaw);
+            set({ savedDevice: saved });
+          } catch {}
+        }
+      }
+
+      if (saved && saved.address) {
+        set({ isConnecting: true });
+        const res = await printerService.connect(saved.address);
+        set({ isConnecting: false });
+        if (res && res.success) {
+          const dev: BluetoothDevice = {
+            name: res.name || saved.name,
+            address: res.address || saved.address,
+            isConnected: true,
+          };
+          set({ connectedDevice: dev, isBluetoothEnabled: true });
+          return true;
+        }
+      }
+
       return false;
+    } catch (err: any) {
+      set({ isConnecting: false });
+      return false;
+    }
+  },
+
+  printReceipt: async (data: ReceiptData) => {
+    let { paperWidth, customFooter, connectedDevice } = get();
+    if (!connectedDevice) {
+      await get().ensureConnection();
+      connectedDevice = get().connectedDevice;
+    }
+    if (!connectedDevice) {
+      throw new Error('No Bluetooth printer connected. Please connect your printer in Printer Settings.');
     }
 
     try {
@@ -249,9 +360,13 @@ export const usePrinterStore = create<PrinterState>((set, get) => ({
   },
 
   printKot: async (data: ReceiptData) => {
-    const { paperWidth, connectedDevice } = get();
+    let { paperWidth, connectedDevice } = get();
     if (!connectedDevice) {
-      return false;
+      await get().ensureConnection();
+      connectedDevice = get().connectedDevice;
+    }
+    if (!connectedDevice) {
+      throw new Error('No Bluetooth printer connected. Please connect your printer in Printer Settings.');
     }
 
     try {
@@ -269,9 +384,13 @@ export const usePrinterStore = create<PrinterState>((set, get) => ({
   },
 
   printBifurcatedOrder: async (data: ReceiptData) => {
-    const { paperWidth, customFooter, connectedDevice, autoPrintReceipt, autoPrintKot } = get();
+    let { paperWidth, customFooter, connectedDevice, autoPrintReceipt, autoPrintKot } = get();
     if (!connectedDevice) {
-      return { receiptPrinted: false, kotPrinted: false };
+      await get().ensureConnection();
+      connectedDevice = get().connectedDevice;
+    }
+    if (!connectedDevice) {
+      throw new Error('No Bluetooth printer connected. Please connect your printer in Printer Settings.');
     }
 
     try {

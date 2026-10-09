@@ -25,4 +25,5 @@ export interface IOrderRepository {
   settleOrder(orderId: number, data?: SettleOrderRequest): Promise<SettleOrderResponse>;
   settleTable(tableId: number): Promise<boolean>;
   getActiveOrderByTable(tableId: number, restaurantId?: number): Promise<OrderMaster | null>;
+  cancelOrder(orderId: number, reason?: string): Promise<boolean>;
 }

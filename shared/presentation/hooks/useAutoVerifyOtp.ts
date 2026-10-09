@@ -8,7 +8,7 @@ import {
   Platform,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
-import { useOtpVerification } from 'react-native-otp-auto-verify';
+import { getHash, useOtpVerification } from 'react-native-otp-auto-verify';
 import { extractOtpFromSms } from '../../core/utils/SmsHashGenerator';
 import { logger } from '../../core/logging';
 
@@ -53,8 +53,41 @@ export function useAutoVerifyOtp({
   const [isListeningState, setIsListeningState] = useState(false);
   const [clipboardOtp, setClipboardOtp] = useState<string | null>(null);
   const [hasSmsPermission, setHasSmsPermission] = useState(false);
+  const [appHash, setAppHash] = useState<string>('');
 
   const lastProcessedOtpRef = useRef<string | null>(null);
+  const onOtpReceivedRef = useRef(onOtpReceived);
+  const isListeningRef = useRef(false);
+
+  useEffect(() => {
+    onOtpReceivedRef.current = onOtpReceived;
+  }, [onOtpReceived]);
+
+  // Dynamically retrieve the 11-char Android SMS Retriever App Hash
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+
+    let isMounted = true;
+    const fetchAppHash = async () => {
+      try {
+        const hashes = await getHash();
+        const primaryHash = hashes?.[0] || '';
+        if (isMounted && primaryHash) {
+          setAppHash(primaryHash);
+        }
+      } catch (err: any) {
+        logger.auth('SMS_RETRIEVER_HASH_ERROR', 'Failed to retrieve SMS Retriever hash dynamically', {
+          error: err?.message,
+        });
+      }
+    };
+
+    fetchAppHash();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // Google SMS Retriever fallback hook
   const {
@@ -68,58 +101,31 @@ export function useAutoVerifyOtp({
 
   const handleDetectedOtp = useCallback(
     (code: string, source: 'DIRECT_SMS' | 'SMS_RETRIEVER' | 'CLIPBOARD') => {
-      if (!code || code.length !== numberOfDigits || code === lastProcessedOtpRef.current) {
+      const cleanCode = (code || '').trim();
+      if (!cleanCode || cleanCode.length !== numberOfDigits || cleanCode === lastProcessedOtpRef.current) {
         return;
       }
-      lastProcessedOtpRef.current = code;
+      lastProcessedOtpRef.current = cleanCode;
       setIsAutoDetected(true);
       setIsListeningState(false);
-      logger.auth('SMS_OTP_AUTO_DETECTED', `Auto-detected OTP via ${source}: ${code}`, {
+      logger.auth('SMS_OTP_AUTO_DETECTED', `Auto-detected OTP via ${source}: ${cleanCode}`, {
         source,
       });
-      if (onOtpReceived) {
-        onOtpReceived(code);
+      if (onOtpReceivedRef.current) {
+        onOtpReceivedRef.current(cleanCode);
       }
     },
-    [numberOfDigits, onOtpReceived]
+    [numberOfDigits]
   );
 
-  // Check and request SMS permission on Android
+  // SMS permissions are not requested to comply with Google Play SMS policy.
+  // Google SMS Retriever API and clipboard auto-detection are used without runtime permissions.
   const checkSmsPermission = useCallback(async (): Promise<boolean> => {
-    if (Platform.OS !== 'android') return false;
-    try {
-      const granted = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.RECEIVE_SMS);
-      setHasSmsPermission(granted);
-      return granted;
-    } catch {
-      return false;
-    }
+    return false;
   }, []);
 
   const requestSmsPermission = useCallback(async (): Promise<boolean> => {
-    if (Platform.OS !== 'android') return false;
-    try {
-      const result = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.RECEIVE_SMS,
-        {
-          title: 'Auto-Read OTP Verification',
-          message: 'Menza needs SMS permission to automatically read your verification code without manual typing.',
-          buttonPositive: 'Allow',
-          buttonNegative: 'Not Now',
-        }
-      );
-      const isGranted = result === PermissionsAndroid.RESULTS.GRANTED;
-      setHasSmsPermission(isGranted);
-      if (isGranted && DirectSmsModule?.startListening) {
-        try {
-          await DirectSmsModule.startListening();
-          logger.auth('SMS_RETRIEVER_STARTED', 'Direct SMS receiver active after permission grant');
-        } catch {}
-      }
-      return isGranted;
-    } catch {
-      return false;
-    }
+    return false;
   }, []);
 
   // Inspects clipboard for OTP code
@@ -127,7 +133,7 @@ export function useAutoVerifyOtp({
     try {
       const text = await Clipboard.getStringAsync();
       if (!text || typeof text !== 'string') return;
-      const code = extractOtpFromSms(text);
+      const code = extractOtpFromSms(text, numberOfDigits);
       if (code && code.length === numberOfDigits) {
         setClipboardOtp(code);
         if (code !== lastProcessedOtpRef.current) {
@@ -142,48 +148,15 @@ export function useAutoVerifyOtp({
   const pasteClipboardOtp = useCallback(async () => {
     try {
       const text = await Clipboard.getStringAsync();
-      const code = extractOtpFromSms(text);
+      const code = extractOtpFromSms(text, numberOfDigits);
       if (code && code.length === numberOfDigits) {
         handleDetectedOtp(code, 'CLIPBOARD');
       }
     } catch {}
   }, [numberOfDigits, handleDetectedOtp]);
 
-  const startListening = useCallback(async () => {
-    lastProcessedOtpRef.current = null;
-    setIsAutoDetected(false);
-    setIsListeningState(true);
-
-    // 1. Check clipboard immediately
-    inspectClipboard();
-
-    if (Platform.OS === 'android') {
-      // 2. Direct Native SMS Receiver (Works for standard SMS without hash!)
-      if (DirectSmsModule?.startListening) {
-        try {
-          const permGranted = await checkSmsPermission();
-          if (permGranted) {
-            await DirectSmsModule.startListening();
-            logger.auth('SMS_RETRIEVER_STARTED', 'Direct SMS native listener started');
-          } else {
-            // Prompt once for seamless zero-click auto-read
-            requestSmsPermission();
-          }
-        } catch (err: any) {
-          logger.auth('SMS_RETRIEVER_START_FAILED', 'Direct SMS start failed', {
-            error: err?.message,
-          });
-        }
-      }
-
-      // 3. Google SMS Retriever (Runs concurrently if SMS has hash)
-      try {
-        await startRetrieverListening();
-      } catch {}
-    }
-  }, [inspectClipboard, checkSmsPermission, requestSmsPermission, startRetrieverListening]);
-
   const stopListening = useCallback(() => {
+    isListeningRef.current = false;
     if (DirectSmsModule?.stopListening) {
       try {
         DirectSmsModule.stopListening();
@@ -195,7 +168,47 @@ export function useAutoVerifyOtp({
     setIsListeningState(false);
   }, [stopRetrieverListening]);
 
-  // Handle enabled changes
+  const startListening = useCallback(async () => {
+    // If already active, cleanly reset state before re-listening
+    if (isListeningRef.current) {
+      stopListening();
+    }
+    isListeningRef.current = true;
+    lastProcessedOtpRef.current = null;
+    setIsAutoDetected(false);
+    setIsListeningState(true);
+
+    // 1. Check clipboard immediately
+    inspectClipboard();
+
+    if (Platform.OS === 'android') {
+      // 2. Direct Native SMS Receiver (if permission was already granted)
+      if (DirectSmsModule?.startListening) {
+        try {
+          const permGranted = await checkSmsPermission();
+          if (permGranted) {
+            await DirectSmsModule.startListening();
+            logger.auth('SMS_RETRIEVER_STARTED', 'Direct SMS native listener started');
+          }
+        } catch (err: any) {
+          logger.auth('SMS_RETRIEVER_START_FAILED', 'Direct SMS start failed', {
+            error: err?.message,
+          });
+        }
+      }
+
+      // 3. Google SMS Retriever (Zero user permissions required!)
+      try {
+        await startRetrieverListening();
+      } catch (err: any) {
+        logger.auth('SMS_RETRIEVER_START_FAILED', 'Google SMS Retriever start failed', {
+          error: err?.message,
+        });
+      }
+    }
+  }, [appHash, hashCode, inspectClipboard, checkSmsPermission, startRetrieverListening, stopListening]);
+
+  // Handle enabled changes cleanly without re-render cascades
   useEffect(() => {
     if (enabled) {
       startListening();
@@ -212,7 +225,7 @@ export function useAutoVerifyOtp({
     if (!enabled) return;
 
     const sub = DeviceEventEmitter.addListener('onSmsReceived', (event: any) => {
-      const detected = event?.otp || extractOtpFromSms(event?.message || '');
+      const detected = event?.otp || extractOtpFromSms(event?.message || '', numberOfDigits);
       if (detected && detected.length === numberOfDigits) {
         handleDetectedOtp(detected, 'DIRECT_SMS');
       }
@@ -225,15 +238,16 @@ export function useAutoVerifyOtp({
 
   // 2. Google SMS Retriever Fallback
   useEffect(() => {
+    if (!enabled) return;
     let candidateOtp = retrieverOtp;
     if (!candidateOtp && retrieverSms) {
-      candidateOtp = extractOtpFromSms(retrieverSms);
+      candidateOtp = extractOtpFromSms(retrieverSms, numberOfDigits);
     }
 
     if (candidateOtp && candidateOtp.length === numberOfDigits) {
       handleDetectedOtp(candidateOtp, 'SMS_RETRIEVER');
     }
-  }, [retrieverOtp, retrieverSms, numberOfDigits, handleDetectedOtp]);
+  }, [enabled, retrieverOtp, retrieverSms, numberOfDigits, handleDetectedOtp]);
 
   // 3. Real-time Clipboard listener & AppState changes
   useEffect(() => {
@@ -261,7 +275,7 @@ export function useAutoVerifyOtp({
   return {
     isListening: isListeningState && !timeoutError,
     detectedOtp: retrieverOtp,
-    hashCode,
+    hashCode: appHash || hashCode,
     isAutoDetected,
     timeoutError,
     clipboardOtp,

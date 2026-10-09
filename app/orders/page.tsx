@@ -25,6 +25,8 @@ import {
   ArrowRight,
   Check,
   History as HistoryIcon,
+  Ban,
+  FileText,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
@@ -32,13 +34,22 @@ import { OrderSettleModal } from '@/components/orders/OrderSettleModal';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { usePrinterStore } from '@shared/presentation/state/usePrinterStore';
 import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
+import { TableRemoteDataSource } from '@shared/data/datasources/TableRemoteDataSource';
 import { OrderMaster, OrderItem } from '@shared/domain/models/Order';
 import { WebPrinterService } from '@/services/webPrinterService';
 import { WebWhatsAppService } from '@/services/whatsAppService';
 import { WebOrderHistoryService } from '@/services/orderHistoryService';
 import { ReceiptData } from '@shared/core/printer/EscPosBuilder';
+import {
+  startPosSignalRConnection,
+  onPosOrderCreated,
+  onPosOrderStatusChanged,
+  onPosOrderSettled,
+  onKitchenStatusChanged,
+} from '@/lib/signalr/signalrService';
 
 const orderDataSource = new OrderRemoteDataSource();
+const tableDataSource = new TableRemoteDataSource();
 
 type ActiveTab = 'LIVE' | 'HISTORY';
 
@@ -73,6 +84,17 @@ export default function OrdersPage() {
   const [orderTimeline, setOrderTimeline] = useState<Array<{ id?: number; action: string; description: string; createdDateUtc?: string }> | null>(null);
   const [loadingTimeline, setLoadingTimeline] = useState(false);
   const [printingOrderId, setPrintingOrderId] = useState<number | null>(null);
+  const [cancellingOrderId, setCancellingOrderId] = useState<number | null>(null);
+
+  // Helper to reliably check if order is settled
+  const isOrderSettled = useCallback((o: OrderMaster): boolean => {
+    const st = (o.status || '').toUpperCase();
+    const pay = (o.paymentStatus || '').toUpperCase();
+    if (st === 'CANCELLED') return false;
+    if (Boolean(o.settledDateUtc) || st === 'SETTLED') return true;
+    if (st === 'COMPLETED' && pay === 'PAID') return true;
+    return false;
+  }, []);
 
   // Load Data
   const loadOrders = useCallback(async () => {
@@ -86,10 +108,10 @@ export default function OrdersPage() {
 
       // Partition into live (unsettled, non-cancelled) and settled
       const active = allToday.filter(
-        (o) => o.status?.toUpperCase() !== 'SETTLED' && o.status?.toUpperCase() !== 'CANCELLED'
+        (o) => !isOrderSettled(o) && o.status?.toUpperCase() !== 'CANCELLED'
       );
       const settled = allToday.filter(
-        (o) => o.status?.toUpperCase() === 'SETTLED' || o.status?.toUpperCase() === 'CANCELLED'
+        (o) => isOrderSettled(o) || o.status?.toUpperCase() === 'CANCELLED'
       );
 
       setLiveOrders(active);
@@ -101,14 +123,31 @@ export default function OrdersPage() {
     } finally {
       setLoading(false);
     }
-  }, [currentRestId]);
+  }, [currentRestId, isOrderSettled]);
 
   useEffect(() => {
     loadOrders();
-    // Auto-refresh every 30 seconds for live updates
-    const interval = setInterval(loadOrders, 30000);
-    return () => clearInterval(interval);
-  }, [loadOrders]);
+
+    if (currentRestId) {
+      // Start Real-Time SignalR Connection
+      startPosSignalRConnection(currentRestId).catch(() => {});
+      const unsub1 = onPosOrderCreated(() => loadOrders());
+      const unsub2 = onPosOrderStatusChanged(() => loadOrders());
+      const unsub3 = onPosOrderSettled(() => loadOrders());
+      const unsub4 = onKitchenStatusChanged(() => loadOrders());
+
+      // Auto-refresh fallback every 30 seconds
+      const interval = setInterval(loadOrders, 30000);
+
+      return () => {
+        clearInterval(interval);
+        unsub1();
+        unsub2();
+        unsub3();
+        unsub4();
+      };
+    }
+  }, [currentRestId, loadOrders]);
 
   // Load Timeline for selected order
   const handleViewTimeline = async (order: OrderMaster) => {
@@ -125,8 +164,8 @@ export default function OrdersPage() {
     }
   };
 
-  // Quick Print Receipt
-  const handlePrintReceipt = async (order: OrderMaster) => {
+  // Quick Print Receipt (supports standard, duplicate reprint, or proforma/guest check)
+  const handlePrintReceipt = async (order: OrderMaster, isDuplicate = false, isProforma = false) => {
     try {
       setPrintingOrderId(order.id);
       const receiptData: ReceiptData = {
@@ -157,6 +196,8 @@ export default function OrdersPage() {
         tenderedAmount: Number(order.tenderedAmount || 0),
         changeAmount: Number(order.changeAmount || 0),
         footerMessage: customFooter || 'Thank you for dining with us! Please visit again.',
+        isDuplicate,
+        isProforma,
       };
 
       await WebPrinterService.printReceipt(receiptData, paperWidth);
@@ -164,6 +205,73 @@ export default function OrdersPage() {
       alert(`Printing failed: ${err?.message || 'Check printer connection'}`);
     } finally {
       setPrintingOrderId(null);
+    }
+  };
+
+  // Quick Print KOT (Kitchen Order Ticket)
+  const handlePrintKot = async (order: OrderMaster) => {
+    try {
+      setPrintingOrderId(order.id);
+      const kotData: ReceiptData = {
+        restaurantName: activeRestaurant?.restaurantName || order.restaurantName || 'Menza Restaurant',
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        pickupToken: order.orderNumber || String(order.id),
+        tableName: order.tableName,
+        orderType: order.orderTypeName || (order.tableId ? 'DINE_IN' : 'COUNTER'),
+        date: order.createdAt ? new Date(order.createdAt).toLocaleDateString('en-IN') : new Date().toLocaleDateString('en-IN'),
+        customerName: order.customerName,
+        customerPhone: order.mobileNumber,
+        items: Array.isArray(order.items)
+          ? order.items.map((i) => ({
+              itemName: i.itemName,
+              quantity: i.quantity,
+              unitPrice: Number(i.unitPrice || 0),
+              totalPrice: Number(i.totalPrice || (i.quantity * (i.unitPrice || 0))),
+            }))
+          : [],
+        grandTotal: Number(order.totalAmount || 0),
+        isKot: true,
+      };
+
+      await WebPrinterService.printKot(kotData, paperWidth);
+    } catch (err: any) {
+      alert(`KOT Printing failed: ${err?.message || 'Check printer connection'}`);
+    } finally {
+      setPrintingOrderId(null);
+    }
+  };
+
+  // Void / Cancel Order with mandatory reason & auto-free associated table
+  const handleCancelOrder = async (order: OrderMaster) => {
+    const reason = window.prompt(
+      `Void / Cancel Order #${order.id}?\n\nPlease enter reason for voiding this order (e.g., Customer cancelled, Guest left):`,
+      'Customer cancelled'
+    );
+    if (reason === null) return;
+    const trimmedReason = reason.trim() || 'Voided by Staff';
+
+    try {
+      setCancellingOrderId(order.id);
+      await orderDataSource.cancelOrder(order.id, trimmedReason);
+
+      if (order.tableId) {
+        await tableDataSource.freeTable(order.tableId, {
+          restaurantId: currentRestId,
+          settleActiveOrder: false,
+          remarks: `Order #${order.id} voided: ${trimmedReason}`,
+        }).catch((err) => console.warn('Free table after order cancel warning:', err));
+      }
+
+      await loadOrders();
+      if (viewingOrder?.id === order.id) {
+        setViewingOrder(null);
+      }
+      alert(`Order #${order.id} has been voided successfully.`);
+    } catch (err: any) {
+      alert(`Failed to cancel order: ${err?.message || 'Check network connection'}`);
+    } finally {
+      setCancellingOrderId(null);
     }
   };
 
@@ -252,9 +360,9 @@ export default function OrdersPage() {
   const totalSettledTodayAmount = useMemo(
     () =>
       historyOrders
-        .filter((o) => o.status?.toUpperCase() === 'SETTLED')
+        .filter((o) => isOrderSettled(o))
         .reduce((sum, o) => sum + Number(o.totalAmount || 0), 0),
-    [historyOrders]
+    [historyOrders, isOrderSettled]
   );
 
   return (
@@ -359,7 +467,7 @@ export default function OrdersPage() {
                   ₹{totalSettledTodayAmount.toLocaleString('en-IN')}
                 </span>
                 <span className="text-xs text-emerald-600 font-bold">
-                  ({historyOrders.filter((o) => o.status === 'SETTLED').length} bills)
+                  ({historyOrders.filter((o) => isOrderSettled(o)).length} bills)
                 </span>
               </div>
               <p className="mt-1 text-[11px] text-[#667085] dark:text-[#94A3B8]">
@@ -558,11 +666,44 @@ export default function OrdersPage() {
 
                         {/* Bottom: Total & Action Buttons */}
                         <div className="pt-3 border-t border-[#E7E1DA]/80 dark:border-[#2B3540]/80">
-                          <div className="flex items-baseline justify-between mb-3">
+                          <div className="flex items-baseline justify-between mb-2.5">
                             <span className="text-xs text-[#667085]">Total Bill:</span>
                             <span className="text-xl font-black text-[#DE8626]">
                               ₹{order.totalAmount}
                             </span>
+                          </div>
+
+                          {/* Quick Operations Strip: KOT, Guest Check, Void */}
+                          <div className="flex items-center justify-between gap-1 mb-2.5 pb-2 border-b border-[#E7E1DA]/60 dark:border-[#2B3540]/60">
+                            <button
+                              onClick={() => handlePrintKot(order)}
+                              disabled={printingOrderId === order.id}
+                              title="Reprint Kitchen KOT"
+                              className="flex items-center gap-1 rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] bg-black/[0.02] dark:bg-white/[0.02] px-2 py-1 text-[11px] font-semibold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-colors disabled:opacity-50"
+                            >
+                              <ChefHat className="h-3 w-3 text-amber-600" />
+                              <span>KOT</span>
+                            </button>
+
+                            <button
+                              onClick={() => handlePrintReceipt(order, false, true)}
+                              disabled={printingOrderId === order.id}
+                              title="Print Proforma / Guest Check Bill"
+                              className="flex items-center gap-1 rounded-lg border border-blue-500/30 bg-blue-500/10 px-2 py-1 text-[11px] font-semibold text-blue-700 dark:text-blue-400 hover:bg-blue-500/20 transition-colors disabled:opacity-50"
+                            >
+                              <FileText className="h-3 w-3 text-blue-600" />
+                              <span>Guest Check</span>
+                            </button>
+
+                            <button
+                              onClick={() => handleCancelOrder(order)}
+                              disabled={cancellingOrderId === order.id}
+                              title="Void / Cancel Order & Free Table"
+                              className="flex items-center gap-1 rounded-lg border border-red-500/30 bg-red-500/10 px-2 py-1 text-[11px] font-semibold text-red-600 dark:text-red-400 hover:bg-red-500/20 transition-colors disabled:opacity-50"
+                            >
+                              <Ban className="h-3 w-3 text-red-500" />
+                              <span>Void</span>
+                            </button>
                           </div>
 
                           <div className="grid grid-cols-2 gap-2">
@@ -675,7 +816,13 @@ export default function OrdersPage() {
                               {Array.isArray(order.items) ? `${order.items.length} items` : '1 item'}
                             </td>
                             <td className="py-3 px-4">
-                              <span className="rounded-lg bg-blue-500/10 px-2.5 py-1 text-[10px] font-bold text-blue-600 uppercase">
+                              <span
+                                className={`rounded-lg px-2.5 py-1 text-[10px] font-bold uppercase ${
+                                  order.paymentMode === 'DUE'
+                                    ? 'bg-amber-500/10 text-amber-600 border border-amber-500/30'
+                                    : 'bg-blue-500/10 text-blue-600'
+                                }`}
+                              >
                                 {order.paymentMode || 'CASH'}
                               </span>
                             </td>
@@ -685,16 +832,30 @@ export default function OrdersPage() {
                             <td className="py-3 px-4">
                               <span
                                 className={`rounded-md px-2 py-0.5 text-[10px] font-bold uppercase ${
-                                  order.status === 'SETTLED'
+                                  isOrderSettled(order)
                                     ? 'bg-emerald-500/10 text-emerald-600'
-                                    : 'bg-red-500/10 text-red-600'
+                                    : order.status === 'CANCELLED'
+                                    ? 'bg-red-500/10 text-red-600'
+                                    : 'bg-amber-500/10 text-[#DE8626]'
                                 }`}
                               >
-                                {order.status}
+                                {isOrderSettled(order) ? 'SETTLED' : order.status}
                               </span>
                             </td>
                             <td className="py-3 px-4 text-right">
                               <div className="inline-flex items-center gap-1.5">
+                                {/* Settle Due Bill Button */}
+                                {order.paymentMode === 'DUE' && order.status !== 'CANCELLED' && (
+                                  <button
+                                    onClick={() => setSettlingOrder(order)}
+                                    title="Settle Outstanding DUE Bill"
+                                    className="rounded-lg border border-amber-500/40 bg-amber-500/15 px-2 py-1 text-[10px] font-bold text-amber-700 dark:text-amber-400 hover:bg-amber-500/25 transition-colors inline-flex items-center gap-1"
+                                  >
+                                    <CreditCard className="h-3 w-3" />
+                                    <span>Settle Due</span>
+                                  </button>
+                                )}
+
                                 {/* View Receipt */}
                                 <button
                                   onClick={() => setReceiptModalOrder(order)}
@@ -704,14 +865,24 @@ export default function OrdersPage() {
                                   <Receipt className="h-3.5 w-3.5" />
                                 </button>
 
-                                {/* Print Thermal Receipt */}
+                                {/* Print Thermal Receipt (with Duplicate watermark) */}
                                 <button
-                                  onClick={() => handlePrintReceipt(order)}
+                                  onClick={() => handlePrintReceipt(order, true, false)}
                                   disabled={printingOrderId === order.id}
-                                  title="Reprint Receipt"
+                                  title="Reprint Receipt (Duplicate Copy)"
                                   className="rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] p-1.5 text-[#667085] hover:bg-black/5 dark:hover:bg-white/5 transition-colors disabled:opacity-50"
                                 >
                                   <Printer className="h-3.5 w-3.5" />
+                                </button>
+
+                                {/* Thermal KOT Reprint */}
+                                <button
+                                  onClick={() => handlePrintKot(order)}
+                                  disabled={printingOrderId === order.id}
+                                  title="Reprint Kitchen KOT"
+                                  className="rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] p-1.5 text-[#667085] hover:bg-black/5 dark:hover:bg-white/5 transition-colors disabled:opacity-50"
+                                >
+                                  <ChefHat className="h-3.5 w-3.5 text-amber-600" />
                                 </button>
 
                                 {/* WhatsApp Share */}
@@ -861,19 +1032,67 @@ export default function OrdersPage() {
 
               {/* Action Buttons */}
               <div className="space-y-2">
-                {viewingOrder.status !== 'SETTLED' && viewingOrder.status !== 'CANCELLED' && (
+                {/* Print Operations Strip */}
+                <div className="grid grid-cols-2 gap-2">
                   <button
-                    onClick={() => {
-                      const o = viewingOrder;
-                      setViewingOrder(null);
-                      setSettlingOrder(o);
-                    }}
-                    className="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 hover:bg-emerald-700 py-3 text-xs font-bold text-white shadow-md transition-colors"
+                    onClick={() => handlePrintKot(viewingOrder)}
+                    disabled={printingOrderId === viewingOrder.id}
+                    className="flex items-center justify-center gap-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] py-2.5 text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-colors disabled:opacity-50"
                   >
-                    <Receipt className="h-4 w-4" />
-                    <span>Settle Bill (₹{viewingOrder.totalAmount})</span>
+                    <ChefHat className="h-3.5 w-3.5 text-amber-600" />
+                    <span>Print Kitchen KOT</span>
+                  </button>
+
+                  <button
+                    onClick={() =>
+                      handlePrintReceipt(
+                        viewingOrder,
+                        isOrderSettled(viewingOrder),
+                        !isOrderSettled(viewingOrder)
+                      )
+                    }
+                    disabled={printingOrderId === viewingOrder.id}
+                    className="flex items-center justify-center gap-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] py-2.5 text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-colors disabled:opacity-50"
+                  >
+                    <Printer className="h-3.5 w-3.5 text-blue-600" />
+                    <span>
+                      {isOrderSettled(viewingOrder) ? 'Reprint Receipt' : 'Guest Check'}
+                    </span>
+                  </button>
+                </div>
+
+                {/* Settle Bill Button (if unsettled or DUE) */}
+                {viewingOrder.status !== 'CANCELLED' &&
+                  (!isOrderSettled(viewingOrder) || viewingOrder.paymentMode === 'DUE') && (
+                    <button
+                      onClick={() => {
+                        const o = viewingOrder;
+                        setViewingOrder(null);
+                        setSettlingOrder(o);
+                      }}
+                      className="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 hover:bg-emerald-700 py-3 text-xs font-bold text-white shadow-md transition-colors"
+                    >
+                      <Receipt className="h-4 w-4" />
+                      <span>
+                        {viewingOrder.paymentMode === 'DUE'
+                          ? `Settle Due Payment (₹${viewingOrder.totalAmount})`
+                          : `Settle Bill (₹${viewingOrder.totalAmount})`}
+                      </span>
+                    </button>
+                  )}
+
+                {/* Void / Cancel Button (if active) */}
+                {!isOrderSettled(viewingOrder) && viewingOrder.status !== 'CANCELLED' && (
+                  <button
+                    onClick={() => handleCancelOrder(viewingOrder)}
+                    disabled={cancellingOrderId === viewingOrder.id}
+                    className="flex w-full items-center justify-center gap-2 rounded-2xl border border-red-500/30 bg-red-500/10 py-2.5 text-xs font-bold text-red-600 hover:bg-red-500/20 transition-colors disabled:opacity-50"
+                  >
+                    <Ban className="h-4 w-4" />
+                    <span>Void / Cancel Order & Release Table</span>
                   </button>
                 )}
+
                 <button
                   onClick={() => setViewingOrder(null)}
                   className="w-full rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] py-2.5 text-xs font-semibold text-[#667085] hover:bg-black/5"

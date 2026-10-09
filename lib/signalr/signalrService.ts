@@ -10,6 +10,7 @@ const orderSettledListeners = new Set<(order: any) => void>();
 const storeStatusListeners = new Set<(status: any) => void>();
 const kitchenStatusListeners = new Set<(status: any) => void>();
 const walletBalanceListeners = new Set<(balance: any) => void>();
+const tableStatusListeners = new Set<(tableData: any) => void>();
 
 function getHubUrl(restaurantId: number): string {
   const customHubUrl = process.env.NEXT_PUBLIC_SIGNALR_HUB_URL;
@@ -126,6 +127,16 @@ export async function startPosSignalRConnection(restaurantId: number): Promise<v
     });
   });
 
+  connection.on('OnTableStatusChanged', (data) => {
+    tableStatusListeners.forEach((listener) => {
+      try {
+        listener(data);
+      } catch (err) {
+        console.warn('[SignalR] Error in OnTableStatusChanged listener:', err);
+      }
+    });
+  });
+
   connection.onreconnected(async () => {
     console.log(`[SignalR] Reconnected to restaurant #${restaurantId}`);
     try {
@@ -192,4 +203,9 @@ export function onKitchenStatusChanged(callback: (status: any) => void): () => v
 export function onWalletBalanceChanged(callback: (balance: any) => void): () => void {
   walletBalanceListeners.add(callback);
   return () => walletBalanceListeners.delete(callback);
+}
+
+export function onPosTableStatusChanged(callback: (tableData: any) => void): () => void {
+  tableStatusListeners.add(callback);
+  return () => tableStatusListeners.delete(callback);
 }

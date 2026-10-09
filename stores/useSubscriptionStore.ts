@@ -256,9 +256,9 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
   },
 
   canTakeOrders: () => {
-    const { subscription, lifecycleState, isExpired } = get();
-    // If no subscription at all, or expired, orders must be strictly blocked
-    if (!subscription || lifecycleState === 'NONE' || lifecycleState === 'EXPIRED' || isExpired) {
+    const { lifecycleState, isExpired } = get();
+    // Only block if explicitly expired beyond grace period
+    if (lifecycleState === 'EXPIRED' || isExpired) {
       return false;
     }
     return true;
@@ -266,9 +266,10 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
 
   hasEntitlement: (configKey: string): boolean => {
     const { subscription, lifecycleState, isExpired } = get();
-    if (!subscription || lifecycleState === 'NONE' || lifecycleState === 'EXPIRED' || isExpired) {
+    if (lifecycleState === 'EXPIRED' || isExpired) {
       return false;
     }
+    if (!subscription) return true; // Permissive fallback while loading or unspecified
     const entitlements = subscription.entitlements || [];
     const item = entitlements.find((e) => (e.configKey || '').toLowerCase() === configKey.toLowerCase());
     return item ? Boolean(item.isAllowed) : true;

@@ -58,4 +58,8 @@ export class OrderRepositoryImpl implements IOrderRepository {
   async getActiveOrderByTable(tableId: number, restaurantId?: number): Promise<OrderMaster | null> {
     return await this.remoteDataSource.getActiveOrderByTable(tableId, restaurantId);
   }
+
+  async cancelOrder(orderId: number, reason?: string): Promise<boolean> {
+    return await this.remoteDataSource.cancelOrder(orderId, reason);
+  }
 }

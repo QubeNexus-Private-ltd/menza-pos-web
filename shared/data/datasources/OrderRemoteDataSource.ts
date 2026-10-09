@@ -400,10 +400,18 @@ export class OrderRemoteDataSource {
           cgst: Number(item.cgst ?? item.Cgst ?? item.cgstAmount ?? item.CgstAmount ?? 0),
           sgst: Number(item.sgst ?? item.Sgst ?? item.sgstAmount ?? item.SgstAmount ?? 0),
           totalAmount: effectiveTotalAmount,
+          discountAmount: Number(item.discountAmount ?? item.DiscountAmount ?? 0),
+          paidAmount: Number(item.paidAmount ?? item.PaidAmount ?? 0),
+          pendingAmount: Number(item.pendingAmount ?? item.PendingAmount ?? 0),
+          settledDateUtc: item.settledDateUtc ?? item.SettledDateUtc ?? undefined,
+          settledBy: item.settledBy ?? item.SettledBy ? Number(item.settledBy ?? item.SettledBy) : undefined,
+          billingMode: item.billingMode ?? item.BillingMode ?? undefined,
+          tenderedAmount: item.tenderedAmount ?? item.TenderedAmount ? Number(item.tenderedAmount ?? item.TenderedAmount) : undefined,
+          changeAmount: item.changeAmount ?? item.ChangeAmount ? Number(item.changeAmount ?? item.ChangeAmount) : undefined,
           commission: Number(item.commission ?? item.Commission ?? 0),
           paymentMode: String(item.paymentMode ?? item.PaymentMode ?? 'CASH'),
-          paymentStatus: String(item.paymentStatus ?? item.PaymentStatus ?? 'PAID'),
-          status: String(item.orderStatus ?? item.OrderStatus ?? item.status ?? item.Status ?? 'Completed'),
+          paymentStatus: String(item.paymentStatus ?? item.PaymentStatus ?? 'Pending'),
+          status: String(item.orderStatus ?? item.OrderStatus ?? item.status ?? item.Status ?? 'Placed'),
           createdAt: String(item.createdDateUtc ?? item.CreatedDateUtc ?? item.createdAt ?? item.CreatedAt ?? item.orderDate ?? item.OrderDate ?? new Date().toISOString()),
           pickupToken: item.pickupToken ?? item.PickupToken ?? (item.tokenNumber ? String(item.tokenNumber) : (item.TokenNumber ? String(item.TokenNumber) : undefined)),
           tokenNumber: item.tokenNumber ?? item.TokenNumber ?? item.token ?? item.Token ?? undefined,
@@ -499,10 +507,12 @@ export class OrderRemoteDataSource {
           settledBy: item.settledBy ?? item.SettledBy ? Number(item.settledBy ?? item.SettledBy) : undefined,
           settledDateUtc: item.settledDateUtc ?? item.SettledDateUtc ?? undefined,
           billingMode: item.billingMode ?? item.BillingMode ?? undefined,
+          paidAmount: Number(item.paidAmount ?? item.PaidAmount ?? 0),
+          pendingAmount: Number(item.pendingAmount ?? item.PendingAmount ?? 0),
           commission: Number(item.commission ?? item.Commission ?? 0),
           paymentMode: String(item.paymentMode ?? item.PaymentMode ?? 'CASH'),
-          paymentStatus: String(item.paymentStatus ?? item.PaymentStatus ?? 'PAID'),
-          status: String(item.status ?? item.Status ?? item.orderStatus ?? item.OrderStatus ?? 'Completed'),
+          paymentStatus: String(item.paymentStatus ?? item.PaymentStatus ?? 'Pending'),
+          status: String(item.status ?? item.Status ?? item.orderStatus ?? item.OrderStatus ?? 'Placed'),
           createdAt: String(item.createdAt ?? item.CreatedAt ?? item.orderDate ?? item.OrderDate ?? new Date().toISOString()),
           pickupToken: item.pickupToken ?? item.PickupToken ?? (item.tokenNumber ? String(item.tokenNumber) : (item.TokenNumber ? String(item.TokenNumber) : undefined)),
           tokenNumber: item.tokenNumber ?? item.TokenNumber ?? item.token ?? item.Token ?? undefined,
@@ -574,8 +584,8 @@ export class OrderRemoteDataSource {
         paidOrdersCount: Number(raw.paidOrdersCount ?? raw.PaidOrdersCount ?? 0),
         pendingOrdersCount: Number(raw.pendingOrdersCount ?? raw.PendingOrdersCount ?? 0),
         paymentMode: String(raw.paymentMode ?? raw.PaymentMode ?? 'CASH'),
-        paymentStatus: String(raw.paymentStatus ?? raw.PaymentStatus ?? 'PAID'),
-        status: String(raw.orderStatus ?? raw.OrderStatus ?? raw.status ?? 'Active'),
+        paymentStatus: String(raw.paymentStatus ?? raw.PaymentStatus ?? 'Pending'),
+        status: String(raw.orderStatus ?? raw.OrderStatus ?? raw.status ?? 'Placed'),
         createdAt: String(raw.createdDateUtc ?? raw.CreatedDateUtc ?? raw.createdAt ?? new Date().toISOString()),
         pickupToken: raw.pickupToken ?? raw.PickupToken ?? (raw.tokenNumber ? String(raw.tokenNumber) : (raw.TokenNumber ? String(raw.TokenNumber) : undefined)),
         tokenNumber: raw.tokenNumber ?? raw.TokenNumber ?? raw.token ?? raw.Token ?? undefined,
@@ -636,8 +646,8 @@ export class OrderRemoteDataSource {
       billingMode: raw?.billingMode ?? raw?.BillingMode ?? undefined,
       commission: Number(raw?.commission ?? raw?.Commission ?? 0),
       paymentMode: String(raw?.paymentMode ?? raw?.PaymentMode ?? 'CASH'),
-      paymentStatus: String(raw?.paymentStatus ?? raw?.PaymentStatus ?? 'PAID'),
-      status: String(raw?.status ?? raw?.Status ?? raw?.orderStatus ?? raw?.OrderStatus ?? 'Confirmed'),
+      paymentStatus: String(raw?.paymentStatus ?? raw?.PaymentStatus ?? 'Pending'),
+      status: String(raw?.status ?? raw?.Status ?? raw?.orderStatus ?? raw?.OrderStatus ?? 'Placed'),
       createdAt: String(raw?.createdAt ?? raw?.CreatedAt ?? raw?.createdDateUtc ?? raw?.CreatedDateUtc ?? raw?.orderDate ?? raw?.OrderDate ?? new Date().toISOString()),
       pickupToken: raw?.pickupToken ?? raw?.PickupToken ?? (raw?.tokenNumber ? String(raw?.tokenNumber) : (raw?.TokenNumber ? String(raw?.TokenNumber) : undefined)),
       tokenNumber: raw?.tokenNumber ?? raw?.TokenNumber ?? raw?.token ?? raw?.Token ?? undefined,
@@ -665,11 +675,13 @@ export class OrderRemoteDataSource {
       tableNumber: (order as any).tableNumber || undefined,
       sectionName: (order as any).sectionName || undefined,
       orderStatus: (order as any).orderStatus || 'Confirmed',
-      paymentStatus: (order as any).paymentStatus || undefined,
+      paymentStatus: (order as any).paymentStatus || ((order as any).billingMode === 'POST_PAID' ? 'Pending' : undefined),
       billingMode: (order as any).billingMode || undefined,
       source: (order as any).source || 'POS_ADMIN',
       deviceId: (order as any).deviceId || 'ADMIN_APP',
-      paymentMode: (order as any).paymentMode || 'CASH',
+      paymentMode: (order as any).billingMode === 'POST_PAID' || (order as any).paymentStatus === 'Pending'
+        ? ((order as any).paymentMode || 'PENDING')
+        : ((order as any).paymentMode || 'CASH'),
       tenderedAmount: (order as any).tenderedAmount ?? undefined,
       changeAmount: (order as any).changeAmount ?? undefined,
       cgst: (order as any).cgst || 0,
@@ -694,6 +706,22 @@ export class OrderRemoteDataSource {
   async updateOrderStatus(orderId: number, status: string): Promise<boolean> {
     try {
       const response = await apiClient.post(`/Order/${orderId}/Status`, { status });
+      return response.status === 200 || response.status === 204;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * POST /api/Order/{orderId}/Status
+   * Cancels / voids an order with optional reason
+   */
+  async cancelOrder(orderId: number, reason?: string): Promise<boolean> {
+    try {
+      const response = await apiClient.post(`/Order/${orderId}/Status`, {
+        status: 'Cancelled',
+        reason: reason || 'Cancelled by staff',
+      });
       return response.status === 200 || response.status === 204;
     } catch {
       return false;

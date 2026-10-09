@@ -56,6 +56,7 @@ import {
   startPosSignalRConnection,
   onStoreOperatingStatusChanged,
   onWalletBalanceChanged,
+  onPosTableStatusChanged,
 } from '@/lib/signalr/signalrService';
 
 const catalogDataSource = new CatalogRemoteDataSource();
@@ -160,6 +161,8 @@ export default function PosPage() {
         if (opRes.status === 'fulfilled' && opRes.value) {
           setOperatingStatus(opRes.value);
         }
+        // Load subscription status in background
+        useSubscriptionStore.getState().fetchSubscriptionStatus(currentRestId).catch(() => {});
       } catch (err) {
         console.warn('POS data load failed', err);
       } finally {
@@ -189,10 +192,19 @@ export default function PosPage() {
       }
     });
 
+    const unsubTable = onPosTableStatusChanged((tableData) => {
+      if (isMounted && tableData && currentRestId) {
+        tableDataSource.getTables(currentRestId).then((tList) => {
+          if (isMounted) setTables(tList);
+        }).catch(() => {});
+      }
+    });
+
     return () => {
       isMounted = false;
       unsubStatus();
       unsubWallet();
+      unsubTable();
     };
   }, [currentRestId]);
 
@@ -290,6 +302,12 @@ export default function PosPage() {
     setCart((prev) => prev.filter((ci) => ci.itemId !== itemId));
   };
 
+  const clearCartOnly = () => {
+    setCart([]);
+    setDiscountAmount(0);
+    setTenderedAmount('');
+  };
+
   const clearCart = () => {
     setCart([]);
     setSelectedTable(null);
@@ -297,6 +315,12 @@ export default function PosPage() {
     setCustomerPhone('');
     setDiscountAmount(0);
     setTenderedAmount('');
+    setActiveTableOrder(null);
+  };
+
+  const clearFullSale = () => {
+    clearCart();
+    setOrderSuccessData(null);
   };
 
   // GST & Tax Calculations
@@ -571,15 +595,27 @@ export default function PosPage() {
         };
 
         // Automatic Thermal Printing if enabled in Settings
-        if (autoPrintReceipt && !isPostPaidKOT) {
-          WebPrinterService.printReceipt(receiptData, paperWidth).catch((err) =>
-            console.warn('Auto print receipt error:', err)
-          );
-        }
-        if (autoPrintKot || isPostPaidKOT) {
-          WebPrinterService.printKot(receiptData, paperWidth).catch((err) =>
-            console.warn('Auto print KOT error:', err)
-          );
+        if (!isPostPaidKOT) {
+          if (autoPrintReceipt && autoPrintKot) {
+            WebPrinterService.printBifurcatedOrder(receiptData, paperWidth, true, true).catch((err) =>
+              console.warn('Auto print bifurcated error:', err)
+            );
+          } else if (autoPrintReceipt) {
+            WebPrinterService.printReceipt(receiptData, paperWidth).catch((err) =>
+              console.warn('Auto print receipt error:', err)
+            );
+          } else if (autoPrintKot) {
+            WebPrinterService.printStationKots(receiptData, paperWidth).catch((err) =>
+              console.warn('Auto print KOT error:', err)
+            );
+          }
+        } else {
+          // KOT only
+          if (autoPrintKot || isPostPaidKOT) {
+            WebPrinterService.printStationKots(receiptData, paperWidth).catch((err) =>
+              console.warn('Auto print KOT error:', err)
+            );
+          }
         }
 
         setOrderSuccessData({
@@ -599,12 +635,16 @@ export default function PosPage() {
           receiptData,
         });
 
-        clearCart();
-        setSettleModalOpen(false);
-
-        // If it was a table order, re-fetch active table tab
-        if (selectedTable?.id) {
-          loadActiveTableOrder(selectedTable.id);
+        if (isPostPaidKOT) {
+          clearCartOnly();
+          setSettleModalOpen(false);
+          // If it was a table order, reload running active order on table
+          if (selectedTable?.id) {
+            loadActiveTableOrder(selectedTable.id);
+          }
+        } else {
+          clearCart();
+          setSettleModalOpen(false);
         }
       }
     } catch (err: any) {
@@ -1340,8 +1380,16 @@ export default function PosPage() {
                   <MessageCircle className="h-4 w-4" />
                   <span>WhatsApp</span>
                 </button>
+                {orderSuccessData.paymentMode?.includes('KOT') ? (
+                  <button
+                    onClick={() => setOrderSuccessData(null)}
+                    className="flex items-center justify-center rounded-xl bg-emerald-600 py-2.5 text-xs font-bold text-white shadow-md hover:bg-emerald-700 transition-colors"
+                  >
+                    <span>Continue Tab</span>
+                  </button>
+                ) : null}
                 <button
-                  onClick={() => setOrderSuccessData(null)}
+                  onClick={clearFullSale}
                   className="flex items-center justify-center rounded-xl bg-[#DE8626] py-2.5 text-xs font-bold text-white shadow-md hover:bg-[#C4721C] transition-colors"
                 >
                   <span>New Sale</span>

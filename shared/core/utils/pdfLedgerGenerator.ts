@@ -15,7 +15,7 @@ export interface GenerateLedgerPdfOptions {
 
 export class PdfLedgerGenerator {
   /**
-   * Generates a polished HTML statement for the commission wallet ledger
+   * Generates a polished HTML statement for the platform fee wallet ledger
    */
   static generateLedgerHtml(options: GenerateLedgerPdfOptions): string {
     const {
@@ -328,7 +328,7 @@ export class PdfLedgerGenerator {
               <div class="logo-badge">M</div>
               <div>
                 <div class="brand-title">${restaurantName}</div>
-                <div class="brand-subtitle">Commission Wallet Ledger & Statement</div>
+                <div class="brand-subtitle">Platform Fee Wallet Ledger & Statement</div>
               </div>
             </div>
             <div class="statement-tag">
@@ -365,7 +365,7 @@ export class PdfLedgerGenerator {
               <div class="bento-value green">+₹${(totalRecharged || totalCredits).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
             </div>
             <div class="bento-card">
-              <div class="bento-label">Commission Paid</div>
+              <div class="bento-label">Platform Fee Paid</div>
               <div class="bento-value red">-₹${(totalCommissionPaid || totalDebits).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
             </div>
             <div class="bento-card">
@@ -399,7 +399,7 @@ export class PdfLedgerGenerator {
           <!-- Footer -->
           <div class="footer-section">
             <div>
-              <strong>Menza Hospitality SaaS POS</strong> • Multi-Store POS & Commission Engine<br />
+              <strong>Menza Hospitality SaaS POS</strong> • Multi-Store POS & Platform Fee Engine<br />
               This is a digitally generated financial statement and does not require a physical signature.
             </div>
             <div class="security-badge">

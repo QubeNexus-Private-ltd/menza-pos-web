@@ -66,7 +66,7 @@ export default function PosPage() {
   const { activeRestaurant, restaurants } = useAuthStore();
   const { markOrderAsKnown } = useNotificationStore();
   const { paperWidth, customFooter, autoPrintReceipt, autoPrintKot } = usePrinterStore();
-  const { canTakeOrders, openRenewalModal } = useSubscriptionStore();
+  const { canTakeOrders, hasEntitlement, openRenewalModal } = useSubscriptionStore();
 
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
@@ -223,7 +223,12 @@ export default function PosPage() {
     if (cart.length === 0 || isPlacingOrder) return;
 
     if (!canTakeOrders()) {
-      alert('Your restaurant subscription has expired beyond the grace period. Order taking and billing are locked until your plan is renewed.');
+      openRenewalModal();
+      return;
+    }
+
+    if (orderType === 'DINE_IN' && !hasEntitlement('IsTableOrderingEnabled')) {
+      alert('Table / Dine-in ordering is not included in your active subscription plan. Please upgrade your plan to unlock.');
       openRenewalModal();
       return;
     }

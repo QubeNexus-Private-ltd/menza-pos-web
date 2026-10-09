@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { AlertTriangle, AlertOctagon, Clock, ArrowRight, X } from 'lucide-react';
+import { AlertTriangle, AlertOctagon, Clock, ArrowRight, X, Lock } from 'lucide-react';
 import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
 
 interface SubscriptionGraceBannerProps {
@@ -16,6 +16,7 @@ export const SubscriptionGraceBanner: React.FC<SubscriptionGraceBannerProps> = (
     isInGracePeriod,
     graceDaysRemaining,
     isExpired,
+    isNoSubscription,
     hasLoaded,
     openRenewalModal,
   } = useSubscriptionStore();
@@ -23,13 +24,14 @@ export const SubscriptionGraceBanner: React.FC<SubscriptionGraceBannerProps> = (
   const [dismissedExpiringSoon, setDismissedExpiringSoon] = useState(false);
 
   // If subscription data has not loaded or active with > 3 days left, do not display
-  const isExpiringSoon = !isInGracePeriod && !isExpired && daysRemaining > 0 && daysRemaining <= 3;
+  const isExpiringSoon = !isInGracePeriod && !isExpired && !isNoSubscription && daysRemaining > 0 && daysRemaining <= 3;
+  const isNoPlan = !subscription || lifecycleState === 'NONE' || isNoSubscription;
 
   if (!hasLoaded) {
     return null;
   }
 
-  if (!isExpired && !isInGracePeriod && !isExpiringSoon && lifecycleState !== 'PENDING') {
+  if (!isNoPlan && !isExpired && !isInGracePeriod && !isExpiringSoon && lifecycleState !== 'PENDING') {
     return null;
   }
 
@@ -54,7 +56,16 @@ export const SubscriptionGraceBanner: React.FC<SubscriptionGraceBannerProps> = (
   let IconComponent = AlertTriangle;
   let canDismiss = false;
 
-  if (isExpired || lifecycleState === 'EXPIRED') {
+  if (isNoPlan) {
+    bannerClass = 'bg-red-500/15 border-red-500/40 text-red-900 dark:text-red-200';
+    badgeClass = 'bg-red-500/25 text-red-600 dark:text-red-400 border-red-500/40';
+    btnClass = 'bg-red-600 hover:bg-red-700 text-white shadow-red-500/30';
+    title = 'NO ACTIVE PLAN • POS LOCKED';
+    subtitle = 'This restaurant does not have an active subscription license. Order placement is locked.';
+    actionLabel = 'ACTIVATE PLAN';
+    IconComponent = Lock;
+    canDismiss = false;
+  } else if (isExpired || lifecycleState === 'EXPIRED') {
     bannerClass = 'bg-red-500/10 border-red-500/30 text-red-900 dark:text-red-200';
     badgeClass = 'bg-red-500/20 text-red-600 dark:text-red-400 border-red-500/30';
     btnClass = 'bg-red-600 hover:bg-red-700 text-white shadow-red-500/20';

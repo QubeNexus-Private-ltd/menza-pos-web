@@ -19,6 +19,7 @@ import { AppShell } from '@/components/layout/AppShell';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { SubscriptionRemoteDataSource } from '@shared/data/datasources/SubscriptionRemoteDataSource';
 import { SubscriptionPlan, UserSubscriptionStatus } from '@shared/domain/models/Subscription';
+import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
 
 const subscriptionDataSource = new SubscriptionRemoteDataSource();
 
@@ -173,10 +174,10 @@ export default function SubscriptionBillingPage() {
                   </div>
 
                   <button
-                    onClick={() => alert('To upgrade or renew your plan, please contact your store account administrator.')}
-                    className="mt-6 w-full rounded-2xl border border-[#DE8626] bg-amber-500/10 py-3 text-xs font-bold text-[#DE8626] hover:bg-[#DE8626] hover:text-white transition-all"
+                    onClick={() => useSubscriptionStore.getState().openRenewalModal(plan as any)}
+                    className="mt-6 w-full rounded-2xl border border-[#DE8626] bg-amber-500/10 py-3 text-xs font-bold text-[#DE8626] hover:bg-[#DE8626] hover:text-white transition-all shadow-sm"
                   >
-                    Select Plan
+                    Select & Pay
                   </button>
                 </div>
               ))}

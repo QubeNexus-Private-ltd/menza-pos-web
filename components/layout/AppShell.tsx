@@ -49,7 +49,10 @@ import {
   onPosOrderStatusChanged,
   onPosOrderSettled,
   onStoreOperatingStatusChanged,
-} from '@shared/core/network/signalrService';
+  onServiceRequestCreated,
+  onServiceRequestResolved,
+  onSignalRReconnected,
+} from '@/lib/signalr/signalrService';
 import { RestaurantDetail } from '@shared/domain/models/Restaurant';
 import { playOrderNotificationSound } from '@shared/core/utils/notificationSound';
 import { RestaurantConfigRemoteDataSource } from '@shared/data/datasources/RestaurantConfigRemoteDataSource';
@@ -192,6 +195,18 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       setOperatingStatus(status);
     });
 
+    const unsubServiceCreated = onServiceRequestCreated((req) => {
+      useNotificationStore.getState().handleServiceRequest(req);
+    });
+
+    const unsubServiceResolved = onServiceRequestResolved((res) => {
+      useNotificationStore.getState().handleServiceRequestResolved(res);
+    });
+
+    const unsubReconnected = onSignalRReconnected(() => {
+      loadData();
+    });
+
     // Poll fallback every 45s
     const pollInterval = setInterval(() => {
       orderDs
@@ -208,6 +223,9 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       unsubStatus();
       unsubSettled();
       unsubOp();
+      unsubServiceCreated();
+      unsubServiceResolved();
+      unsubReconnected();
       clearInterval(pollInterval);
     };
   }, [currentRestId, isSuperAdmin, handleOrderStatusChanged, processIncomingOrders]);
@@ -597,29 +615,52 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                         No active order alerts
                       </div>
                     ) : (
-                      notifications.slice(0, 15).map((n) => (
-                        <div
-                          key={n.id}
-                          onClick={() => markAsRead(n.id)}
-                          className={`p-3 text-xs transition-colors cursor-pointer hover:bg-black/5 dark:hover:bg-white/5 ${
-                            !n.isRead ? 'bg-amber-500/5' : ''
-                          }`}
-                        >
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="font-bold text-[#1E2930] dark:text-[#F3F4F6]">
-                              #{n.orderId} • {n.tableName}
-                            </span>
-                            <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-500/10 text-[#DE8626]">
-                              {n.orderStatus}
-                            </span>
+                      notifications.slice(0, 15).map((n) => {
+                        const isBill = n.eventType === 'REQUEST_BILL' || n.orderStatus === 'BILL_REQUESTED';
+                        const isWater = n.eventType === 'REQUEST_WATER';
+                        const isWaiter = n.eventType === 'CALL_WAITER' || n.orderStatus === 'WAITER_CALLED';
+
+                        return (
+                          <div
+                            key={n.id}
+                            onClick={() => {
+                              markAsRead(n.id);
+                              if (isBill || isWaiter || isWater) {
+                                router.push('/tables');
+                              } else {
+                                router.push('/orders');
+                              }
+                            }}
+                            className={`p-3 text-xs transition-colors cursor-pointer hover:bg-black/5 dark:hover:bg-white/5 ${
+                              !n.isRead ? (isBill ? 'bg-rose-500/5' : isWater ? 'bg-sky-500/5' : 'bg-amber-500/5') : ''
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                                {n.orderId > 0 ? `#${n.orderId} • ` : ''}{n.tableName}
+                              </span>
+                              <span
+                                className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${
+                                  isBill
+                                    ? 'bg-rose-500/15 text-rose-600 dark:text-rose-400 border border-rose-500/20'
+                                    : isWater
+                                    ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/20'
+                                    : isWaiter
+                                    ? 'bg-amber-500/15 text-[#DE8626] border border-amber-500/20'
+                                    : 'bg-amber-500/10 text-[#DE8626]'
+                                }`}
+                              >
+                                {isBill ? 'Pre-Bill' : isWater ? 'Water' : isWaiter ? 'Waiter Call' : n.orderStatus}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] line-clamp-1">{n.itemsSummary}</p>
+                            <div className="mt-1 flex items-center justify-between text-[10px] text-[#667085]">
+                              <span>{n.totalAmount > 0 ? `₹${n.totalAmount} • ` : ''}{n.customerName}</span>
+                              <span>{new Date(n.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                            </div>
                           </div>
-                          <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] line-clamp-1">{n.itemsSummary}</p>
-                          <div className="mt-1 flex items-center justify-between text-[10px] text-[#667085]">
-                            <span>₹{n.totalAmount} • {n.customerName}</span>
-                            <span>{new Date(n.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                          </div>
-                        </div>
-                      ))
+                        );
+                      })
                     )}
                   </div>
                 </div>
@@ -650,45 +691,141 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
           </div>
         </header>
 
-        {/* Global Floating Toast Alert for Incoming Real-Time Orders */}
-        {latestIncomingOrder && (
-          <div className="fixed top-20 right-4 z-50 flex w-80 sm:w-96 items-start gap-3 rounded-2xl border border-amber-400/40 bg-[#FFFFFF] dark:bg-[#1E1E1E] p-4 shadow-2xl shadow-amber-500/20 animate-bounce">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-500/20 text-[#DE8626]">
-              <Sparkles className="h-5 w-5 animate-spin" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-bold text-[#DE8626] uppercase tracking-wider">New Incoming Order!</p>
-                <button
-                  onClick={dismissBanner}
-                  className="rounded-lg p-1 text-[#667085] hover:bg-black/5"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
+        {/* Global Floating Toast Alert for Incoming Real-Time Orders & Service Requests */}
+        {latestIncomingOrder && (() => {
+          const isBillRequest = latestIncomingOrder.eventType === 'REQUEST_BILL' || latestIncomingOrder.orderStatus === 'BILL_REQUESTED';
+          const isWaiterCall = latestIncomingOrder.eventType === 'CALL_WAITER' || latestIncomingOrder.orderStatus === 'WAITER_CALLED';
+          const isWaterRequest = latestIncomingOrder.eventType === 'REQUEST_WATER';
+          const isServiceCall = isBillRequest || isWaiterCall || isWaterRequest;
+
+          return (
+            <div
+              className={`fixed top-20 right-4 z-50 flex w-80 sm:w-96 items-start gap-3 rounded-2xl border p-4 shadow-2xl transition-all ${
+                isBillRequest
+                  ? 'border-rose-500/50 bg-[#FFFFFF] dark:bg-[#1C1417] shadow-rose-500/20'
+                  : isWaterRequest
+                  ? 'border-sky-500/50 bg-[#FFFFFF] dark:bg-[#111922] shadow-sky-500/20'
+                  : isWaiterCall
+                  ? 'border-amber-500/50 bg-[#FFFFFF] dark:bg-[#1F1812] shadow-amber-500/20'
+                  : 'border-amber-400/40 bg-[#FFFFFF] dark:bg-[#1E1E1E] shadow-amber-500/20'
+              }`}
+            >
+              <div
+                className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
+                  isBillRequest
+                    ? 'bg-rose-500/20 text-rose-600 dark:text-rose-400'
+                    : isWaterRequest
+                    ? 'bg-sky-500/20 text-sky-600 dark:text-sky-400'
+                    : isWaiterCall
+                    ? 'bg-amber-500/20 text-[#DE8626]'
+                    : 'bg-amber-500/20 text-[#DE8626]'
+                }`}
+              >
+                {isBillRequest ? (
+                  <Receipt className="h-5 w-5 animate-pulse" />
+                ) : isWaterRequest ? (
+                  <Sparkles className="h-5 w-5 text-sky-500" />
+                ) : isWaiterCall ? (
+                  <Bell className="h-5 w-5 animate-bounce" />
+                ) : (
+                  <Sparkles className="h-5 w-5 animate-spin" />
+                )}
               </div>
-              <p className="text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6]">
-                Order #{latestIncomingOrder.orderId} • {latestIncomingOrder.tableName}
-              </p>
-              <p className="text-xs text-[#667085] dark:text-[#94A3B8] line-clamp-1">
-                {latestIncomingOrder.itemsSummary}
-              </p>
-              <div className="mt-2 flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    dismissBanner();
-                    router.push('/pos');
-                  }}
-                  className="rounded-lg bg-[#DE8626] px-3 py-1 text-xs font-semibold text-white shadow-sm hover:bg-[#C4721C]"
-                >
-                  Open in POS
-                </button>
-                <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
-                  ₹{latestIncomingOrder.totalAmount}
-                </span>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between">
+                  <p
+                    className={`text-xs font-bold uppercase tracking-wider ${
+                      isBillRequest
+                        ? 'text-rose-600 dark:text-rose-400'
+                        : isWaterRequest
+                        ? 'text-sky-600 dark:text-sky-400'
+                        : 'text-[#DE8626]'
+                    }`}
+                  >
+                    {isBillRequest
+                      ? 'Pre-Bill Requested!'
+                      : isWaterRequest
+                      ? 'Water Refill Requested!'
+                      : isWaiterCall
+                      ? 'Guest Calling Waiter!'
+                      : 'New Incoming Order!'}
+                  </p>
+                  <button
+                    onClick={dismissBanner}
+                    className="rounded-lg p-1 text-[#667085] hover:bg-black/5"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <p className="text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                  {latestIncomingOrder.tableName || 'Counter'} {latestIncomingOrder.orderId > 0 ? `• Order #${latestIncomingOrder.orderId}` : ''}
+                </p>
+                <p className="text-xs text-[#667085] dark:text-[#94A3B8] line-clamp-1">
+                  {latestIncomingOrder.itemsSummary}
+                </p>
+                <div className="mt-2 flex items-center gap-2">
+                  {isBillRequest ? (
+                    <>
+                      <button
+                        onClick={() => {
+                          dismissBanner();
+                          router.push('/tables');
+                        }}
+                        className="rounded-lg bg-rose-600 hover:bg-rose-700 px-3 py-1 text-xs font-bold text-white shadow-sm"
+                      >
+                        Settle Bill
+                      </button>
+                      <button
+                        onClick={() => {
+                          dismissBanner();
+                          router.push('/pos');
+                        }}
+                        className="rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] px-3 py-1 text-xs font-semibold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5"
+                      >
+                        Open POS
+                      </button>
+                    </>
+                  ) : isServiceCall ? (
+                    <>
+                      <button
+                        onClick={() => {
+                          dismissBanner();
+                          router.push('/tables');
+                        }}
+                        className="rounded-lg bg-[#DE8626] hover:bg-[#C4721C] px-3 py-1 text-xs font-bold text-white shadow-sm"
+                      >
+                        View Table
+                      </button>
+                      <button
+                        onClick={dismissBanner}
+                        className="rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] px-3 py-1 text-xs font-semibold text-[#667085] hover:bg-black/5"
+                      >
+                        Acknowledge
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => {
+                          dismissBanner();
+                          router.push('/pos');
+                        }}
+                        className="rounded-lg bg-[#DE8626] px-3 py-1 text-xs font-semibold text-white shadow-sm hover:bg-[#C4721C]"
+                      >
+                        Open in POS
+                      </button>
+                      {latestIncomingOrder.totalAmount > 0 && (
+                        <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                          ₹{latestIncomingOrder.totalAmount}
+                        </span>
+                      )}
+                    </>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* Sticky Subscription Grace Period / Expiration Notice */}
         <SubscriptionGraceBanner />

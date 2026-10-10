@@ -1269,6 +1269,25 @@ export default function PosPage() {
                 </div>
               )}
 
+              {/* Customer Pre-Bill Request Bar */}
+              {activeTableOrder &&
+                ((activeTableOrder.status || '').toUpperCase() === 'BILL_REQUESTED' ||
+                  (activeTableOrder as any).isBillRequest) && (
+                  <div className="flex items-center justify-between rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs font-bold text-rose-600 dark:text-rose-400 animate-pulse">
+                    <div className="flex items-center gap-1.5">
+                      <Receipt className="h-4 w-4" />
+                      <span>Guest requested Bill for this table!</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleOpenSettleModal}
+                      className="rounded-lg bg-rose-600 text-white px-2.5 py-1 text-[11px] font-extrabold hover:bg-rose-700 shadow-sm"
+                    >
+                      Settle Bill
+                    </button>
+                  </div>
+                )}
+
               {/* Running Table Order Banner (If Table has an Active Tab) */}
               {activeTableOrder && (
                 <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-2.5 space-y-2">

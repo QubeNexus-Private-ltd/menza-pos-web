@@ -25,6 +25,8 @@ import {
   User,
   MoveRight,
   GitMerge,
+  BellRing,
+  Droplets,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
@@ -49,6 +51,8 @@ import {
   onPosOrderSettled,
   onPosTableStatusChanged,
   onSignalRReconnected,
+  onServiceRequestCreated,
+  onServiceRequestResolved,
 } from '@/lib/signalr/signalrService';
 
 const tableDataSource = new TableRemoteDataSource();
@@ -96,6 +100,27 @@ export default function TablesPage() {
   const [mergeReason, setMergeReason] = useState('');
   const [isMerging, setIsMerging] = useState(false);
 
+  // Real-time Table Service Requests (Waiter Call, Water, Bill Request)
+  interface TableServiceRequestItem {
+    requestId: any;
+    tableId: number;
+    tableName?: string;
+    requestType: 'CALL_WAITER' | 'REQUEST_WATER' | 'REQUEST_BILL';
+    timestamp: number;
+    message?: string;
+  }
+  const [serviceRequests, setServiceRequests] = useState<TableServiceRequestItem[]>([]);
+
+  const handleResolveService = (tableId: number, requestId?: any) => {
+    setServiceRequests((prev) =>
+      prev.filter((r) => {
+        if (requestId && (r.requestId === requestId || String(r.requestId) === String(requestId))) return false;
+        if (r.tableId === tableId) return false;
+        return true;
+      })
+    );
+  };
+
   const loadData = useCallback(async () => {
     if (!currentRestId) return;
     try {
@@ -132,6 +157,46 @@ export default function TablesPage() {
       const unsub3 = onPosOrderSettled(() => loadData());
       const unsub4 = onPosTableStatusChanged(() => loadData());
       const unsub5 = onSignalRReconnected(() => loadData());
+
+      const unsub6 = onServiceRequestCreated((req) => {
+        const tableId = Number(req?.tableId || req?.TableId || 0);
+        const reqType = String(
+          req?.requestType || req?.RequestType || req?.type || (req?.isBillRequest ? 'REQUEST_BILL' : 'CALL_WAITER')
+        ).toUpperCase();
+        const typeNormalized: 'CALL_WAITER' | 'REQUEST_WATER' | 'REQUEST_BILL' = reqType.includes('WATER')
+          ? 'REQUEST_WATER'
+          : reqType.includes('BILL')
+          ? 'REQUEST_BILL'
+          : 'CALL_WAITER';
+
+        const newItem: TableServiceRequestItem = {
+          requestId: req?.id || req?.Id || req?.requestId || Date.now(),
+          tableId,
+          tableName: req?.tableName || req?.TableName,
+          requestType: typeNormalized,
+          timestamp: Date.now(),
+          message: req?.message || req?.Message,
+        };
+
+        setServiceRequests((prev) => {
+          const filtered = prev.filter((r) => !(r.tableId === tableId && r.requestType === typeNormalized));
+          return [newItem, ...filtered];
+        });
+        loadData();
+      });
+
+      const unsub7 = onServiceRequestResolved((res) => {
+        const reqId = res?.requestId || res?.id;
+        const tableId = Number(res?.tableId || 0);
+        setServiceRequests((prev) =>
+          prev.filter((r) => {
+            if (reqId && (r.requestId === reqId || String(r.requestId) === String(reqId))) return false;
+            if (tableId > 0 && r.tableId === tableId) return false;
+            return true;
+          })
+        );
+      });
+
       const interval = setInterval(loadData, 20000);
       return () => {
         clearInterval(interval);
@@ -140,6 +205,8 @@ export default function TablesPage() {
         unsub3();
         unsub4();
         unsub5();
+        unsub6();
+        unsub7();
       };
     }
   }, [currentRestId, loadData]);
@@ -442,12 +509,25 @@ export default function TablesPage() {
                 const isCleaning = statusUpper === 'CLEANING';
                 const isOccupied = statusUpper === 'OCCUPIED' || Boolean(tbl.activeOrderId) || Boolean(activeOrder);
 
+                const activeServiceReq = serviceRequests.find(
+                  (r) => r.tableId === tbl.id || r.tableName === tbl.tableNumber || r.tableName === tbl.tableName
+                );
+                const hasBillRequest = activeServiceReq?.requestType === 'REQUEST_BILL';
+                const hasWaterRequest = activeServiceReq?.requestType === 'REQUEST_WATER';
+                const hasWaiterCall = activeServiceReq?.requestType === 'CALL_WAITER';
+
                 return (
                   <div
                     key={tbl.id}
                     onClick={() => handleSelectTable(tbl)}
                     className={`group relative flex flex-col justify-between rounded-3xl border p-4 shadow-sm transition-all cursor-pointer select-none ${
-                      isOccupied
+                      hasBillRequest
+                        ? 'border-rose-500 ring-2 ring-rose-500/30 bg-rose-500/[0.03] hover:shadow-md'
+                        : hasWaterRequest
+                        ? 'border-sky-500 ring-2 ring-sky-500/30 bg-sky-500/[0.03] hover:shadow-md'
+                        : hasWaiterCall
+                        ? 'border-amber-500 ring-2 ring-amber-500/30 bg-amber-500/[0.03] hover:shadow-md'
+                        : isOccupied
                         ? 'border-amber-400/80 bg-gradient-to-br from-amber-500/10 to-[#FFFFFF] dark:to-[#1B2127] hover:border-[#DE8626] hover:shadow-md'
                         : isBilled
                         ? 'border-amber-500/80 bg-amber-500/5 hover:border-amber-500 hover:shadow-md'
@@ -491,7 +571,7 @@ export default function TablesPage() {
                         </div>
                       </div>
 
-                      {/* Large Table Number */}
+                      {/* Large Table Number & Live Service Request Badge */}
                       <div className="my-2">
                         <div className="flex items-center justify-between">
                           <h3 className="text-xl font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
@@ -520,6 +600,36 @@ export default function TablesPage() {
                             })()
                           )}
                         </div>
+
+                        {activeServiceReq && (
+                          <div
+                            className={`my-1.5 flex items-center gap-1.5 rounded-xl px-2 py-0.5 text-[10px] font-extrabold border animate-pulse ${
+                              hasBillRequest
+                                ? 'border-rose-500/40 bg-rose-500/15 text-rose-600 dark:text-rose-400'
+                                : hasWaterRequest
+                                ? 'border-sky-500/40 bg-sky-500/15 text-sky-600 dark:text-sky-400'
+                                : 'border-amber-500/40 bg-amber-500/15 text-[#DE8626]'
+                            }`}
+                          >
+                            {hasBillRequest ? (
+                              <>
+                                <Receipt className="h-3 w-3" />
+                                <span className="truncate">Pre-Bill Requested</span>
+                              </>
+                            ) : hasWaterRequest ? (
+                              <>
+                                <Droplets className="h-3 w-3" />
+                                <span className="truncate">Water Refill</span>
+                              </>
+                            ) : (
+                              <>
+                                <BellRing className="h-3 w-3" />
+                                <span className="truncate">Waiter Called</span>
+                              </>
+                            )}
+                          </div>
+                        )}
+
                         <p className="text-[10px] text-[#667085] dark:text-[#94A3B8] truncate">
                           {tbl.sectionName || 'Main Dining'}
                         </p>
@@ -607,6 +717,64 @@ export default function TablesPage() {
                     <X className="h-4 w-4" />
                   </button>
                 </div>
+
+                {/* Live Service Request Bar (Waiter Call / Pre-Bill / Water) */}
+                {(() => {
+                  const activeServiceReq = serviceRequests.find(
+                    (r) =>
+                      r.tableId === actionTable.id ||
+                      r.tableName === actionTable.tableNumber ||
+                      r.tableName === actionTable.tableName
+                  );
+                  if (!activeServiceReq) return null;
+                  const isBillReq = activeServiceReq.requestType === 'REQUEST_BILL';
+                  const isWaterReq = activeServiceReq.requestType === 'REQUEST_WATER';
+
+                  return (
+                    <div
+                      className={`mb-4 flex items-center justify-between rounded-2xl border p-3 ${
+                        isBillReq
+                          ? 'border-rose-500/40 bg-rose-500/10 text-rose-700 dark:text-rose-300'
+                          : isWaterReq
+                          ? 'border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300'
+                          : 'border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-200'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        {isBillReq ? (
+                          <Receipt className="h-4 w-4 text-rose-600 dark:text-rose-400 animate-pulse" />
+                        ) : isWaterReq ? (
+                          <Droplets className="h-4 w-4 text-sky-600 dark:text-sky-400" />
+                        ) : (
+                          <BellRing className="h-4 w-4 text-[#DE8626] animate-bounce" />
+                        )}
+                        <div>
+                          <p className="text-xs font-bold">
+                            {isBillReq
+                              ? 'Guest Requested Pre-Bill'
+                              : isWaterReq
+                              ? 'Water Refill Requested'
+                              : 'Guest Called Waiter'}
+                          </p>
+                          <p className="text-[10px] opacity-80">
+                            {new Date(activeServiceReq.timestamp).toLocaleTimeString([], {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                            {activeServiceReq.message ? ` • ${activeServiceReq.message}` : ''}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleResolveService(actionTable.id, activeServiceReq.requestId)}
+                        className="rounded-xl border border-current px-2.5 py-1 text-[11px] font-bold hover:bg-black/5 transition-colors"
+                      >
+                        Acknowledge
+                      </button>
+                    </div>
+                  );
+                })()}
 
                 {/* Table Details & Active Order Card */}
                 <div className="rounded-2xl bg-[#FAF7F2] dark:bg-[#151A20] p-4 space-y-2.5 text-xs mb-4 overflow-y-auto max-h-[45vh]">

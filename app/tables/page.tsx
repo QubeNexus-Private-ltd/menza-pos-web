@@ -24,6 +24,7 @@ import {
   Phone,
   User,
   MoveRight,
+  GitMerge,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
@@ -41,6 +42,14 @@ import { RestaurantConfig } from '@shared/domain/models/RestaurantConfig';
 import { ReceiptData } from '@shared/core/printer/EscPosBuilder';
 import { WebPrinterService } from '@/services/webPrinterService';
 import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
+import {
+  startPosSignalRConnection,
+  onPosOrderCreated,
+  onPosOrderStatusChanged,
+  onPosOrderSettled,
+  onPosTableStatusChanged,
+  onSignalRReconnected,
+} from '@/lib/signalr/signalrService';
 
 const tableDataSource = new TableRemoteDataSource();
 const orderDataSource = new OrderRemoteDataSource();
@@ -80,6 +89,13 @@ export default function TablesPage() {
   const [shiftReason, setShiftReason] = useState('');
   const [isShifting, setIsShifting] = useState(false);
 
+  // Table Merge Modal
+  const [mergeModalOpen, setMergeModalOpen] = useState(false);
+  const [mergeTargetTable, setMergeTargetTable] = useState<TableMaster | null>(null);
+  const [selectedMergeSourceIds, setSelectedMergeSourceIds] = useState<number[]>([]);
+  const [mergeReason, setMergeReason] = useState('');
+  const [isMerging, setIsMerging] = useState(false);
+
   const loadData = useCallback(async () => {
     if (!currentRestId) return;
     try {
@@ -108,7 +124,25 @@ export default function TablesPage() {
 
   useEffect(() => {
     loadData();
-  }, [loadData]);
+
+    if (currentRestId) {
+      startPosSignalRConnection(currentRestId).catch(() => {});
+      const unsub1 = onPosOrderCreated(() => loadData());
+      const unsub2 = onPosOrderStatusChanged(() => loadData());
+      const unsub3 = onPosOrderSettled(() => loadData());
+      const unsub4 = onPosTableStatusChanged(() => loadData());
+      const unsub5 = onSignalRReconnected(() => loadData());
+      const interval = setInterval(loadData, 20000);
+      return () => {
+        clearInterval(interval);
+        unsub1();
+        unsub2();
+        unsub3();
+        unsub4();
+        unsub5();
+      };
+    }
+  }, [currentRestId, loadData]);
 
   // Unique sections list
   const sections = useMemo(() => {
@@ -288,6 +322,33 @@ export default function TablesPage() {
     }
   };
 
+  const handleMergeTables = async () => {
+    if (!mergeTargetTable || selectedMergeSourceIds.length === 0 || !currentRestId) {
+      alert('Please select at least one source table to merge.');
+      return;
+    }
+    try {
+      setIsMerging(true);
+      await tableDataSource.mergeTables({
+        restaurantId: currentRestId,
+        sourceTableIds: selectedMergeSourceIds,
+        targetTableId: mergeTargetTable.id,
+        reason: mergeReason.trim() || 'Guest requested table merge / joint bill',
+      });
+      setMergeModalOpen(false);
+      setMergeTargetTable(null);
+      setSelectedMergeSourceIds([]);
+      setMergeReason('');
+      setActionTable(null);
+      setActiveTableOrder(null);
+      await loadData();
+    } catch (err: any) {
+      alert(err?.message || 'Failed to merge tables');
+    } finally {
+      setIsMerging(false);
+    }
+  };
+
   const occupiedCount = tables.filter((t) => {
     const st = (t.status || '').toUpperCase();
     return st === 'OCCUPIED' || st === 'BILLED' || Boolean(t.activeOrderId);
@@ -432,9 +493,33 @@ export default function TablesPage() {
 
                       {/* Large Table Number */}
                       <div className="my-2">
-                        <h3 className="text-xl font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
-                          T-{tbl.tableNumber}
-                        </h3>
+                        <div className="flex items-center justify-between">
+                          <h3 className="text-xl font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                            T-{tbl.tableNumber}
+                          </h3>
+                          {isOccupied && activeOrder && (
+                            (() => {
+                              const elapsedMins = activeOrder.createdAt
+                                ? Math.max(0, Math.floor((Date.now() - new Date(activeOrder.createdAt).getTime()) / 60000))
+                                : 0;
+                              return (
+                                <span
+                                  className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold border ${
+                                    elapsedMins < 20
+                                      ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
+                                      : elapsedMins < 45
+                                      ? 'bg-amber-500/10 text-[#DE8626] border-amber-500/20'
+                                      : 'bg-red-500/10 text-red-600 border-red-500/20 animate-pulse'
+                                  }`}
+                                  title={`Seated ${elapsedMins} mins ago`}
+                                >
+                                  <Clock className="h-2.5 w-2.5" />
+                                  <span>{elapsedMins}m</span>
+                                </span>
+                              );
+                            })()
+                          )}
+                        </div>
                         <p className="text-[10px] text-[#667085] dark:text-[#94A3B8] truncate">
                           {tbl.sectionName || 'Main Dining'}
                         </p>
@@ -549,6 +634,17 @@ export default function TablesPage() {
                         </span>
                       </div>
 
+                      {/* Dining Duration */}
+                      {activeOrder.createdAt && (
+                        <div className="flex justify-between items-center">
+                          <span className="text-[#667085]">Dining Duration:</span>
+                          <span className="font-bold flex items-center gap-1 text-[#DE8626]">
+                            <Clock className="h-3 w-3" />
+                            {Math.max(0, Math.floor((Date.now() - new Date(activeOrder.createdAt).getTime()) / 60000))}m seated
+                          </span>
+                        </div>
+                      )}
+
                       {/* Itemized Order List */}
                       {activeOrder.items && activeOrder.items.length > 0 && (
                         <div className="mt-2 pt-2 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60 max-h-36 overflow-y-auto space-y-1.5 text-xs">
@@ -624,22 +720,38 @@ export default function TablesPage() {
                     </button>
                   </div>
 
-                  {/* Shift / Move Table Button */}
+                  {/* Shift / Move Table & Merge Tables Row */}
                   {activeOrder && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShiftSourceTable(actionTable);
-                        setShiftTargetTableId(null);
-                        setShiftReason('');
-                        setShiftModalOpen(true);
-                      }}
-                      className="flex w-full items-center justify-center gap-2 rounded-2xl border border-indigo-400/60 bg-indigo-500/10 py-2.5 text-xs font-bold text-indigo-700 dark:text-indigo-400 hover:bg-indigo-500/20 transition-colors"
-                      title="Move active order and guests to another table"
-                    >
-                      <MoveRight className="h-4 w-4" />
-                      <span>Shift Table (Move Order & Guests)</span>
-                    </button>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShiftSourceTable(actionTable);
+                          setShiftTargetTableId(null);
+                          setShiftReason('');
+                          setShiftModalOpen(true);
+                        }}
+                        className="flex items-center justify-center gap-1.5 rounded-2xl border border-indigo-400/60 bg-indigo-500/10 py-2.5 text-xs font-bold text-indigo-700 dark:text-indigo-400 hover:bg-indigo-500/20 transition-colors"
+                        title="Move active order and guests to another table"
+                      >
+                        <MoveRight className="h-3.5 w-3.5" />
+                        <span>Shift Table</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMergeTargetTable(actionTable);
+                          setSelectedMergeSourceIds([]);
+                          setMergeReason('');
+                          setMergeModalOpen(true);
+                        }}
+                        className="flex items-center justify-center gap-1.5 rounded-2xl border border-purple-400/60 bg-purple-500/10 py-2.5 text-xs font-bold text-purple-700 dark:text-purple-400 hover:bg-purple-500/20 transition-colors"
+                        title="Merge other occupied tables into this table"
+                      >
+                        <GitMerge className="h-3.5 w-3.5" />
+                        <span>Merge Tables</span>
+                      </button>
+                    </div>
                   )}
 
                   {/* Table Lifecycle Status Controls */}
@@ -946,6 +1058,153 @@ export default function TablesPage() {
                       <>
                         <MoveRight className="h-4 w-4" />
                         <span>Confirm Shift</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 7. Merge Tables Modal */}
+        {mergeModalOpen && mergeTargetTable && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+            <div className="w-full max-w-lg rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-6 shadow-2xl">
+              <div className="flex items-center justify-between mb-4 pb-3 border-b border-[#E7E1DA] dark:border-[#2B3540]">
+                <div className="flex items-center gap-2">
+                  <div className="rounded-xl bg-purple-500/10 p-2 text-purple-600 dark:text-purple-400">
+                    <GitMerge className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                      Merge Tables into Table T-{mergeTargetTable.tableNumber}
+                    </h3>
+                    <p className="text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                      Combine running orders and guests from other occupied tables into this master tab
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setMergeModalOpen(false)}
+                  className="rounded-lg p-1 text-[#667085] hover:bg-black/5"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {/* Source Tables Selector */}
+              <div className="space-y-4">
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs font-semibold text-[#667085] uppercase">
+                      Select Tables to Merge *
+                    </label>
+                    <span className="text-[11px] font-bold text-purple-600 dark:text-purple-400">
+                      {selectedMergeSourceIds.length} Selected
+                    </span>
+                  </div>
+
+                  {(() => {
+                    const mergeableTables = tables.filter((t) => {
+                      if (t.id === mergeTargetTable.id) return false;
+                      const activeOrder = getOrderForTable(t);
+                      const st = (t.status || '').toUpperCase();
+                      return st === 'OCCUPIED' || st === 'BILLED' || Boolean(t.activeOrderId) || Boolean(activeOrder);
+                    });
+
+                    if (mergeableTables.length === 0) {
+                      return (
+                        <div className="rounded-2xl border border-dashed border-[#E7E1DA] dark:border-[#2B3540] p-6 text-center text-xs text-[#667085]">
+                          No other occupied tables currently on the floor to merge into Table T-{mergeTargetTable.tableNumber}.
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 max-h-56 overflow-y-auto p-1">
+                        {mergeableTables.map((t) => {
+                          const order = getOrderForTable(t);
+                          const isSelected = selectedMergeSourceIds.includes(t.id);
+                          return (
+                            <button
+                              key={t.id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedMergeSourceIds((prev) =>
+                                  isSelected ? prev.filter((id) => id !== t.id) : [...prev, t.id]
+                                );
+                              }}
+                              className={`relative flex flex-col items-start justify-between rounded-2xl border p-3 text-left transition-all ${
+                                isSelected
+                                  ? 'border-purple-500 bg-purple-500/10 text-[#1E2930] dark:text-[#F3F4F6] shadow-sm'
+                                  : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#1E2930] dark:text-[#F3F4F6] hover:border-purple-400'
+                              }`}
+                            >
+                              <div className="flex w-full items-center justify-between mb-1">
+                                <span className="text-sm font-extrabold">T-{t.tableNumber}</span>
+                                <span
+                                  className={`h-4 w-4 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                                    isSelected
+                                      ? 'bg-purple-600 text-white'
+                                      : 'border border-[#667085]/40 text-transparent'
+                                  }`}
+                                >
+                                  ✓
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-[#667085] dark:text-[#94A3B8] truncate w-full">
+                                {order?.customerName || 'Dine-In Guest'}
+                              </div>
+                              <div className="mt-1 text-xs font-bold text-[#DE8626]">
+                                ₹{order?.totalAmount || 0}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* Merge Reason */}
+                <div>
+                  <label className="block text-xs font-semibold text-[#667085] uppercase mb-1">
+                    Reason / Notes (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={mergeReason}
+                    onChange={(e) => setMergeReason(e.target.value)}
+                    placeholder="e.g. Guests joined tables for dinner party"
+                    className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3.5 py-2 text-xs font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-purple-500"
+                  />
+                </div>
+
+                {/* Confirm & Cancel Buttons */}
+                <div className="pt-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setMergeModalOpen(false)}
+                    className="flex-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] py-2.5 text-xs font-semibold text-[#667085]"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={selectedMergeSourceIds.length === 0 || isMerging}
+                    onClick={handleMergeTables}
+                    className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 py-2.5 text-xs font-bold text-white shadow-md disabled:opacity-50 transition-colors"
+                  >
+                    {isMerging ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <span>Merging Tables...</span>
+                      </>
+                    ) : (
+                      <>
+                        <GitMerge className="h-4 w-4" />
+                        <span>Confirm Merge ({selectedMergeSourceIds.length})</span>
                       </>
                     )}
                   </button>

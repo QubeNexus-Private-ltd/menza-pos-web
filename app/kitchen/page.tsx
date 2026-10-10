@@ -19,6 +19,10 @@ import {
   Sparkles,
   Eye,
   Printer,
+  Volume2,
+  VolumeX,
+  Zap,
+  Keyboard,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
@@ -34,6 +38,7 @@ import {
   onPosOrderStatusChanged,
   onKitchenStatusChanged,
   onPosOrderSettled,
+  onSignalRReconnected,
 } from '@/lib/signalr/signalrService';
 
 const orderDataSource = new OrderRemoteDataSource();
@@ -49,6 +54,43 @@ export default function KitchenKdsPage() {
   const [selectedStationCode, setSelectedStationCode] = useState<string>('ALL');
   const [updatingOrderId, setUpdatingOrderId] = useState<number | null>(null);
   const [printingOrderId, setPrintingOrderId] = useState<number | null>(null);
+  const [soundEnabled, setSoundEnabled] = useState(true);
+
+  // Play two-tone Web Audio chime when a new order arrives
+  const playKitchenChime = useCallback(() => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const now = ctx.currentTime;
+
+      // Note 1: D5 (587.33 Hz)
+      const osc1 = ctx.createOscillator();
+      const gain1 = ctx.createGain();
+      osc1.type = 'sine';
+      osc1.frequency.setValueAtTime(587.33, now);
+      gain1.gain.setValueAtTime(0.15, now);
+      gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+      osc1.connect(gain1);
+      gain1.connect(ctx.destination);
+      osc1.start(now);
+      osc1.stop(now + 0.25);
+
+      // Note 2: A5 (880.00 Hz)
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      osc2.type = 'sine';
+      osc2.frequency.setValueAtTime(880, now + 0.12);
+      gain2.gain.setValueAtTime(0.2, now + 0.12);
+      gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+      osc2.connect(gain2);
+      gain2.connect(ctx.destination);
+      osc2.start(now + 0.12);
+      osc2.stop(now + 0.45);
+    } catch {
+      // Audio playback best-effort
+    }
+  }, []);
 
   // Add Station Modal
   const [stationModalOpen, setStationModalOpen] = useState(false);
@@ -93,10 +135,14 @@ export default function KitchenKdsPage() {
     if (currentRestId) {
       // Real-time SignalR sync
       startPosSignalRConnection(currentRestId).catch(() => {});
-      const unsub1 = onPosOrderCreated(() => loadData());
+      const unsub1 = onPosOrderCreated(() => {
+        if (soundEnabled) playKitchenChime();
+        loadData();
+      });
       const unsub2 = onPosOrderStatusChanged(() => loadData());
       const unsub3 = onKitchenStatusChanged(() => loadData());
       const unsub4 = onPosOrderSettled(() => loadData());
+      const unsub5 = onSignalRReconnected(() => loadData());
 
       const interval = setInterval(loadData, 20000);
       return () => {
@@ -105,9 +151,10 @@ export default function KitchenKdsPage() {
         unsub2();
         unsub3();
         unsub4();
+        unsub5();
       };
     }
-  }, [currentRestId, loadData]);
+  }, [currentRestId, loadData, playKitchenChime, soundEnabled]);
 
   const handleUpdateStatus = async (orderId: number, nextStatus: string) => {
     try {
@@ -205,6 +252,65 @@ export default function KitchenKdsPage() {
     });
   }, [activeOrders, selectedStationCode]);
 
+  const getNextStatus = (currentStatus?: string) => {
+    const st = (currentStatus || '').toUpperCase();
+    if (st === 'PLACED' || st === 'CONFIRMED' || st === 'PENDING') return 'Preparing';
+    if (st === 'PREPARING' || st === 'COOKING' || st === 'IN_PROGRESS') return 'Ready';
+    if (st === 'READY') return 'Served';
+    return 'Preparing';
+  };
+
+  const handleBumpOrder = useCallback(
+    async (order: OrderMaster) => {
+      const nextStatus = getNextStatus(order.status);
+      await handleUpdateStatus(order.id, nextStatus);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+
+  // KDS Bump Bar Keyboard Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const targetTag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      if (targetTag === 'input' || targetTag === 'textarea' || targetTag === 'select') return;
+
+      if (e.key >= '1' && e.key <= '9') {
+        const index = parseInt(e.key, 10) - 1;
+        if (filteredOrders[index]) {
+          e.preventDefault();
+          handleBumpOrder(filteredOrders[index]);
+        }
+        return;
+      }
+
+      if (e.code === 'Space' || e.key === 'Enter') {
+        if (filteredOrders[0]) {
+          e.preventDefault();
+          handleBumpOrder(filteredOrders[0]);
+        }
+        return;
+      }
+
+      if (e.key.toLowerCase() === 'p') {
+        if (filteredOrders[0]) {
+          e.preventDefault();
+          handlePrintKot(filteredOrders[0]);
+        }
+        return;
+      }
+
+      if (e.key.toLowerCase() === 'r') {
+        e.preventDefault();
+        loadData();
+        return;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [filteredOrders, handleBumpOrder, loadData]);
+
   const handleCreateStation = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!stationName.trim() || !stationCode.trim()) {
@@ -295,6 +401,22 @@ export default function KitchenKdsPage() {
 
             <div className="flex items-center gap-2">
               <button
+                onClick={() => {
+                  setSoundEnabled((prev) => !prev);
+                  if (!soundEnabled) playKitchenChime();
+                }}
+                className={`flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition-all ${
+                  soundEnabled
+                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                    : 'border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#667085]'
+                }`}
+                title={soundEnabled ? 'Kitchen Chime Active (Click to Mute)' : 'Kitchen Chime Muted (Click to Unmute)'}
+              >
+                {soundEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+                <span className="hidden sm:inline">{soundEnabled ? 'Chime ON' : 'Muted'}</span>
+              </button>
+
+              <button
                 onClick={loadData}
                 disabled={loading}
                 className="flex items-center gap-2 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-3.5 py-2 text-xs font-semibold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5"
@@ -320,6 +442,28 @@ export default function KitchenKdsPage() {
                 <Plus className="h-4 w-4" />
                 <span>New Station</span>
               </button>
+            </div>
+          </div>
+
+          {/* KDS Bump Bar Shortcut Hint Banner */}
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-amber-500/30 bg-amber-500/[0.04] px-4 py-2 text-xs text-[#1E2930] dark:text-[#F3F4F6]">
+            <div className="flex flex-wrap items-center gap-2 font-medium">
+              <Keyboard className="h-4 w-4 text-[#DE8626]" />
+              <span className="font-bold text-[#DE8626]">KDS Bump Bar:</span>
+              <span className="text-[#667085] dark:text-[#94A3B8]">Press</span>
+              <kbd className="rounded-md border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-1.5 py-0.5 font-mono text-[11px] font-bold shadow-xs">1-9</kbd>
+              <span className="text-[#667085] dark:text-[#94A3B8]">to bump ticket index,</span>
+              <kbd className="rounded-md border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-1.5 py-0.5 font-mono text-[11px] font-bold shadow-xs">Space / Enter</kbd>
+              <span className="text-[#667085] dark:text-[#94A3B8]">to bump oldest,</span>
+              <kbd className="rounded-md border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-1.5 py-0.5 font-mono text-[11px] font-bold shadow-xs">P</kbd>
+              <span className="text-[#667085] dark:text-[#94A3B8]">to Print KOT,</span>
+              <kbd className="rounded-md border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-1.5 py-0.5 font-mono text-[11px] font-bold shadow-xs">R</kbd>
+              <span className="text-[#667085] dark:text-[#94A3B8]">to Refresh.</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-[11px] text-[#667085] dark:text-[#94A3B8]">
+              <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" /> &lt;10m Normal
+              <span className="inline-block h-2 w-2 rounded-full bg-amber-500 ml-2" /> 10-20m Warning
+              <span className="inline-block h-2 w-2 rounded-full bg-red-500 ml-2" /> &gt;20m Overdue
             </div>
           </div>
 
@@ -435,7 +579,7 @@ export default function KitchenKdsPage() {
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {filteredOrders.map((order) => {
+                {filteredOrders.map((order, orderIdx) => {
                   const items = Array.isArray(order.items) ? order.items : [];
                   const timeFormatted = order.createdAt
                     ? new Date(order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -445,11 +589,22 @@ export default function KitchenKdsPage() {
                   const isReady = orderStatusUpper === 'READY';
                   const isPlaced = orderStatusUpper === 'PLACED' || orderStatusUpper === 'CONFIRMED';
 
+                  const elapsedMins = order.createdAt
+                    ? Math.max(0, Math.floor((Date.now() - new Date(order.createdAt).getTime()) / 60000))
+                    : 0;
+                  const isOverdue = elapsedMins >= 20;
+                  const isWarning = elapsedMins >= 10 && elapsedMins < 20;
+                  const nextStatus = getNextStatus(order.status);
+
                   return (
                     <div
                       key={order.id}
                       className={`rounded-2xl border shadow-md overflow-hidden flex flex-col justify-between transition-all ${
-                        isReady
+                        isOverdue
+                          ? 'border-red-500 ring-2 ring-red-500/30 bg-red-500/[0.03]'
+                          : isWarning
+                          ? 'border-amber-500/80 ring-1 ring-amber-500/20 bg-amber-500/[0.02]'
+                          : isReady
                           ? 'border-blue-500/40 bg-blue-500/[0.02]'
                           : isPreparing
                           ? 'border-amber-500/50 bg-amber-500/[0.02]'
@@ -459,7 +614,9 @@ export default function KitchenKdsPage() {
                       {/* Ticket Header */}
                       <div
                         className={`text-white p-3 flex items-center justify-between ${
-                          isReady
+                          isOverdue
+                            ? 'bg-gradient-to-r from-red-600 to-rose-700'
+                            : isReady
                             ? 'bg-gradient-to-r from-blue-600 to-indigo-600'
                             : isPreparing
                             ? 'bg-gradient-to-r from-amber-600 to-amber-700'
@@ -467,16 +624,37 @@ export default function KitchenKdsPage() {
                         }`}
                       >
                         <div>
-                          <span className="text-[10px] font-bold uppercase tracking-wider block opacity-90">
-                            {order.tableName || order.orderTypeName || 'Counter'}
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            {orderIdx < 9 && (
+                              <span className="rounded-md bg-black/30 px-1.5 py-0.2 font-mono text-[10px] font-extrabold text-amber-300">
+                                #{orderIdx + 1}
+                              </span>
+                            )}
+                            <span className="text-[10px] font-bold uppercase tracking-wider block opacity-90">
+                              {order.tableName || order.orderTypeName || 'Counter'}
+                            </span>
+                          </div>
                           <h3 className="text-base font-extrabold">Order #{order.id}</h3>
                         </div>
                         <div className="text-right">
-                          <span className="text-xs font-semibold flex items-center gap-1 justify-end">
-                            <Clock className="h-3 w-3" />
-                            {timeFormatted}
-                          </span>
+                          <div className="flex items-center gap-1.5 justify-end">
+                            <span className="text-xs font-semibold flex items-center gap-1">
+                              <Clock className="h-3 w-3" />
+                              {timeFormatted}
+                            </span>
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[10px] font-extrabold flex items-center gap-1 ${
+                                isOverdue
+                                  ? 'bg-white text-red-600 animate-pulse font-black'
+                                  : isWarning
+                                  ? 'bg-amber-400 text-amber-950'
+                                  : 'bg-white/20 text-white'
+                              }`}
+                            >
+                              {isOverdue && <AlertTriangle className="h-2.5 w-2.5" />}
+                              {elapsedMins}m
+                            </span>
+                          </div>
                           <span className="text-[10px] uppercase font-bold bg-white/20 px-2 py-0.5 rounded-full mt-1 inline-block">
                             {order.status}
                           </span>
@@ -540,7 +718,7 @@ export default function KitchenKdsPage() {
                           <button
                             onClick={() => handlePrintKot(order)}
                             disabled={printingOrderId === order.id}
-                            title="Print KOT Ticket"
+                            title="Print KOT Ticket (Press P)"
                             className="flex items-center gap-1 rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-2 py-1 text-[10px] font-bold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5 disabled:opacity-50 transition-colors"
                           >
                             <Printer className="h-3 w-3 text-[#DE8626]" />
@@ -548,47 +726,26 @@ export default function KitchenKdsPage() {
                           </button>
                         </div>
 
-                        {/* Workflow Action Buttons */}
+                        {/* Bump Action Button */}
                         <div className="grid grid-cols-2 gap-1.5 pt-1">
-                          {isPlaced && (
-                            <button
-                              onClick={() => handleUpdateStatus(order.id, 'Preparing')}
-                              disabled={updatingOrderId === order.id}
-                              className="col-span-2 flex items-center justify-center gap-1 rounded-xl bg-amber-600 hover:bg-amber-700 text-white py-2 text-xs font-bold shadow-xs transition-colors disabled:opacity-50"
-                            >
-                              <Flame className="h-3.5 w-3.5" />
-                              <span>Start Cooking</span>
-                            </button>
-                          )}
-                          {isPreparing && (
-                            <button
-                              onClick={() => handleUpdateStatus(order.id, 'Ready')}
-                              disabled={updatingOrderId === order.id}
-                              className="col-span-2 flex items-center justify-center gap-1 rounded-xl bg-blue-600 hover:bg-blue-700 text-white py-2 text-xs font-bold shadow-xs transition-colors disabled:opacity-50"
-                            >
-                              <CheckCircle2 className="h-3.5 w-3.5" />
-                              <span>Mark Dish Ready</span>
-                            </button>
-                          )}
-                          {isReady && (
-                            <button
-                              onClick={() => handleUpdateStatus(order.id, 'Served')}
-                              disabled={updatingOrderId === order.id}
-                              className="col-span-2 flex items-center justify-center gap-1 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white py-2 text-xs font-bold shadow-xs transition-colors disabled:opacity-50"
-                            >
-                              <CheckCircle2 className="h-3.5 w-3.5" />
-                              <span>Mark Served</span>
-                            </button>
-                          )}
-                          {!isPlaced && !isPreparing && !isReady && (
-                            <button
-                              onClick={() => handleUpdateStatus(order.id, 'Preparing')}
-                              disabled={updatingOrderId === order.id}
-                              className="col-span-2 flex items-center justify-center gap-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] py-2 text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5 disabled:opacity-50 transition-colors"
-                            >
-                              <span>Update to Cooking</span>
-                            </button>
-                          )}
+                          <button
+                            onClick={() => handleBumpOrder(order)}
+                            disabled={updatingOrderId === order.id}
+                            className={`col-span-2 flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-black shadow-sm transition-all disabled:opacity-50 ${
+                              isReady
+                                ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/20'
+                                : isPreparing
+                                ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-blue-600/20'
+                                : 'bg-[#DE8626] hover:bg-[#C4721C] text-white shadow-amber-600/20'
+                            }`}
+                          >
+                            <Zap className="h-3.5 w-3.5 fill-current" />
+                            <span>
+                              {updatingOrderId === order.id
+                                ? 'Updating...'
+                                : `BUMP ➔ ${nextStatus.toUpperCase()} ${orderIdx < 9 ? `(Key ${orderIdx + 1})` : ''}`}
+                            </span>
+                          </button>
                         </div>
                       </div>
                     </div>

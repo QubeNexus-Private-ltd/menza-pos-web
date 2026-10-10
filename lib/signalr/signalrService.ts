@@ -9,8 +9,25 @@ const orderStatusListeners = new Set<(event: any) => void>();
 const orderSettledListeners = new Set<(order: any) => void>();
 const storeStatusListeners = new Set<(status: any) => void>();
 const kitchenStatusListeners = new Set<(status: any) => void>();
+const kitchenStationListeners = new Set<(stationData: any) => void>();
 const walletBalanceListeners = new Set<(balance: any) => void>();
 const tableStatusListeners = new Set<(tableData: any) => void>();
+const serviceRequestListeners = new Set<(request: any) => void>();
+const serviceRequestResolvedListeners = new Set<(request: any) => void>();
+const paymentVerifiedListeners = new Set<(payment: any) => void>();
+const reconnectedListeners = new Set<() => void>();
+
+// Browser tab visibility auto-reconnect
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && currentConnectedRestId) {
+      if (!connection || connection.state === signalR.HubConnectionState.Disconnected) {
+        console.log('[SignalR] Tab visible again. Re-verifying connection...');
+        startPosSignalRConnection(currentConnectedRestId).catch(() => {});
+      }
+    }
+  });
+}
 
 function getHubUrl(restaurantId: number): string {
   const customHubUrl = process.env.NEXT_PUBLIC_SIGNALR_HUB_URL;
@@ -117,6 +134,18 @@ export async function startPosSignalRConnection(restaurantId: number): Promise<v
     });
   });
 
+  const handleStationUpdate = (data: any) => {
+    kitchenStationListeners.forEach((listener) => {
+      try {
+        listener(data);
+      } catch (err) {
+        console.warn('[SignalR] Error in OnKitchenStationStatusChanged listener:', err);
+      }
+    });
+  };
+  connection.on('OnKitchenStationStatusChanged', handleStationUpdate);
+  connection.on('KitchenStationStatusChanged', handleStationUpdate);
+
   connection.on('OnWalletBalanceChanged', (data) => {
     walletBalanceListeners.forEach((listener) => {
       try {
@@ -127,12 +156,51 @@ export async function startPosSignalRConnection(restaurantId: number): Promise<v
     });
   });
 
-  connection.on('OnTableStatusChanged', (data) => {
+  const handleTableStatus = (data: any) => {
     tableStatusListeners.forEach((listener) => {
       try {
         listener(data);
       } catch (err) {
         console.warn('[SignalR] Error in OnTableStatusChanged listener:', err);
+      }
+    });
+  };
+  connection.on('OnTableStatusChanged', handleTableStatus);
+  connection.on('TableStatusChanged', handleTableStatus);
+
+  const handleServiceRequest = (data: any) => {
+    serviceRequestListeners.forEach((listener) => {
+      try {
+        listener(data);
+      } catch (err) {
+        console.warn('[SignalR] Error in ServiceRequest listener:', err);
+      }
+    });
+  };
+  connection.on('ServiceRequestCreated', handleServiceRequest);
+  connection.on('OnServiceRequestCreated', handleServiceRequest);
+  connection.on('WaiterCalled', handleServiceRequest);
+  connection.on('BillRequested', handleServiceRequest);
+  connection.on('OnBillRequested', handleServiceRequest);
+
+  const handleServiceResolved = (data: any) => {
+    serviceRequestResolvedListeners.forEach((listener) => {
+      try {
+        listener(data);
+      } catch (err) {
+        console.warn('[SignalR] Error in ServiceRequestResolved listener:', err);
+      }
+    });
+  };
+  connection.on('ServiceRequestResolved', handleServiceResolved);
+  connection.on('OnServiceRequestResolved', handleServiceResolved);
+
+  connection.on('OnPaymentVerified', (data) => {
+    paymentVerifiedListeners.forEach((listener) => {
+      try {
+        listener(data);
+      } catch (err) {
+        console.warn('[SignalR] Error in OnPaymentVerified listener:', err);
       }
     });
   });
@@ -147,6 +215,13 @@ export async function startPosSignalRConnection(restaurantId: number): Promise<v
     } catch {
       // Re-join best-effort
     }
+    reconnectedListeners.forEach((cb) => {
+      try {
+        cb();
+      } catch (err) {
+        console.warn('[SignalR] Error in reconnected listener:', err);
+      }
+    });
   });
 
   try {
@@ -200,6 +275,11 @@ export function onKitchenStatusChanged(callback: (status: any) => void): () => v
   return () => kitchenStatusListeners.delete(callback);
 }
 
+export function onKitchenStationStatusChanged(callback: (stationData: any) => void): () => void {
+  kitchenStationListeners.add(callback);
+  return () => kitchenStationListeners.delete(callback);
+}
+
 export function onWalletBalanceChanged(callback: (balance: any) => void): () => void {
   walletBalanceListeners.add(callback);
   return () => walletBalanceListeners.delete(callback);
@@ -208,4 +288,24 @@ export function onWalletBalanceChanged(callback: (balance: any) => void): () => 
 export function onPosTableStatusChanged(callback: (tableData: any) => void): () => void {
   tableStatusListeners.add(callback);
   return () => tableStatusListeners.delete(callback);
+}
+
+export function onServiceRequestCreated(callback: (request: any) => void): () => void {
+  serviceRequestListeners.add(callback);
+  return () => serviceRequestListeners.delete(callback);
+}
+
+export function onServiceRequestResolved(callback: (request: any) => void): () => void {
+  serviceRequestResolvedListeners.add(callback);
+  return () => serviceRequestResolvedListeners.delete(callback);
+}
+
+export function onPaymentVerified(callback: (payment: any) => void): () => void {
+  paymentVerifiedListeners.add(callback);
+  return () => paymentVerifiedListeners.delete(callback);
+}
+
+export function onSignalRReconnected(callback: () => void): () => void {
+  reconnectedListeners.add(callback);
+  return () => reconnectedListeners.delete(callback);
 }

@@ -383,10 +383,12 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
   const handleLaunchGallery = async () => {
     try {
       setUploadingImage(true);
-      const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!permissionResult.granted) {
-        showAlert('Permission Denied', 'Photo library permission is required to choose photos.', 'warning');
-        return;
+      if (Platform.OS === 'ios') {
+        const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!permissionResult.granted) {
+          showAlert('Permission Denied', 'Photo library permission is required to choose photos.', 'warning');
+          return;
+        }
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({

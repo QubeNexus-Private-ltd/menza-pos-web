@@ -23,6 +23,7 @@ export interface SubscriptionPlan {
   commissionType?: 'PERCENTAGE' | 'FLAT_PER_ORDER' | 'HYBRID' | 'FEATURE_DRIVEN' | string;
   baseCommissionPercentage?: number;
   baseFlatCommissionPerOrder?: number;
+  minCommissionFloorPerOrder?: number;
   maxCommissionCapPerOrder?: number;
   includedWalletCredit?: number;
   allowTableOrdering?: boolean;
@@ -36,6 +37,17 @@ export interface SubscriptionPlan {
   entitlements?: SubscriptionPlanEntitlementItem[];
 }
 
+export type SubscriptionLifecycleState =
+  | 'ACTIVE'
+  | 'GRACE_PERIOD'
+  | 'EXPIRED'
+  | 'PENDING'
+  | 'UPGRADED'
+  | 'SUSPENDED'
+  | 'NONE';
+
+export type PlanChangeType = 'RENEW' | 'UPGRADE' | 'DOWNGRADE' | 'FRESH';
+
 export interface UserSubscriptionStatus {
   subscriptionId: number;
   subscriptionConfigurationId?: number;
@@ -44,6 +56,48 @@ export interface UserSubscriptionStatus {
   endDate: string;
   isExpired: boolean;
   daysRemaining: number;
+  isInGracePeriod?: boolean;
+  graceDaysRemaining?: number;
+  lifecycleState?: SubscriptionLifecycleState;
   status?: string;
+  amountPaid?: number;
+  paymentReferenceNo?: string;
+  effectiveCommissionPercentage?: number;
+  effectiveFlatCommissionPerOrder?: number;
+  effectiveMinCommissionFloor?: number;
+  effectiveMaxCommissionCap?: number;
   entitlements?: SubscriptionPlanEntitlementItem[];
+  hasQueuedRenewal?: boolean;
+  effectiveCoverageEndDate?: string;
+  totalDaysRemaining?: number;
+  currentCycleDaysRemaining?: number;
+  queuedRenewalDays?: number;
+}
+
+export interface RestaurantSubscriptionHistory {
+  id: number;
+  restaurantSubscriptionRelationshipId: number;
+  restaurantId: number;
+  subscriptionConfigurationId: number;
+  subscriptionCode?: string;
+  subscriptionName?: string;
+  eventType: string;
+  previousStatus?: string;
+  newStatus: string;
+  startDate: string;
+  endDate: string;
+  previousEndDate?: string;
+  amountPaid: number;
+  paymentReferenceNo?: string;
+  effectiveCommissionPercentage?: number;
+  effectiveFlatCommissionPerOrder?: number;
+  effectiveMinCommissionFloor?: number;
+  effectiveMaxCommissionCap?: number;
+  supersededBySubscriptionId?: number;
+  proratedRefundAmount?: number;
+  walletTransactionRef?: string;
+  actionSource?: string;
+  actorUserId?: number;
+  remarks?: string;
+  createdDateUtc: string;
 }

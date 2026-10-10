@@ -17,11 +17,15 @@ import {
   LogOut,
   Clock,
   ShieldCheck,
+  RotateCcw,
+  CheckCircle2,
+  ChevronRight,
+  Layers,
 } from 'lucide-react';
 import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { SubscriptionPlan } from '@/types/subscription';
-import { startCashfreePayment, setPaymentCallbacks, removePaymentCallbacks } from '@/payments/cashfreeService.web';
+import { PaymentGatewayService } from '@/payments/paymentGatewayService.web';
 
 export const SubscriptionBlockerModal: React.FC = () => {
   const router = useRouter();
@@ -31,7 +35,11 @@ export const SubscriptionBlockerModal: React.FC = () => {
     isExpired,
     isNoSubscription,
     lifecycleState,
+    daysRemaining,
+    isInGracePeriod,
+    graceDaysRemaining,
     isRenewalModalOpen,
+    activeModalTab,
     plans,
     isPlansLoading,
     fetchPlans,
@@ -39,9 +47,11 @@ export const SubscriptionBlockerModal: React.FC = () => {
     closeRenewalModal,
     assignPlan,
     initiateCashFreePayment,
+    verifyPayment,
     hasLoaded,
   } = useSubscriptionStore();
 
+  const [modalTab, setModalTab] = useState<'renew' | 'explore'>(activeModalTab || 'renew');
   const [selectedPlanId, setSelectedPlanId] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
@@ -52,9 +62,20 @@ export const SubscriptionBlockerModal: React.FC = () => {
     !user?.roles ||
     user.roles.length === 0;
 
+  // Sync tab from store when opened
+  useEffect(() => {
+    if (activeModalTab) {
+      setModalTab(activeModalTab);
+    } else if (!subscription || isNoSubscription) {
+      setModalTab('explore');
+    } else {
+      setModalTab('renew');
+    }
+  }, [activeModalTab, subscription, isNoSubscription, isRenewalModalOpen]);
+
   // Auto-fetch plans when modal opens
   useEffect(() => {
-    if (isExpired || isNoSubscription || isRenewalModalOpen || lifecycleState === 'EXPIRED' || lifecycleState === 'NONE') {
+    if (isExpired || isNoSubscription || isRenewalModalOpen || lifecycleState === 'EXPIRED') {
       if (plans.length === 0) {
         fetchPlans();
       }
@@ -64,20 +85,35 @@ export const SubscriptionBlockerModal: React.FC = () => {
   // Set default plan selection
   useEffect(() => {
     if (plans.length > 0 && selectedPlanId === null) {
-      setSelectedPlanId(plans[0].id);
+      // Find matching current plan, or default to first
+      const currentPlanMatch = plans.find(
+        (p) =>
+          p.id === (subscription as any)?.subscriptionPlanId ||
+          (p.subscriptionName && subscription?.planName && p.subscriptionName.toLowerCase() === subscription.planName.toLowerCase())
+      );
+      setSelectedPlanId(currentPlanMatch ? currentPlanMatch.id : plans[0].id);
     }
-  }, [plans, selectedPlanId]);
+  }, [plans, selectedPlanId, subscription]);
 
-  const isLocked = isExpired || lifecycleState === 'EXPIRED' || isNoSubscription || !subscription || lifecycleState === 'NONE';
-  const isVisible = hasLoaded && (isLocked || isRenewalModalOpen);
+  // Strictly locked only if expired beyond grace period
+  const isStrictlyLocked = isExpired || lifecycleState === 'EXPIRED';
+  const isVisible = hasLoaded && (isStrictlyLocked || isRenewalModalOpen);
 
   if (!isVisible) {
     return null;
   }
 
-  const selectedPlan = plans.find((p) => p.id === selectedPlanId) || plans[0];
+  // Find the user's active current plan in plans list
+  const currentPlan =
+    plans.find(
+      (p) =>
+        p.id === (subscription as any)?.subscriptionPlanId ||
+        (p.subscriptionName && subscription?.planName && p.subscriptionName.toLowerCase() === subscription.planName.toLowerCase())
+    ) || (plans.length > 0 ? plans[0] : null);
 
-  const handlePayAndActivate = async (plan: SubscriptionPlan) => {
+  const selectedPlan = plans.find((p) => p.id === selectedPlanId) || currentPlan || plans[0];
+
+  const handlePayAndActivate = async (plan: SubscriptionPlan, isRenewAction: boolean = false) => {
     if (!currentRestId) {
       setStatusMessage({ type: 'error', text: 'No active restaurant selected.' });
       return;
@@ -90,13 +126,15 @@ export const SubscriptionBlockerModal: React.FC = () => {
       const price = Number(plan.finalPrice ?? plan.price ?? 0);
       const duration = Number(plan.durationInDays || plan.durationDays || 30);
 
-      // If price is 0 or trial plan, assign directly
+      // Free / Trial direct assignment
       if (price <= 0) {
         const res = await assignPlan(currentRestId, plan.id, duration, 0);
         if (res.success) {
           setStatusMessage({
             type: 'success',
-            text: 'Free Plan activated successfully! POS unlocked.',
+            text: isRenewAction
+              ? 'Plan renewed successfully!'
+              : 'Free Plan activated successfully! POS unlocked.',
           });
           setTimeout(async () => {
             await fetchSubscriptionStatus(currentRestId);
@@ -107,7 +145,7 @@ export const SubscriptionBlockerModal: React.FC = () => {
         }
       }
 
-      // 1. Initiate CashFree Payment Order
+      // 1. Initiate Payment Order (checks Razorpay vs Cashfree)
       const initRes = await initiateCashFreePayment(
         currentRestId,
         plan.id,
@@ -115,13 +153,13 @@ export const SubscriptionBlockerModal: React.FC = () => {
         user?.mobile || '9999999999'
       );
 
-      if (!initRes.success || (!initRes.paymentSessionId && !initRes.paymentLink)) {
-        // Fallback to direct activation if payment gateway is bypassed in sandbox
+      if (!initRes.success || (!initRes.paymentSessionId && !initRes.paymentLink && !initRes.orderId)) {
+        // Fallback to direct activation if sandbox bypass
         const fallbackRes = await assignPlan(currentRestId, plan.id, duration, price);
         if (fallbackRes.success) {
           setStatusMessage({
             type: 'success',
-            text: 'Subscription activated successfully!',
+            text: isRenewAction ? 'Subscription renewed successfully!' : 'Subscription activated successfully!',
           });
           setTimeout(async () => {
             await fetchSubscriptionStatus(currentRestId);
@@ -139,38 +177,72 @@ export const SubscriptionBlockerModal: React.FC = () => {
         return;
       }
 
-      // 2. Register CashFree Callback Handlers
-      setPaymentCallbacks(
-        async (orderId: any) => {
+      // 2. Open Unified Payment Gateway Checkout (Razorpay if isRazorpay=true, else Cashfree)
+      const paymentResult = await PaymentGatewayService.startPayment({
+        orderId: initRes.orderId || `SUB_${Date.now()}`,
+        amount: initRes.amount || price,
+        currency: initRes.currency || 'INR',
+        gateway: initRes.gateway,
+        keyId: initRes.keyId,
+        paymentSessionId: initRes.paymentSessionId,
+        paymentLink: initRes.paymentLink,
+        customerName: activeRestaurant?.restaurantName || user?.name || 'Restaurant Owner',
+        customerPhone: user?.mobile || activeRestaurant?.ownerMobile || '9999999999',
+        customerEmail: (user as any)?.email || 'billing@menza.com',
+        orderNotes: `${isRenewAction ? 'Renewal' : 'Plan Upgrade'} - ${plan.subscriptionName || plan.planName} (₹${price})`,
+      });
+
+      if (!paymentResult.success) {
+        setStatusMessage({
+          type: 'error',
+          text: paymentResult.error || 'Payment checkout was cancelled or failed.',
+        });
+        setSubmitting(false);
+        return;
+      }
+
+      // 3. Verify Payment
+      const verifyRes = await verifyPayment(
+        initRes.orderId || '',
+        currentRestId,
+        plan.id,
+        price,
+        paymentResult.razorpayPaymentId,
+        paymentResult.razorpaySignature
+      );
+
+      if (verifyRes?.success) {
+        setStatusMessage({
+          type: 'success',
+          text: isRenewAction
+            ? 'Plan renewed successfully! Your coverage has been extended.'
+            : 'Subscription activated successfully! POS unlocked.',
+        });
+        await fetchSubscriptionStatus(currentRestId);
+        setTimeout(() => {
+          closeRenewalModal();
+          setSubmitting(false);
+        }, 1500);
+      } else {
+        await fetchSubscriptionStatus(currentRestId);
+        const latestSub = useSubscriptionStore.getState().subscription;
+        if (latestSub && !useSubscriptionStore.getState().isExpired) {
           setStatusMessage({
             type: 'success',
-            text: 'Payment verified! Activating restaurant subscription...',
+            text: 'Subscription activated successfully! POS unlocked.',
           });
-          await fetchSubscriptionStatus(currentRestId);
           setTimeout(() => {
             closeRenewalModal();
             setSubmitting(false);
-            removePaymentCallbacks();
-          }, 1500);
-        },
-        (errMsg: any) => {
+          }, 1200);
+        } else {
           setStatusMessage({
             type: 'error',
-            text: errMsg || 'Payment checkout was cancelled or failed.',
+            text: verifyRes?.message || 'Payment verification pending. Please contact support if your account was debited.',
           });
           setSubmitting(false);
-          removePaymentCallbacks();
         }
-      );
-
-      // 3. Open CashFree Web Drop Modal
-      const cfEnv = process.env.NEXT_PUBLIC_CASHFREE_ENV || 'SANDBOX';
-      await startCashfreePayment({
-        paymentSessionId: initRes.paymentSessionId,
-        orderId: initRes.orderId || `ORD_${Date.now()}`,
-        environment: cfEnv,
-        paymentLink: initRes.paymentLink,
-      });
+      }
     } catch (err: any) {
       setStatusMessage({
         type: 'error',
@@ -180,14 +252,22 @@ export const SubscriptionBlockerModal: React.FC = () => {
     }
   };
 
+  const expiryFormatted = subscription?.endDate
+    ? new Date(subscription.endDate).toLocaleDateString('en-IN', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+      })
+    : 'No active date';
+
   return (
     <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in duration-300">
-      <div className="relative w-full max-w-4xl max-h-[92vh] overflow-y-auto rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-6 sm:p-8 shadow-2xl">
-        {/* Close Button (ONLY visible if NOT strictly locked) */}
-        {!isLocked && (
+      <div className="relative w-full max-w-4xl max-h-[92vh] overflow-hidden rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] shadow-2xl flex flex-col">
+        {/* Close Button (Enabled when not strictly locked) */}
+        {!isStrictlyLocked && (
           <button
             onClick={closeRenewalModal}
-            className="absolute top-6 right-6 rounded-full p-2 text-[#667085] hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+            className="absolute top-5 right-5 z-20 rounded-full p-2 text-[#667085] hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
             aria-label="Close"
           >
             <X className="h-5 w-5" />
@@ -195,190 +275,343 @@ export const SubscriptionBlockerModal: React.FC = () => {
         )}
 
         {/* Modal Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#E7E1DA] dark:border-[#2B3540] pb-6">
+        <div className="border-b border-[#E7E1DA] dark:border-[#2B3540] px-6 py-5 bg-[#FAF7F2] dark:bg-[#151A20]">
           <div className="flex items-start gap-4">
-            <div className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl ${isExpired ? 'bg-red-500/10 text-red-600' : 'bg-amber-500/10 text-[#DE8626]'}`}>
-              {isExpired ? <ShieldAlert className="h-8 w-8" /> : <Crown className="h-8 w-8" />}
+            <div
+              className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ${
+                isStrictlyLocked ? 'bg-red-500/10 text-red-600' : 'bg-amber-500/10 text-[#DE8626]'
+              }`}
+            >
+              {isStrictlyLocked ? <ShieldAlert className="h-6 w-6" /> : <Crown className="h-6 w-6" />}
             </div>
-            <div>
+            <div className="flex-1 min-w-0 pr-8">
               <div className="flex items-center gap-2.5 flex-wrap">
-                <h2 className="text-xl sm:text-2xl font-extrabold tracking-tight text-[#1E2930] dark:text-[#F3F4F6]">
-                  {isNoSubscription ? 'Subscription Plan Required' : isExpired ? 'Subscription Expired' : 'Renew Restaurant Plan'}
+                <h2 className="text-xl font-black tracking-tight text-[#1E2930] dark:text-[#F3F4F6]">
+                  {isNoSubscription
+                    ? 'Subscription Plan Required'
+                    : isStrictlyLocked
+                    ? 'Subscription Expired'
+                    : 'Manage Restaurant Subscription'}
                 </h2>
-                <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-extrabold uppercase ${isExpired ? 'bg-red-500/15 text-red-600 border border-red-500/30' : 'bg-amber-500/15 text-[#DE8626] border border-amber-500/30'}`}>
+                <span
+                  className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-extrabold uppercase ${
+                    isStrictlyLocked
+                      ? 'bg-red-500/15 text-red-600 border border-red-500/30'
+                      : 'bg-amber-500/15 text-[#DE8626] border border-amber-500/30'
+                  }`}
+                >
                   <Lock className="h-3 w-3" />
-                  {isNoSubscription ? 'Plan Required' : isExpired ? 'Locked' : 'Renewal'}
+                  {isStrictlyLocked ? 'Locked' : subscription ? 'Active' : 'Plan Required'}
                 </span>
               </div>
-              <p className="mt-1 text-xs text-[#667085] dark:text-[#94A3B8] leading-relaxed max-w-xl">
-                {isNoSubscription
-                  ? 'This restaurant outlet does not have an active subscription license. Select a plan below to activate POS billing, KOT printing, and table management.'
-                  : isExpired
-                  ? 'Your store subscription has expired beyond the grace period. Order taking and billing are locked until your plan is renewed.'
-                  : 'Upgrade or extend your plan to continue smooth multi-outlet operations without interruptions.'}
+              <p className="mt-1 text-xs text-[#667085] dark:text-[#94A3B8]">
+                {activeRestaurant?.restaurantName || 'Active Store'} • Seamless billing, KOT kitchen routing, and multi-terminal sync.
               </p>
             </div>
           </div>
-
-          {/* Outlet Info */}
-          {activeRestaurant && (
-            <div className="text-left sm:text-right shrink-0">
-              <span className="text-[10px] uppercase font-bold text-[#667085] tracking-wider block">Target Outlet</span>
-              <span className="text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6] block truncate max-w-[200px]">
-                {activeRestaurant.restaurantName}
-              </span>
-            </div>
-          )}
         </div>
 
-        {/* Staff Notice if user is non-owner */}
-        {!isOwner && (
-          <div className="mt-6 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs text-amber-900 dark:text-amber-200">
-            <div className="flex items-center gap-2 font-bold mb-1">
-              <AlertCircle className="h-4 w-4 text-[#DE8626]" />
-              <span>Staff Notice</span>
-            </div>
-            <p>
-              You are logged in as a staff member. Only the <strong>Restaurant Owner</strong> or account administrator can purchase or renew subscription plans. Please contact your store owner to activate a plan.
-            </p>
+        {/* 2 Primary Tabs: "Renew Current Plan" vs "Explore Other Plans" */}
+        <div className="flex border-b border-[#E7E1DA] dark:border-[#2B3540] px-6 bg-white dark:bg-[#1B2127]">
+          {subscription && !isNoSubscription && (
             <button
-              onClick={() => logout()}
-              className="mt-3 inline-flex items-center gap-1.5 rounded-xl bg-amber-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-amber-700 transition-colors"
+              onClick={() => {
+                setModalTab('renew');
+                setStatusMessage(null);
+              }}
+              className={`flex items-center gap-2 border-b-2 py-3 px-2 text-xs font-bold transition-all ${
+                modalTab === 'renew'
+                  ? 'border-[#DE8626] text-[#DE8626]'
+                  : 'border-transparent text-[#667085] hover:text-[#1E2930] dark:hover:text-[#F3F4F6]'
+              }`}
             >
-              <LogOut className="h-3.5 w-3.5" />
-              <span>Sign Out to Switch Account</span>
+              <RotateCcw className="h-4 w-4" />
+              <span>Renew Current Plan</span>
+              <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] text-[#DE8626]">
+                {daysRemaining}d left
+              </span>
             </button>
-          </div>
-        )}
+          )}
 
-        {/* Status Messages */}
-        {statusMessage && (
-          <div
-            className={`mt-4 rounded-xl p-3 text-xs font-medium flex items-center gap-2.5 ${
-              statusMessage.type === 'success'
-                ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
-                : 'bg-red-500/10 text-red-600 border border-red-500/20'
+          <button
+            onClick={() => {
+              setModalTab('explore');
+              setStatusMessage(null);
+            }}
+            className={`flex items-center gap-2 border-b-2 py-3 px-4 text-xs font-bold transition-all ${
+              modalTab === 'explore'
+                ? 'border-[#DE8626] text-[#DE8626]'
+                : 'border-transparent text-[#667085] hover:text-[#1E2930] dark:hover:text-[#F3F4F6]'
             }`}
           >
-            {statusMessage.type === 'success' ? <Check className="h-4 w-4 shrink-0" /> : <AlertCircle className="h-4 w-4 shrink-0" />}
-            <span>{statusMessage.text}</span>
-          </div>
-        )}
+            <Layers className="h-4 w-4" />
+            <span>Explore Other Plans ({plans.length})</span>
+          </button>
+        </div>
 
-        {/* Available Plans Grid */}
-        <div className="mt-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6] uppercase tracking-wide">
-              Select Subscription Plan
-            </h3>
-            {isPlansLoading && (
-              <span className="flex items-center gap-1.5 text-xs text-[#DE8626]">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                <span>Loading live plans...</span>
-              </span>
-            )}
-          </div>
+        {/* Modal Body */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-5">
+          {/* Staff Warning if non-owner */}
+          {!isOwner && (
+            <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs text-amber-900 dark:text-amber-200">
+              <div className="flex items-center gap-2 font-bold mb-1">
+                <AlertCircle className="h-4 w-4 text-[#DE8626]" />
+                <span>Staff Notice</span>
+              </div>
+              <p>
+                You are logged in as a staff member. Only the <strong>Restaurant Owner</strong> can purchase or renew subscription plans.
+              </p>
+            </div>
+          )}
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {plans.map((plan) => {
-              const isSelected = selectedPlanId === plan.id;
-              const price = Number(plan.finalPrice ?? plan.price ?? 0);
-              const duration = plan.durationInDays || plan.durationDays || 30;
+          {/* Status Message */}
+          {statusMessage && (
+            <div
+              className={`rounded-xl p-3.5 text-xs font-medium flex items-center gap-2.5 ${
+                statusMessage.type === 'success'
+                  ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
+                  : 'bg-red-500/10 text-red-600 border border-red-500/20'
+              }`}
+            >
+              {statusMessage.type === 'success' ? (
+                <Check className="h-4 w-4 shrink-0" />
+              ) : (
+                <AlertCircle className="h-4 w-4 shrink-0" />
+              )}
+              <span>{statusMessage.text}</span>
+            </div>
+          )}
 
-              return (
-                <div
-                  key={plan.id}
-                  onClick={() => setSelectedPlanId(plan.id)}
-                  className={`relative flex flex-col justify-between rounded-2xl border p-5 cursor-pointer transition-all ${
-                    isSelected
-                      ? 'border-[#DE8626] bg-amber-500/5 shadow-md shadow-amber-500/10 ring-2 ring-[#DE8626]'
-                      : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2]/50 dark:bg-[#151A20] hover:border-[#DE8626]/50'
-                  }`}
-                >
-                  {isSelected && (
-                    <div className="absolute top-3 right-3 flex h-5 w-5 items-center justify-center rounded-full bg-[#DE8626] text-white">
-                      <Check className="h-3 w-3 stroke-[3]" />
-                    </div>
-                  )}
-
+          {/* TAB 1: RENEW CURRENT PLAN */}
+          {modalTab === 'renew' && subscription && !isNoSubscription && currentPlan && (
+            <div className="space-y-5">
+              {/* Active Plan Hero Card */}
+              <div className="rounded-3xl border-2 border-[#DE8626] bg-amber-500/5 p-6 shadow-sm">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div>
-                    <h4 className="text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6]">
-                      {plan.subscriptionName || plan.planName}
-                    </h4>
-                    <p className="mt-1 text-[11px] text-[#667085] dark:text-[#94A3B8] line-clamp-2">
-                      {plan.description || 'Full access to high-speed POS, KOT printing, and multi-outlet table sync.'}
+                    <span className="inline-block rounded-md bg-[#DE8626] px-2.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-white mb-2">
+                      Active Subscription
+                    </span>
+                    <h3 className="text-xl font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                      {subscription.planName || currentPlan.subscriptionName || currentPlan.planName}
+                    </h3>
+                    <p className="mt-1 text-xs text-[#667085] dark:text-[#94A3B8]">
+                      Expires on <strong>{expiryFormatted}</strong> • {daysRemaining} days remaining
                     </p>
-
-                    <div className="mt-4 flex items-baseline gap-1">
-                      <span className="text-2xl font-black text-[#1E2930] dark:text-[#F3F4F6]">
-                        ₹{price}
-                      </span>
-                      <span className="text-[11px] text-[#667085]">/ {duration} days</span>
-                    </div>
-
-                    <div className="mt-4 space-y-1.5 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60 pt-3 text-[11px] text-[#667085] dark:text-[#94A3B8]">
-                      <div className="flex items-center gap-1.5">
-                        <Check className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
-                        <span>High-Speed Counter POS Terminal</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <Check className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
-                        <span>Instant Kitchen KOT Sync & Printing</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <Check className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
-                        <span>Live Floor Table Board</span>
-                      </div>
-                    </div>
                   </div>
 
-                  <div className="mt-5 pt-3 border-t border-[#E7E1DA]/40 dark:border-[#2B3540]/40">
-                    <span
-                      className={`block w-full text-center text-xs font-bold py-2 rounded-xl transition-colors ${
-                        isSelected
-                          ? 'bg-[#DE8626] text-white shadow-sm'
-                          : 'bg-black/5 dark:bg-white/5 text-[#667085] hover:text-[#1E2930]'
-                      }`}
-                    >
-                      {isSelected ? 'Selected' : 'Choose Plan'}
+                  <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-4 text-left sm:text-right">
+                    <span className="text-[11px] text-[#667085]">Renewal Price</span>
+                    <p className="text-2xl font-black text-[#DE8626]">
+                      ₹{currentPlan.finalPrice ?? currentPlan.price}
+                    </p>
+                    <span className="text-[10px] text-[#667085]">
+                      for {currentPlan.durationInDays || currentPlan.durationDays || 30} days
                     </span>
                   </div>
                 </div>
-              );
-            })}
-          </div>
-        </div>
 
-        {/* Modal Actions */}
-        <div className="mt-8 flex flex-col sm:flex-row items-center justify-between gap-4 border-t border-[#E7E1DA] dark:border-[#2B3540] pt-6">
-          <div className="flex items-center gap-2 text-xs text-[#667085]">
-            <ShieldCheck className="h-4 w-4 text-emerald-500 shrink-0" />
-            <span>Instant activation upon payment verification</span>
-          </div>
+                {/* Continuous Date Extension Explainer */}
+                <div className="mt-5 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-xs text-emerald-800 dark:text-emerald-300 flex items-start gap-3">
+                  <RotateCcw className="h-4 w-4 shrink-0 text-emerald-600 mt-0.5" />
+                  <div>
+                    <strong className="block font-bold">Continuous Seamless Extension:</strong>
+                    <span>
+                      Renewing now appends {currentPlan.durationInDays || currentPlan.durationDays || 30} full days directly to your existing expiry date ({expiryFormatted}). You lose zero days and experience no disruption.
+                    </span>
+                  </div>
+                </div>
+              </div>
 
-          <div className="flex items-center gap-3 w-full sm:w-auto">
-            {isOwner && selectedPlan && (
-              <button
-                type="button"
-                disabled={submitting}
-                onClick={() => handlePayAndActivate(selectedPlan)}
-                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl bg-[#DE8626] hover:bg-[#C9751D] px-6 py-3 text-xs font-bold text-white shadow-lg shadow-[#DE8626]/20 transition-all disabled:opacity-60 disabled:cursor-not-allowed hover:scale-[1.02] active:scale-[0.98]"
-              >
-                {submitting ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    <span>Processing Payment...</span>
-                  </>
-                ) : (
-                  <>
-                    <CreditCard className="h-4 w-4" />
-                    <span>Pay & Activate Plan (₹{selectedPlan.finalPrice ?? selectedPlan.price})</span>
-                    <ArrowRight className="h-3.5 w-3.5" />
-                  </>
+              {/* What is Included Checklist */}
+              <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-4 space-y-2">
+                <span className="text-xs font-bold text-[#667085] uppercase tracking-wider">
+                  Features Included with this Plan
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-[#1E2930] dark:text-[#F3F4F6] pt-1">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+                    <span>High-Speed Counter POS Terminal</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+                    <span>Station-Bifurcated Kitchen KOT Printing</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+                    <span>Live Floor Table Board & Merging</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+                    <span>Executive Revenue & GST Analytics</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Instant Renew Button */}
+              {isOwner && (
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    disabled={submitting}
+                    onClick={() => handlePayAndActivate(currentPlan, true)}
+                    className="w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-[#DE8626] to-[#CB741B] py-4 text-sm font-extrabold text-white shadow-xl shadow-[#DE8626]/25 hover:from-[#C4721C] hover:to-[#B66415] disabled:opacity-50 transition-all hover:scale-[1.01] active:scale-[0.99]"
+                  >
+                    {submitting ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <span>Processing Renewal...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CreditCard className="h-4 w-4" />
+                        <span>
+                          Renew Current Plan Now (₹{currentPlan.finalPrice ?? currentPlan.price})
+                        </span>
+                        <ArrowRight className="h-4 w-4" />
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 2: EXPLORE OTHER PLANS */}
+          {modalTab === 'explore' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6] uppercase tracking-wide">
+                    Choose a Subscription Tier
+                  </h3>
+                  <p className="text-xs text-[#667085] dark:text-[#94A3B8]">
+                    Compare features and select the tier best tailored to your operations
+                  </p>
+                </div>
+                {isPlansLoading && (
+                  <span className="flex items-center gap-1.5 text-xs text-[#DE8626]">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <span>Loading plans...</span>
+                  </span>
                 )}
-              </button>
-            )}
-          </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {plans.map((plan) => {
+                  const isSelected = selectedPlanId === plan.id;
+                  const price = Number(plan.finalPrice ?? plan.price ?? 0);
+                  const duration = plan.durationInDays || plan.durationDays || 30;
+                  const isCurrent =
+                    subscription &&
+                    ((plan.id === (subscription as any)?.subscriptionPlanId) ||
+                      (plan.subscriptionName && subscription.planName && plan.subscriptionName.toLowerCase() === subscription.planName.toLowerCase()));
+
+                  return (
+                    <div
+                      key={plan.id}
+                      onClick={() => setSelectedPlanId(plan.id)}
+                      className={`relative flex flex-col justify-between rounded-2xl border p-5 cursor-pointer transition-all ${
+                        isSelected
+                          ? 'border-[#DE8626] bg-amber-500/5 shadow-md shadow-amber-500/10 ring-2 ring-[#DE8626]'
+                          : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2]/50 dark:bg-[#151A20] hover:border-[#DE8626]/50'
+                      }`}
+                    >
+                      {isCurrent && (
+                        <div className="absolute top-3 right-3 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[9px] font-extrabold text-emerald-600 uppercase">
+                          Current Tier
+                        </div>
+                      )}
+
+                      <div>
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <Crown className="h-4 w-4 text-[#DE8626]" />
+                          <h4 className="text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                            {plan.subscriptionName || plan.planName}
+                          </h4>
+                        </div>
+                        <p className="mt-1 text-[11px] text-[#667085] dark:text-[#94A3B8] line-clamp-2">
+                          {plan.description || 'Full POS, KOT printing, and multi-outlet table sync.'}
+                        </p>
+
+                        <div className="mt-4 flex items-baseline gap-1">
+                          <span className="text-2xl font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                            ₹{price}
+                          </span>
+                          <span className="text-[11px] text-[#667085]">/ {duration} days</span>
+                        </div>
+
+                        <div className="mt-4 space-y-1.5 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60 pt-3 text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                          <div className="flex items-center gap-1.5">
+                            <Check className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                            <span>Counter POS & Billing</span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <Check className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                            <span>Kitchen KOT Routing & Print</span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <Check className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                            <span>Live Floor Table Status</span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <Check className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                            <span>Daily Revenue Analytics</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mt-5 pt-3 border-t border-[#E7E1DA]/40 dark:border-[#2B3540]/40">
+                        <span
+                          className={`block w-full text-center text-xs font-bold py-2 rounded-xl transition-colors ${
+                            isSelected
+                              ? 'bg-[#DE8626] text-white shadow-sm'
+                              : 'bg-black/5 dark:bg-white/5 text-[#667085] hover:text-[#1E2930]'
+                          }`}
+                        >
+                          {isSelected ? 'Selected' : 'Select Plan'}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Primary Action Button for Selected Plan */}
+              {isOwner && selectedPlan && (
+                <div className="pt-2 flex items-center justify-between gap-4 border-t border-[#E7E1DA] dark:border-[#2B3540] pt-4">
+                  <div className="text-xs text-[#667085]">
+                    <span>Selected Tier: </span>
+                    <strong className="text-sm font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                      {selectedPlan.subscriptionName || selectedPlan.planName} (₹{selectedPlan.finalPrice ?? selectedPlan.price})
+                    </strong>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={submitting}
+                    onClick={() => handlePayAndActivate(selectedPlan, false)}
+                    className="inline-flex items-center gap-2 rounded-2xl bg-[#DE8626] px-6 py-3 text-xs font-extrabold text-white shadow-lg shadow-[#DE8626]/20 hover:bg-[#C4721C] disabled:opacity-50 transition-all hover:scale-[1.02] active:scale-[0.98]"
+                  >
+                    {submitting ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <span>Processing...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CreditCard className="h-4 w-4" />
+                        <span>
+                          Activate {selectedPlan.subscriptionName || selectedPlan.planName} (₹{selectedPlan.finalPrice ?? selectedPlan.price})
+                        </span>
+                        <ArrowRight className="h-3.5 w-3.5" />
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

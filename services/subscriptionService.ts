@@ -333,6 +333,10 @@ export class SubscriptionService {
     orderId?: string;
     paymentSessionId?: string;
     paymentLink?: string;
+    gateway?: string;
+    keyId?: string;
+    amount?: number;
+    currency?: string;
     message?: string;
   }> {
     try {
@@ -354,38 +358,64 @@ export class SubscriptionService {
         },
       };
 
-      const response = await apiClient.post('/CashFreepayment/create-order', payload);
+      const response = await apiClient.post('/CashFreepayment/create-order', payload, {
+        headers: {
+          'X-Restaurant-Id': restaurantId.toString(),
+          'X-Payment-Gateway': 'Razorpay',
+        },
+      });
       const data = response.data || {};
       const orderId = data.orderId || data.OrderId || data.order_id || data.cfOrderId || `ORD_SUB_${Date.now()}`;
       const paymentSessionId = data.paymentSessionId || data.PaymentSessionId || data.payment_session_id || '';
       const paymentLink = data.paymentLink || data.PaymentLink || data.payment_link || data.instrumentResponseUrl || '';
+      const gateway = data.gateway || data.Gateway || (data.keyId ? 'Razorpay' : 'Cashfree');
+      const keyId = data.keyId || data.KeyId;
 
       return {
         success: true,
         orderId,
         paymentSessionId,
         paymentLink,
-        message: data.message || 'Payment order created via CashFree',
+        gateway,
+        keyId,
+        amount,
+        currency: data.currency || 'INR',
+        message: data.message || `Payment order created via ${gateway}`,
       };
     } catch (error: any) {
       const serverMsg = error.response?.data?.message || error.response?.data;
-      const message = typeof serverMsg === 'string' ? serverMsg : (error.message || 'Failed to initiate CashFree payment.');
+      const message = typeof serverMsg === 'string' ? serverMsg : (error.message || 'Failed to initiate payment.');
       return { success: false, message };
     }
   }
 
-  static async verifyCashFreePayment(orderId: string): Promise<{ success: boolean; isPaid: boolean; message?: string }> {
+  static async verifyCashFreePayment(
+    orderId: string,
+    restaurantId?: number,
+    subscriptionConfigurationId?: number,
+    amountPaid?: number,
+    razorpayPaymentId?: string,
+    razorpaySignature?: string
+  ): Promise<{ success: boolean; isPaid: boolean; message?: string }> {
     try {
-      const response = await apiClient.post('/CashFreepayment/verify', { cfOrderId: orderId });
+      const response = await apiClient.post('/CashFreepayment/verify', {
+        orderId,
+        cfOrderId: orderId,
+        restaurantId,
+        subscriptionConfigurationId,
+        amountPaid,
+        razorpayPaymentId,
+        razorpaySignature,
+      });
       const paymentStatus = (response.data?.paymentStatus || response.data?.status || '').toUpperCase();
       const isPaid = paymentStatus === 'SUCCESS' || response.data?.success === true || response.data?.gatewayOrderStatus === 'PAID';
       return {
-        success: true,
+        success: isPaid,
         isPaid,
         message: response.data?.message || (isPaid ? 'Payment verified successfully.' : 'Payment pending or incomplete.'),
       };
     } catch (error: any) {
-      return { success: false, isPaid: false, message: error.message || 'Payment verification failed.' };
+      return { success: false, isPaid: false, message: error.response?.data?.message || error.message || 'Payment verification failed.' };
     }
   }
 

@@ -12,12 +12,14 @@ import {
   StatusBar,
   Platform,
   Image,
+  AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
   Printer,
   Bluetooth,
+  BluetoothOff,
   BluetoothSearching,
   RefreshCw,
   Check,
@@ -33,8 +35,9 @@ import { Typography } from '../../../core/theme/typography';
 import { Spacing } from '../../../core/theme/spacing';
 import { usePrinterStore } from '../../state/usePrinterStore';
 import { useAuthStore } from '../../state/useAuthStore';
-import { BluetoothDevice } from '../../../data/datasources/BluetoothPrinterService';
+import { BluetoothPrinterService, BluetoothDevice } from '../../../data/datasources/BluetoothPrinterService';
 import { logger } from '../../../core/logging';
+import { appPermissions } from '../../../core/permissions/AppPermissionsService';
 
 interface BluetoothPrinterScreenProps {
   onClose: () => void;
@@ -46,6 +49,7 @@ export const BluetoothPrinterScreen: React.FC<BluetoothPrinterScreenProps> = ({ 
     connectedDevice,
     pairedDevices,
     discoveredDevices,
+    isBluetoothEnabled,
     isScanning,
     isConnecting,
     isPrinting,
@@ -54,6 +58,9 @@ export const BluetoothPrinterScreen: React.FC<BluetoothPrinterScreenProps> = ({ 
     autoPrintKot,
     customFooter,
     init,
+    checkStatus,
+    enableBluetooth,
+    openBluetoothSettings,
     scanDevices,
     connectDevice,
     disconnectDevice,
@@ -70,25 +77,128 @@ export const BluetoothPrinterScreen: React.FC<BluetoothPrinterScreenProps> = ({ 
 
   useEffect(() => {
     logger.navigation('BluetoothPrinterScreen');
-    init();
-  }, [init]);
+
+    const setup = async () => {
+      // 1. Proactively request Bluetooth permissions first so Android 12+ allows reading Bluetooth state
+      await appPermissions.requestBluetoothPermissions(false);
+      await init();
+      await checkStatus();
+    };
+
+    setup();
+
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'active') {
+        checkStatus();
+      }
+    });
+
+    // Gently poll Bluetooth state every 2.5s while this screen is mounted
+    // so turning on Bluetooth in notification shade or quick settings is instantly reflected.
+    const interval = setInterval(() => {
+      checkStatus();
+    }, 2500);
+
+    return () => {
+      clearInterval(interval);
+      subscription.remove();
+    };
+  }, [init, checkStatus]);
 
   useEffect(() => {
     setLocalFooter(customFooter);
   }, [customFooter]);
 
-  const handleScan = async () => {
+  const handleTurnOnBluetooth = async () => {
     try {
-      await scanDevices();
-    } catch (err: any) {
+      const granted = await appPermissions.requestBluetoothPermissions(true);
+      if (!granted) {
+        return;
+      }
+
+      await checkStatus();
+      if (usePrinterStore.getState().isBluetoothEnabled) {
+        return;
+      }
+
+      await enableBluetooth();
+      setTimeout(async () => {
+        await checkStatus();
+      }, 1500);
+    } catch {
       Alert.alert(
-        'Scan Notice',
-        err?.message || 'Please ensure Bluetooth and Location permissions are enabled on your device.'
+        'Turn On Bluetooth',
+        'Could not automatically enable Bluetooth. Please turn on Bluetooth in Phone Settings.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Open Settings', onPress: () => openBluetoothSettings() },
+        ]
       );
     }
   };
 
+  const handleScan = async () => {
+    const granted = await appPermissions.requestBluetoothPermissions(true);
+    if (!granted) {
+      return;
+    }
+
+    await checkStatus();
+    const isEnabled = usePrinterStore.getState().isBluetoothEnabled;
+    if (!isEnabled) {
+      Alert.alert(
+        'Bluetooth is Turned Off',
+        'Please turn on your Bluetooth to scan and connect with your thermal printer.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Turn On Bluetooth', onPress: handleTurnOnBluetooth },
+        ]
+      );
+      return;
+    }
+
+    try {
+      await scanDevices();
+    } catch (err: any) {
+      const msg = err?.message || '';
+      if (msg.includes('Bluetooth is turned off')) {
+        Alert.alert(
+          'Bluetooth is Turned Off',
+          'Please turn on your Bluetooth to scan and connect with your thermal printer.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Turn On Bluetooth', onPress: handleTurnOnBluetooth },
+          ]
+        );
+      } else {
+        Alert.alert(
+          'Scan Notice',
+          msg || 'Please ensure Bluetooth and Location permissions are enabled on your device.'
+        );
+      }
+    }
+  };
+
   const handleConnect = async (device: BluetoothDevice) => {
+    const printerService = BluetoothPrinterService.getInstance();
+    const hasPerm = await printerService.hasPermissions();
+    if (!hasPerm) {
+      await printerService.requestPermissions();
+    }
+    await checkStatus();
+    const isEnabled = usePrinterStore.getState().isBluetoothEnabled;
+    if (!isEnabled) {
+      Alert.alert(
+        'Bluetooth is Turned Off',
+        'Please turn on your Bluetooth before connecting to the printer.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Turn On Bluetooth', onPress: handleTurnOnBluetooth },
+        ]
+      );
+      return;
+    }
+
     try {
       setConnectingAddress(device.address);
       const success = await connectDevice(device);
@@ -199,6 +309,31 @@ export const BluetoothPrinterScreen: React.FC<BluetoothPrinterScreenProps> = ({ 
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
         >
+          {/* BLUETOOTH OFF ALERT BANNER */}
+          {!isBluetoothEnabled && (
+            <View style={styles.bluetoothOffCard}>
+              <View style={styles.bluetoothOffTopRow}>
+                <View style={styles.bluetoothOffIconBox}>
+                  <BluetoothOff size={22} color="#DC2626" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.bluetoothOffTitle}>Bluetooth is Turned Off</Text>
+                  <Text style={styles.bluetoothOffDesc}>
+                    Please turn on Bluetooth to discover and connect with your mobile thermal printer.
+                  </Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                style={styles.turnOnBtBtn}
+                onPress={handleTurnOnBluetooth}
+                activeOpacity={0.85}
+              >
+                <Bluetooth size={16} color="#FFFFFF" strokeWidth={2.5} />
+                <Text style={styles.turnOnBtBtnText}>Turn On Bluetooth</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
           {/* 1. CONNECTION STATUS CARD */}
           {connectedDevice ? (
             <View style={styles.connectedCard}>
@@ -312,7 +447,25 @@ export const BluetoothPrinterScreen: React.FC<BluetoothPrinterScreenProps> = ({ 
 
           {/* DISCOVERED DEVICES LIST */}
           <View style={styles.devicesContainer}>
-            {isScanning && discoveredDevices.length === 0 ? (
+            {!isBluetoothEnabled ? (
+              <View style={styles.bluetoothOffListBox}>
+                <View style={styles.bluetoothOffCircle}>
+                  <BluetoothOff size={32} color="#DC2626" />
+                </View>
+                <Text style={styles.bluetoothOffListTitle}>Bluetooth is Turned Off</Text>
+                <Text style={styles.bluetoothOffListDesc}>
+                  Please turn on your phone's Bluetooth to discover and connect with thermal printers.
+                </Text>
+                <TouchableOpacity
+                  style={styles.turnOnBtListBtn}
+                  onPress={handleTurnOnBluetooth}
+                  activeOpacity={0.85}
+                >
+                  <Bluetooth size={16} color="#FFFFFF" strokeWidth={2.5} />
+                  <Text style={styles.turnOnBtListBtnText}>Turn On Bluetooth</Text>
+                </TouchableOpacity>
+              </View>
+            ) : isScanning && discoveredDevices.length === 0 ? (
               <View style={styles.scanningBox}>
                 <ActivityIndicator size="large" color="#DE8626" />
                 <Text style={styles.scanningText}>Searching for nearby Bluetooth printers...</Text>
@@ -584,6 +737,123 @@ const styles = StyleSheet.create({
     padding: Spacing.md,
     paddingBottom: Spacing.xxl,
     gap: Spacing.md,
+  },
+  bluetoothOffCard: {
+    backgroundColor: '#FEF2F2',
+    borderRadius: Spacing.borderRadius.card,
+    padding: Spacing.md,
+    borderWidth: 1.2,
+    borderColor: '#FCA5A5',
+    shadowColor: '#DC2626',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 2,
+    marginBottom: 4,
+  },
+  bluetoothOffTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    marginBottom: 12,
+  },
+  bluetoothOffIconBox: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#FEE2E2',
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bluetoothOffTitle: {
+    color: '#991B1B',
+    fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: 0.2,
+  },
+  bluetoothOffDesc: {
+    color: '#B91C1C',
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 3,
+  },
+  turnOnBtBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#DC2626',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    shadowColor: '#DC2626',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  turnOnBtBtnText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
+  bluetoothOffListBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: Spacing.xxl,
+    paddingHorizontal: Spacing.lg,
+    backgroundColor: '#FFFFFF',
+    borderRadius: Spacing.borderRadius.card,
+    borderWidth: 1.2,
+    borderColor: '#FECACA',
+  },
+  bluetoothOffCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#FEE2E2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+  },
+  bluetoothOffListTitle: {
+    color: '#991B1B',
+    fontSize: Typography.fontSize.body1,
+    fontWeight: '800',
+    marginBottom: 6,
+  },
+  bluetoothOffListDesc: {
+    color: '#7F1D1D',
+    fontSize: Typography.fontSize.xs,
+    textAlign: 'center',
+    lineHeight: 18,
+    maxWidth: 280,
+    marginBottom: 16,
+  },
+  turnOnBtListBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#DC2626',
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 8,
+    shadowColor: '#DC2626',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  turnOnBtListBtnText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
   },
   connectedCard: {
     borderRadius: Spacing.borderRadius.card,

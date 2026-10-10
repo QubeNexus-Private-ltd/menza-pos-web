@@ -26,11 +26,16 @@ import {
   Wallet,
   MessageSquare,
   Receipt,
+  Search,
+  Eye,
+  X,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
 import { TermsConsentCard } from '@/components/common/TermsConsentCard';
 import { OrderSettleModal } from '@/components/orders/OrderSettleModal';
+import { OrderStatusPipeline } from '@/components/dashboard/OrderStatusPipeline';
+import { DashboardOrderDetailDrawer } from '@/components/dashboard/DashboardOrderDetailDrawer';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { useNotificationStore } from '@shared/presentation/state/useNotificationStore';
 import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
@@ -40,6 +45,23 @@ import { RestaurantConfigRemoteDataSource } from '@shared/data/datasources/Resta
 import { TableRemoteDataSource } from '@shared/data/datasources/TableRemoteDataSource';
 import { RestaurantTodayRevenue, OrderMaster } from '@shared/domain/models/Order';
 import { StoreOperatingStatus } from '@shared/domain/models/RestaurantConfig';
+import {
+  PipelineStageKey,
+  DashboardPipelineStages,
+  normalizeOrderStatus,
+  OrderStatuses,
+  getOrderStatusBadge,
+  getNextRecommendedStatus,
+  isOrderSettled,
+} from '@/lib/utils/orderStatusEngine';
+import {
+  startPosSignalRConnection,
+  onPosOrderCreated,
+  onPosOrderStatusChanged,
+  onPosOrderSettled,
+  onKitchenStatusChanged,
+  onSignalRReconnected,
+} from '@/lib/signalr/signalrService';
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -63,7 +85,12 @@ export default function DashboardPage() {
   const [operatingStatus, setOperatingStatus] = useState<StoreOperatingStatus | null>(null);
   const [tableCount, setTableCount] = useState({ total: 0, occupied: 0 });
   const [superAdminMetrics, setSuperAdminMetrics] = useState({ totalStores: 0, totalRevenue: 0 });
+
+  // Pipeline Filter & Order Selection State
+  const [activePipelineStage, setActivePipelineStage] = useState<PipelineStageKey>('ALL');
+  const [selectedOrder, setSelectedOrder] = useState<OrderMaster | null>(null);
   const [settlingOrder, setSettlingOrder] = useState<OrderMaster | null>(null);
+  const [orderSearchQuery, setOrderSearchQuery] = useState('');
 
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
@@ -93,7 +120,7 @@ export default function DashboardPage() {
       setLoading(true);
       const [rev, orders, op, tables] = await Promise.allSettled([
         orderRemoteDataSource.getTodayRevenue(currentRestId),
-        orderRemoteDataSource.getTodayOrders(currentRestId, 'ALL', 1, 10),
+        orderRemoteDataSource.getTodayOrders(currentRestId, 'ALL', 1, 100),
         configRemoteDataSource.getOperatingStatus(currentRestId),
         tableRemoteDataSource.getTables(currentRestId),
       ]);
@@ -121,7 +148,135 @@ export default function DashboardPage() {
 
   useEffect(() => {
     loadDashboardData();
-  }, [loadDashboardData]);
+
+    if (currentRestId && !isSuperAdmin) {
+      // Connect real-time SignalR listeners
+      startPosSignalRConnection(currentRestId).catch(() => {});
+      const unsub1 = onPosOrderCreated(() => loadDashboardData());
+      const unsub2 = onPosOrderStatusChanged(() => loadDashboardData());
+      const unsub3 = onPosOrderSettled((settledData: any) => {
+        const settledId = Number(settledData?.orderId || settledData?.id || 0);
+        if (settledId > 0) {
+          setRecentOrders((prev) =>
+            prev.map((o) =>
+              o.id === settledId
+                ? {
+                    ...o,
+                    status: OrderStatuses.Settled,
+                    paymentStatus: 'PAID',
+                    settledDateUtc: new Date().toISOString(),
+                  }
+                : o
+            )
+          );
+        }
+        loadDashboardData();
+      });
+      const unsub4 = onKitchenStatusChanged(() => loadDashboardData());
+      const unsub5 = onSignalRReconnected(() => loadDashboardData());
+
+      // Polling fallback
+      const interval = setInterval(loadDashboardData, 30000);
+
+      return () => {
+        clearInterval(interval);
+        unsub1();
+        unsub2();
+        unsub3();
+        unsub4();
+        unsub5();
+      };
+    }
+  }, [currentRestId, isSuperAdmin, loadDashboardData]);
+
+  // Status progression action from drawer or row
+  const handleUpdateOrderStatus = async (orderId: number, nextStatus: string) => {
+    try {
+      await orderRemoteDataSource.updateOrderStatus(orderId, nextStatus);
+      await loadDashboardData();
+      if (selectedOrder?.id === orderId) {
+        setSelectedOrder((prev) => (prev ? { ...prev, status: nextStatus as any } : null));
+      }
+    } catch (err: any) {
+      alert(`Failed to update status: ${err?.message || 'Server error'}`);
+    }
+  };
+
+  // Void order action
+  const handleCancelOrder = async (orderId: number, reason: string, tableId?: number) => {
+    try {
+      await orderRemoteDataSource.cancelOrder(orderId, reason);
+      if (tableId && currentRestId) {
+        await tableRemoteDataSource
+          .freeTable(tableId, {
+            restaurantId: currentRestId,
+            settleActiveOrder: false,
+            remarks: `Order #${orderId} voided from dashboard: ${reason}`,
+          })
+          .catch((err) => console.warn('Free table warning:', err));
+      }
+      await loadDashboardData();
+      setSelectedOrder(null);
+      alert(`Order #${orderId} voided successfully.`);
+    } catch (err: any) {
+      alert(`Failed to void order: ${err?.message || 'Server error'}`);
+    }
+  };
+
+  // Format token
+  const formatTokenDisplay = (order: OrderMaster) => {
+    const raw = order.pickupToken || order.tokenNumber || String(order.id);
+    if (/^TK-/i.test(String(raw))) return String(raw).toUpperCase();
+    const num = parseInt(String(raw), 10);
+    if (!isNaN(num) && num > 0) return `TK-${String(num).padStart(3, '0')}`;
+    return `TK-${String(order.id).slice(-3).padStart(3, '0')}`;
+  };
+
+  // Filtered orders based on pipeline stage and search
+  const filteredOrders = useMemo(() => {
+    return recentOrders.filter((order) => {
+      const norm = normalizeOrderStatus(order.status);
+      const isSettled = isOrderSettled(order);
+      const isCancelled = norm === OrderStatuses.Cancelled;
+
+      // 1. Pipeline stage filtering
+      if (activePipelineStage === 'ALL') {
+        // 'ALL' shows all active (unsettled & non-cancelled) orders
+        if (isSettled || isCancelled) return false;
+      } else if (activePipelineStage === 'NEW') {
+        if (norm !== OrderStatuses.PendingPayment && norm !== OrderStatuses.Placed && norm !== OrderStatuses.Confirmed) {
+          return false;
+        }
+      } else if (activePipelineStage === 'COOKING') {
+        if (norm !== OrderStatuses.Preparing) return false;
+      } else if (activePipelineStage === 'READY') {
+        if (norm !== OrderStatuses.Ready) return false;
+      } else if (activePipelineStage === 'SERVED') {
+        if (norm !== OrderStatuses.Served && norm !== OrderStatuses.Delivered) return false;
+      } else if (activePipelineStage === 'SETTLED') {
+        if (!isSettled) return false;
+      } else if (activePipelineStage === 'CANCELLED') {
+        if (!isCancelled) return false;
+      }
+
+      // 2. Search query filtering
+      if (orderSearchQuery.trim()) {
+        const q = orderSearchQuery.toLowerCase().trim();
+        const matchId = String(order.id).includes(q);
+        const matchToken = formatTokenDisplay(order).toLowerCase().includes(q);
+        const matchTable = (order.tableName || '').toLowerCase().includes(q);
+        const matchCust = (order.customerName || '').toLowerCase().includes(q);
+        const matchPhone = (order.mobileNumber || '').includes(q);
+        const matchItems = Array.isArray(order.items) && order.items.some((i) => i.itemName.toLowerCase().includes(q));
+
+        if (!matchId && !matchToken && !matchTable && !matchCust && !matchPhone && !matchItems) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }, [recentOrders, activePipelineStage, orderSearchQuery]);
 
   return (
     <AuthGuard>
@@ -184,7 +339,7 @@ export default function DashboardPage() {
                   ₹{Number(revenueData?.todayRevenue || 0).toLocaleString('en-IN')}
                 </h3>
                 <div className="mt-1 flex items-center gap-2 text-xs text-[#667085] dark:text-[#94A3B8]">
-                  <span>Total {revenueData?.todayOrdersCount || 0} bills punched</span>
+                  <span>Total {revenueData?.todayOrdersCount || recentOrders.length} bills punched</span>
                 </div>
               </div>
             </div>
@@ -201,10 +356,14 @@ export default function DashboardPage() {
               </div>
               <div className="mt-3">
                 <h3 className="text-2xl font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
-                  {recentOrders.filter((o) => o.status !== 'SETTLED' && o.status !== 'CANCELLED').length}
+                  {
+                    recentOrders.filter(
+                      (o) => !isOrderSettled(o) && normalizeOrderStatus(o.status) !== OrderStatuses.Cancelled
+                    ).length
+                  }
                 </h3>
                 <p className="mt-1 text-xs text-[#667085] dark:text-[#94A3B8]">
-                  Orders in kitchen & counter
+                  Orders in kitchen, counter & tables
                 </p>
               </div>
             </div>
@@ -263,6 +422,15 @@ export default function DashboardPage() {
             </div>
           </div>
 
+          {/* Canonical Order Status Pipeline Widget */}
+          {!isSuperAdmin && (
+            <OrderStatusPipeline
+              orders={recentOrders}
+              activeStage={activePipelineStage}
+              onSelectStage={(stage) => setActivePipelineStage(stage)}
+            />
+          )}
+
           {/* Quick Access Operational Grid */}
           <div>
             <h2 className="text-sm font-bold text-[#667085] dark:text-[#94A3B8] uppercase tracking-wider mb-3">
@@ -309,19 +477,6 @@ export default function DashboardPage() {
               </div>
 
               <div
-                onClick={() => router.push('/reports')}
-                className="group cursor-pointer rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-5 shadow-sm hover:shadow-md hover:border-[#DE8626] transition-all"
-              >
-                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-purple-500/10 text-purple-600 mb-3 group-hover:scale-105 transition-transform">
-                  <BarChart3 className="h-5 w-5" />
-                </div>
-                <h4 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">Business Reports</h4>
-                <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-1">
-                  Daily revenue summaries, top items, and hourly sales heatmaps
-                </p>
-              </div>
-
-              <div
                 onClick={() => router.push('/kitchen')}
                 className="group cursor-pointer rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-5 shadow-sm hover:shadow-md hover:border-[#DE8626] transition-all"
               >
@@ -331,6 +486,19 @@ export default function DashboardPage() {
                 <h4 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">Kitchen (KDS)</h4>
                 <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-1">
                   Live preparation queue, station routing, and kitchen ticket dispatch
+                </p>
+              </div>
+
+              <div
+                onClick={() => router.push('/reports')}
+                className="group cursor-pointer rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-5 shadow-sm hover:shadow-md hover:border-[#DE8626] transition-all"
+              >
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-purple-500/10 text-purple-600 mb-3 group-hover:scale-105 transition-transform">
+                  <BarChart3 className="h-5 w-5" />
+                </div>
+                <h4 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">Business Reports</h4>
+                <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-1">
+                  Daily revenue summaries, top items, and hourly sales heatmaps
                 </p>
               </div>
 
@@ -356,7 +524,7 @@ export default function DashboardPage() {
                 </div>
                 <h4 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">Prepaid Wallet</h4>
                 <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-1">
-                  Commission ledger, Cashfree gateway top-ups, and SMS balances
+                  Commission ledger, instant gateway top-ups, and SMS balances
                 </p>
               </div>
 
@@ -375,23 +543,52 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Today's Recent Orders Feed */}
-          <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-5 shadow-sm">
-            <div className="flex items-center justify-between mb-4">
+          {/* Today's Live Orders Feed with Quick Filter & Search */}
+          <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-5 shadow-sm space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#E7E1DA] dark:border-[#2B3540]">
               <div>
-                <h3 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">Today's Live Orders</h3>
-                <p className="text-xs text-[#667085] dark:text-[#94A3B8]">
-                  Real-time ticket stream across counter, dine-in, and online
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                    Today's Live Orders
+                  </h3>
+                  <span className="rounded-full bg-[#DE8626]/10 px-2.5 py-0.5 text-xs font-black text-[#DE8626]">
+                    {filteredOrders.length}
+                  </span>
+                </div>
+                <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-0.5">
+                  Showing {activePipelineStage === 'ALL' ? 'all active queue' : `${activePipelineStage} orders`} across counter, dine-in, and online
                 </p>
               </div>
-              <div className="flex items-center gap-3">
+
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Search Box */}
+                <div className="relative min-w-[200px]">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#667085]" />
+                  <input
+                    type="text"
+                    value={orderSearchQuery}
+                    onChange={(e) => setOrderSearchQuery(e.target.value)}
+                    placeholder="Search token, table, guest..."
+                    className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF8F5] dark:bg-[#151A1E] pl-8 pr-7 py-1.5 text-xs text-[#1E2930] dark:text-[#F3F4F6] placeholder-[#667085] focus:outline-hidden focus:border-[#DE8626]"
+                  />
+                  {orderSearchQuery && (
+                    <button
+                      onClick={() => setOrderSearchQuery('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-[#667085]"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+
                 <button
                   onClick={() => router.push('/orders')}
-                  className="flex items-center gap-1 text-xs font-semibold text-[#667085] hover:text-[#DE8626] transition-colors"
+                  className="flex items-center gap-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] px-3 py-1.5 text-xs font-semibold text-[#667085] hover:text-[#DE8626] transition-colors"
                 >
                   <span>Orders & History</span>
                   <ChevronRight className="h-3.5 w-3.5" />
                 </button>
+
                 <button
                   onClick={() => router.push('/pos')}
                   className="flex items-center gap-1 rounded-xl bg-[#DE8626] px-3 py-1.5 text-xs font-bold text-white shadow-xs hover:bg-[#C4721C] transition-colors"
@@ -402,83 +599,121 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            {recentOrders.length === 0 ? (
+            {filteredOrders.length === 0 ? (
               <div className="py-12 text-center text-xs text-[#667085] dark:text-[#94A3B8]">
-                No orders punched yet today. Click "Punch Order (POS)" to create the first sale!
+                {orderSearchQuery || activePipelineStage !== 'ALL'
+                  ? 'No orders match the current filter or search. Try clearing filters.'
+                  : 'No orders punched yet today. Click "Punch Order (POS)" to create the first sale!'}
               </div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
                   <thead className="border-b border-[#E7E1DA] dark:border-[#2B3540] text-[#667085] dark:text-[#94A3B8]">
                     <tr>
-                      <th className="pb-3 font-semibold">Order ID</th>
+                      <th className="pb-3 font-semibold">Token / Order</th>
                       <th className="pb-3 font-semibold">Table / Service</th>
                       <th className="pb-3 font-semibold">Customer</th>
                       <th className="pb-3 font-semibold">Items</th>
                       <th className="pb-3 font-semibold">Total Amount</th>
                       <th className="pb-3 font-semibold">Status</th>
                       <th className="pb-3 font-semibold">Time</th>
-                      <th className="pb-3 font-semibold text-right">Action</th>
+                      <th className="pb-3 font-semibold text-right">Quick Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#E7E1DA]/60 dark:divide-[#2B3540]/60">
-                    {recentOrders.map((order) => (
-                      <tr key={order.id} className="hover:bg-black/5 dark:hover:bg-white/5 transition-colors">
-                        <td className="py-3 font-bold text-[#1E2930] dark:text-[#F3F4F6]">
-                          #{order.id}
-                        </td>
-                        <td className="py-3 text-[#1E2930] dark:text-[#F3F4F6]">
-                          {order.tableName || order.orderTypeName || 'Counter'}
-                        </td>
-                        <td className="py-3 text-[#667085] dark:text-[#94A3B8]">
-                          {order.customerName || order.mobileNumber || 'Guest'}
-                        </td>
-                        <td className="py-3 text-[#667085] dark:text-[#94A3B8] max-w-[200px] truncate">
-                          {Array.isArray(order.items)
-                            ? order.items.map((i) => `${i.quantity}x ${i.itemName}`).join(', ')
-                            : 'Items'}
-                        </td>
-                        <td className="py-3 font-bold text-[#1E2930] dark:text-[#F3F4F6]">
-                          ₹{order.totalAmount}
-                        </td>
-                        <td className="py-3">
-                          <span
-                            className={`rounded-md px-2 py-0.5 text-[10px] font-bold uppercase ${
-                              order.status === 'SETTLED'
-                                ? 'bg-emerald-500/10 text-emerald-600'
-                                : order.status === 'CANCELLED'
-                                ? 'bg-red-500/10 text-red-600'
-                                : order.status === 'SERVED'
-                                ? 'bg-emerald-500/15 text-emerald-600 border border-emerald-500/30'
-                                : 'bg-amber-500/10 text-[#DE8626]'
-                            }`}
-                          >
-                            {order.status === 'SERVED' ? 'Served (Ready)' : order.status}
-                          </span>
-                        </td>
-                        <td className="py-3 text-[#667085] dark:text-[#94A3B8]">
-                          {order.createdAt
-                            ? new Date(order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                            : '-'}
-                        </td>
-                        <td className="py-3 text-right">
-                          {order.status !== 'SETTLED' && order.status !== 'CANCELLED' ? (
-                            <button
-                              onClick={() => setSettlingOrder(order)}
-                              className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1 text-[11px] font-bold shadow-xs transition-colors"
-                              title="Settle Bill"
-                            >
-                              <Receipt className="h-3 w-3" />
-                              <span>Settle</span>
-                            </button>
-                          ) : (
-                            <span className="text-[10px] font-bold uppercase text-emerald-600 bg-emerald-500/10 px-2 py-0.5 rounded-md">
-                              Paid
+                    {filteredOrders.map((order) => {
+                      const badge = getOrderStatusBadge(order.status);
+                      const norm = normalizeOrderStatus(order.status);
+                      const isSettled = isOrderSettled(order);
+                      const token = formatTokenDisplay(order);
+                      const nextProg = getNextRecommendedStatus(order.status, order.orderTypeName, order.tableId);
+
+                      return (
+                        <tr
+                          key={order.id}
+                          onClick={() => setSelectedOrder(order)}
+                          className="hover:bg-black/5 dark:hover:bg-white/5 transition-colors cursor-pointer group"
+                        >
+                          <td className="py-3 font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-extrabold text-[#DE8626] bg-[#DE8626]/10 px-1.5 py-0.5 rounded-md text-[11px]">
+                                {token}
+                              </span>
+                              <span className="text-[#667085] text-[10px]">#{order.id}</span>
+                            </div>
+                          </td>
+                          <td className="py-3 text-[#1E2930] dark:text-[#F3F4F6]">
+                            <span className="font-medium">
+                              {order.tableName ? `Table ${order.tableName}` : order.orderTypeName || 'Counter'}
                             </span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
+                          </td>
+                          <td className="py-3 text-[#667085] dark:text-[#94A3B8]">
+                            {order.customerName || order.mobileNumber || 'Walk-in Guest'}
+                          </td>
+                          <td className="py-3 text-[#667085] dark:text-[#94A3B8] max-w-[200px] truncate">
+                            {Array.isArray(order.items)
+                              ? order.items.map((i) => `${i.quantity}x ${i.itemName}`).join(', ')
+                              : 'Items'}
+                          </td>
+                          <td className="py-3 font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                            ₹{Number(order.totalAmount || 0).toLocaleString('en-IN')}
+                          </td>
+                          <td className="py-3">
+                            <span
+                              className={`rounded-md px-2 py-0.5 text-[10px] font-bold uppercase border inline-flex items-center gap-1 ${badge.bgClass} ${badge.textClass} ${badge.borderClass}`}
+                            >
+                              <span className={`inline-block h-1.5 w-1.5 rounded-full ${badge.dotClass}`} />
+                              {badge.label}
+                            </span>
+                          </td>
+                          <td className="py-3 text-[#667085] dark:text-[#94A3B8]">
+                            {order.createdAt
+                              ? new Date(order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                              : '-'}
+                          </td>
+                          <td className="py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex items-center justify-end gap-1.5">
+                              {/* If unsettled, show progression or settle */}
+                              {!isSettled && norm !== OrderStatuses.Cancelled ? (
+                                <>
+                                  {nextProg && nextProg.nextStatus !== OrderStatuses.Settled && (
+                                    <button
+                                      onClick={() => handleUpdateOrderStatus(order.id, nextProg.nextStatus)}
+                                      className="inline-flex items-center gap-1 rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] hover:border-[#DE8626] px-2 py-1 text-[11px] font-bold text-[#1E2930] dark:text-[#F3F4F6] shadow-2xs transition-colors"
+                                      title={nextProg.actionLabel}
+                                    >
+                                      <Sparkles className="h-3 w-3 text-[#DE8626]" />
+                                      <span>{nextProg.nextStatus}</span>
+                                    </button>
+                                  )}
+
+                                  <button
+                                    onClick={() => setSettlingOrder(order)}
+                                    className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1 text-[11px] font-bold shadow-xs transition-colors"
+                                    title="Settle Bill & Free Table"
+                                  >
+                                    <Receipt className="h-3 w-3" />
+                                    <span>Settle</span>
+                                  </button>
+                                </>
+                              ) : (
+                                <span className="text-[10px] font-bold uppercase text-emerald-600 bg-emerald-500/10 px-2 py-0.5 rounded-md">
+                                  {isSettled ? 'Paid' : 'Void'}
+                                </span>
+                              )}
+
+                              <button
+                                onClick={() => setSelectedOrder(order)}
+                                className="p-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 text-[#667085]"
+                                title="Inspect Order Details"
+                              >
+                                <Eye className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -488,12 +723,41 @@ export default function DashboardPage() {
       </AppShell>
       <TermsConsentCard />
 
+      {/* Slide-over Order Details Drawer */}
+      <DashboardOrderDetailDrawer
+        isOpen={Boolean(selectedOrder)}
+        order={selectedOrder}
+        onClose={() => setSelectedOrder(null)}
+        onStatusUpdate={handleUpdateOrderStatus}
+        onSettleOrder={(order) => {
+          setSelectedOrder(null);
+          setSettlingOrder(order);
+        }}
+        onCancelOrder={handleCancelOrder}
+      />
+
+      {/* Cashier Settlement Modal */}
       {settlingOrder && (
         <OrderSettleModal
           isOpen={Boolean(settlingOrder)}
           onClose={() => setSettlingOrder(null)}
           order={settlingOrder}
-          onSettled={async () => {
+          onSettled={async (settledId: any) => {
+            const idNum = Number(settledId || settlingOrder?.id || 0);
+            if (idNum > 0) {
+              setRecentOrders((prev) =>
+                prev.map((o) =>
+                  o.id === idNum
+                    ? {
+                        ...o,
+                        status: OrderStatuses.Settled,
+                        paymentStatus: 'PAID',
+                        settledDateUtc: new Date().toISOString(),
+                      }
+                    : o
+                )
+              );
+            }
             await loadDashboardData();
             setSettlingOrder(null);
           }}

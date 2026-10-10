@@ -106,6 +106,38 @@ export class TableRemoteDataSource {
     }
   }
 
+  async transferTable(data: {
+    restaurantId: number;
+    sourceTableId: number;
+    targetTableId: number;
+    reason?: string;
+    transferredBy?: number;
+  }): Promise<{ success: boolean; message: string; orderId?: number }> {
+    try {
+      const response = await apiClient.post('/TableMaster/transfer', data);
+      return response.data || { success: true, message: 'Table transferred successfully.' };
+    } catch (err: any) {
+      const msg = err?.response?.data?.message || err?.message || 'Failed to transfer table';
+      throw new Error(msg);
+    }
+  }
+
+  async mergeTables(data: {
+    restaurantId: number;
+    sourceTableIds: number[];
+    targetTableId: number;
+    reason?: string;
+    mergedBy?: number;
+  }): Promise<{ success: boolean; message: string; consolidatedOrderId?: number }> {
+    try {
+      const response = await apiClient.post('/TableMaster/merge', data);
+      return response.data || { success: true, message: 'Tables merged successfully.' };
+    } catch (err: any) {
+      const msg = err?.response?.data?.message || err?.message || 'Failed to merge tables';
+      throw new Error(msg);
+    }
+  }
+
   async createTable(
     tableOrNumber: string | Partial<TableMaster>,
     seatingCapacity?: number,

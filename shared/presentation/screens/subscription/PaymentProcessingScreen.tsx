@@ -8,9 +8,10 @@ import {
   Modal,
   Alert,
   Platform,
+  Linking,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { CreditCard, CheckCircle2, AlertCircle, RefreshCw, X, ShieldCheck, Zap } from 'lucide-react-native';
+import { CreditCard, CheckCircle2, AlertCircle, RefreshCw, X, ShieldCheck, Zap, ExternalLink } from 'lucide-react-native';
 import { Colors } from '../../../core/theme/colors';
 import { Typography } from '../../../core/theme/typography';
 import { Spacing } from '../../../core/theme/spacing';
@@ -19,6 +20,8 @@ import { SubscriptionRemoteDataSource } from '../../../data/datasources/Subscrip
 import { SubscriptionRepositoryImpl } from '../../../data/repositories/SubscriptionRepositoryImpl';
 import { WalletEvents } from '../../../core/utils/walletEvents';
 import { joinOrderGroup, onPaymentVerified } from '../../../core/network/signalrService';
+import { PaymentGatewayManager } from '../../../data/datasources/PaymentGatewayManager';
+import { APP_CONSTANTS } from '../../../core/constants/appConstants';
 
 const subscriptionRepository = new SubscriptionRepositoryImpl(new SubscriptionRemoteDataSource());
 
@@ -30,6 +33,8 @@ interface PaymentProcessingScreenProps {
   restaurantId: number;
   subscriptionConfigurationId: number;
   paymentLink?: string;
+  gateway?: string;
+  keyId?: string;
   onSuccess: () => void;
   onClose: () => void;
 }
@@ -42,11 +47,20 @@ export const PaymentProcessingScreen: React.FC<PaymentProcessingScreenProps> = (
   restaurantId,
   subscriptionConfigurationId,
   paymentLink,
+  gateway,
+  keyId,
   onSuccess,
   onClose,
 }) => {
+  const gatewayName = gateway?.toLowerCase() === 'razorpay' ? 'Razorpay' : 'CashFree';
+  const resolvedPaymentLink =
+    paymentLink && paymentLink.startsWith('http')
+      ? paymentLink
+      : paymentLink && paymentLink.trim().length > 0
+      ? `${APP_CONSTANTS.API_BASE_URL.replace(/\/api\/?$/, '')}${paymentLink.startsWith('/') ? '' : '/'}${paymentLink}`
+      : `${APP_CONSTANTS.API_BASE_URL}/CashFreepayment/razorpay-checkout?orderId=${orderId}`;
   const [status, setStatus] = useState<'verifying' | 'success' | 'failed' | 'pending'>('verifying');
-  const [statusMessage, setStatusMessage] = useState<string>('Verifying payment with CashFree...');
+  const [statusMessage, setStatusMessage] = useState<string>(`Verifying payment with ${gatewayName}...`);
   const [checking, setChecking] = useState<boolean>(false);
   const [attemptCount, setAttemptCount] = useState<number>(0);
   const isCompletedRef = React.useRef<boolean>(false);
@@ -58,7 +72,7 @@ export const PaymentProcessingScreen: React.FC<PaymentProcessingScreenProps> = (
     if (visible && orderId) {
       isCompletedRef.current = false;
       setStatus('verifying');
-      setStatusMessage('Checking payment status with CashFree gateway...');
+      setStatusMessage(`Checking payment status with ${gatewayName} gateway...`);
       setAttemptCount(0);
 
       // 1. Real-time push listener: immediate zero-latency resolution
@@ -94,7 +108,7 @@ export const PaymentProcessingScreen: React.FC<PaymentProcessingScreenProps> = (
           timer = setTimeout(pollStatus, 3000);
         } else if (!isFinished && count >= 8 && !isCompletedRef.current) {
           setStatus('pending');
-          setStatusMessage('Payment verification is taking longer than expected. Tap "Verify Now" or "Activate Subscription".');
+          setStatusMessage(`Payment verification is taking longer than expected. Tap "Verify ${gatewayName} Status".`);
         }
       };
 
@@ -105,7 +119,7 @@ export const PaymentProcessingScreen: React.FC<PaymentProcessingScreenProps> = (
       if (timer) clearTimeout(timer);
       if (unsubscribeSignalR) unsubscribeSignalR();
     };
-  }, [visible, orderId]);
+  }, [visible, orderId, gatewayName]);
 
   const checkStatus = async (): Promise<boolean> => {
     if (!orderId || isCompletedRef.current) return isCompletedRef.current;
@@ -113,25 +127,25 @@ export const PaymentProcessingScreen: React.FC<PaymentProcessingScreenProps> = (
     try {
       const statusRes = await subscriptionRepository.getCashFreePaymentStatus(orderId);
       const payStatus = (statusRes.paymentStatus || '').toUpperCase();
+      const gatewayStatus = (statusRes.gatewayOrderStatus || '').toUpperCase();
 
-      if (payStatus === 'SUCCESS' || statusRes.gatewayOrderStatus === 'PAID') {
+      if (payStatus === 'SUCCESS' || gatewayStatus === 'PAID') {
         isCompletedRef.current = true;
-        await subscriptionRepository.verifyCashFreePayment(orderId, restaurantId, subscriptionConfigurationId, amount);
         setStatus('success');
         setStatusMessage('Payment Verified & Subscription Activated Successfully! 🎉');
         WalletEvents.emit();
         onSuccess();
         return true;
-      } else if (payStatus === 'FAILED' || payStatus === 'CANCELLED' || payStatus === 'USER_DROPPED') {
+      } else if (payStatus === 'FAILED' || payStatus === 'CANCELLED' || payStatus === 'USER_DROPPED' || gatewayStatus === 'EXPIRED' || gatewayStatus === 'CANCELLED' || gatewayStatus === 'TERMINATED') {
         isCompletedRef.current = true;
         setStatus('failed');
-        setStatusMessage(statusRes.failureReason || 'Payment was cancelled or failed at CashFree gateway.');
+        setStatusMessage(statusRes.failureReason || `Payment was cancelled or failed at ${gatewayName} gateway.`);
         return true;
       } else {
         setStatusMessage(
-          statusRes.gatewayOrderStatus === 'ACTIVE'
-            ? 'Payment session active on CashFree. Complete payment on CashFree, then tap "Verify Now".'
-            : 'Checking payment status with CashFree gateway...'
+          gatewayStatus === 'ACTIVE'
+            ? `Payment session active on ${gatewayName}. Complete payment on ${gatewayName}, then tap "Verify Now".`
+            : `Checking payment status with ${gatewayName} gateway...`
         );
         return false;
       }
@@ -145,9 +159,22 @@ export const PaymentProcessingScreen: React.FC<PaymentProcessingScreenProps> = (
 
   const handleManualVerify = async () => {
     if (isCompletedRef.current) return;
+    setChecking(true);
+    try {
+      if (orderId && restaurantId && subscriptionConfigurationId) {
+        await subscriptionRepository.verifyCashFreePayment(
+          orderId,
+          restaurantId,
+          subscriptionConfigurationId,
+          amount
+        );
+      }
+    } catch {
+      // ignore
+    }
     const isFinished = await checkStatus();
     if (!isFinished && status !== 'success') {
-      Alert.alert('Verification Pending', 'Payment is still being processed by CashFree. Please complete checkout or tap "Activate Subscription (Direct)".');
+      Alert.alert('Verification Pending', `Payment is still being processed by ${gatewayName}. Please complete checkout on ${gatewayName} or tap "Verify ${gatewayName} Status".`);
     }
   };
 
@@ -182,7 +209,7 @@ export const PaymentProcessingScreen: React.FC<PaymentProcessingScreenProps> = (
           <View style={styles.headerBox}>
             <View style={styles.headerTitleRow}>
               <CreditCard size={20} color="#DE8626" />
-              <Text style={styles.headerTitle}>CashFree Payment</Text>
+              <Text style={styles.headerTitle}>{gatewayName} Payment</Text>
             </View>
             <Text style={styles.orderIdLabel}>Order #{orderId}</Text>
           </View>
@@ -233,6 +260,33 @@ export const PaymentProcessingScreen: React.FC<PaymentProcessingScreenProps> = (
           <View style={styles.buttonRow}>
             {status !== 'success' && (
               <>
+                {gatewayName === 'Razorpay' && (
+                  <TouchableOpacity
+                    activeOpacity={0.88}
+                    style={styles.openCheckoutBtn}
+                    onPress={async () => {
+                      try {
+                        const payRes = await PaymentGatewayManager.getInstance().startPayment({
+                          orderId,
+                          paymentLink: resolvedPaymentLink,
+                          gateway: 'Razorpay',
+                          keyId,
+                          amount,
+                          orderNotes: `Subscription Plan: ${planName}`,
+                        });
+                        if (payRes.success) {
+                          await checkStatus();
+                        }
+                      } catch (err: any) {
+                        Alert.alert('Checkout Error', err?.message || 'Unable to open Razorpay checkout.');
+                      }
+                    }}
+                  >
+                    <ExternalLink size={16} color="#FFFFFF" />
+                    <Text style={styles.openCheckoutBtnText}>Open Razorpay Payment UI</Text>
+                  </TouchableOpacity>
+                )}
+
                 <TouchableOpacity
                   activeOpacity={0.88}
                   style={styles.verifyBtn}
@@ -250,21 +304,23 @@ export const PaymentProcessingScreen: React.FC<PaymentProcessingScreenProps> = (
                     ) : (
                       <>
                         <RefreshCw size={16} color="#FFFFFF" />
-                        <Text style={styles.verifyBtnText}>Verify CashFree Status</Text>
+                        <Text style={styles.verifyBtnText}>Verify {gatewayName} Status</Text>
                       </>
                     )}
                   </LinearGradient>
                 </TouchableOpacity>
 
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  style={styles.directActivateBtn}
-                  onPress={handleDirectActivate}
-                  disabled={checking}
-                >
-                  <Zap size={16} color="#D96B14" />
-                  <Text style={styles.directActivateBtnText}>Activate Subscription Plan</Text>
-                </TouchableOpacity>
+                {__DEV__ && (
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    style={styles.directActivateBtn}
+                    onPress={handleDirectActivate}
+                    disabled={checking}
+                  >
+                    <Zap size={16} color="#D96B14" />
+                    <Text style={styles.directActivateBtnText}>[DEV] Activate Subscription Plan</Text>
+                  </TouchableOpacity>
+                )}
               </>
             )}
 
@@ -404,6 +460,25 @@ const styles = StyleSheet.create({
   buttonRow: {
     width: '100%',
     gap: Spacing.sm,
+  },
+  openCheckoutBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#1E40AF',
+    borderRadius: Spacing.borderRadius.md,
+    height: 44,
+    gap: 8,
+    shadowColor: '#1E40AF',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  openCheckoutBtnText: {
+    color: '#FFFFFF',
+    fontSize: Typography.fontSize.body2,
+    fontWeight: Typography.fontWeight.bold,
   },
   verifyBtn: {
     borderRadius: Spacing.borderRadius.md,

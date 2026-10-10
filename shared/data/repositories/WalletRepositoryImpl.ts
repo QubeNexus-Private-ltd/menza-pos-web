@@ -20,9 +20,11 @@ export class WalletRepositoryImpl implements IWalletRepository {
   async verifyRecharge(
     orderId: string,
     restaurantId: number,
-    amountPaid: number
+    amountPaid: number,
+    razorpayPaymentId?: string,
+    razorpaySignature?: string
   ): Promise<{ success: boolean; message?: string }> {
-    return await this.dataSource.verifyRecharge(orderId, restaurantId, amountPaid);
+    return await this.dataSource.verifyRecharge(orderId, restaurantId, amountPaid, razorpayPaymentId, razorpaySignature);
   }
 
   async getTransactions(restaurantId: number): Promise<WalletTransaction[]> {

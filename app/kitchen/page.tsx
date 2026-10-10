@@ -40,6 +40,11 @@ import {
   onPosOrderSettled,
   onSignalRReconnected,
 } from '@/lib/signalr/signalrService';
+import {
+  getNextRecommendedStatus,
+  normalizeOrderStatus,
+  OrderStatuses,
+} from '@/lib/utils/orderStatusEngine';
 
 const orderDataSource = new OrderRemoteDataSource();
 
@@ -252,17 +257,23 @@ export default function KitchenKdsPage() {
     });
   }, [activeOrders, selectedStationCode]);
 
-  const getNextStatus = (currentStatus?: string) => {
-    const st = (currentStatus || '').toUpperCase();
-    if (st === 'PLACED' || st === 'CONFIRMED' || st === 'PENDING') return 'Preparing';
-    if (st === 'PREPARING' || st === 'COOKING' || st === 'IN_PROGRESS') return 'Ready';
-    if (st === 'READY') return 'Served';
-    return 'Preparing';
+  const getNextStatus = (order: OrderMaster) => {
+    const recommended = getNextRecommendedStatus(order.status, order.orderTypeName, order.tableId);
+    if (recommended) {
+      if (recommended.nextStatus === OrderStatuses.Settled) {
+        const isDineIn =
+          Boolean(order.tableId) ||
+          (order.orderTypeName && ['DINE-IN', 'DINE_IN', 'TABLE'].includes(order.orderTypeName.toUpperCase()));
+        return isDineIn ? OrderStatuses.Served : OrderStatuses.Delivered;
+      }
+      return recommended.nextStatus;
+    }
+    return OrderStatuses.Preparing;
   };
 
   const handleBumpOrder = useCallback(
     async (order: OrderMaster) => {
-      const nextStatus = getNextStatus(order.status);
+      const nextStatus = getNextStatus(order);
       await handleUpdateStatus(order.id, nextStatus);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -594,7 +605,7 @@ export default function KitchenKdsPage() {
                     : 0;
                   const isOverdue = elapsedMins >= 20;
                   const isWarning = elapsedMins >= 10 && elapsedMins < 20;
-                  const nextStatus = getNextStatus(order.status);
+                  const nextStatus = getNextStatus(order);
 
                   return (
                     <div

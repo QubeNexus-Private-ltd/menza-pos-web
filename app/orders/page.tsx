@@ -47,6 +47,11 @@ import {
   onPosOrderSettled,
   onKitchenStatusChanged,
 } from '@/lib/signalr/signalrService';
+import {
+  normalizeOrderStatus,
+  OrderStatuses,
+  getOrderStatusBadge,
+} from '@/lib/utils/orderStatusEngine';
 
 const orderDataSource = new OrderRemoteDataSource();
 const tableDataSource = new TableRemoteDataSource();
@@ -300,23 +305,35 @@ export default function OrdersPage() {
   // Filtered Live Orders
   const filteredLiveOrders = useMemo(() => {
     return liveOrders.filter((order) => {
+      const norm = normalizeOrderStatus(order.status);
+
       // Status filter
       if (liveStatusFilter !== 'ALL') {
-        if (liveStatusFilter === 'SERVED' && order.status?.toUpperCase() !== 'SERVED') return false;
-        if (liveStatusFilter === 'COOKING' && !['COOKING', 'PREPARING'].includes(order.status?.toUpperCase() || '')) return false;
-        if (liveStatusFilter === 'READY' && order.status?.toUpperCase() !== 'READY') return false;
-        if (liveStatusFilter === 'PLACED' && !['PLACED', 'CONFIRMED'].includes(order.status?.toUpperCase() || '')) return false;
+        if (liveStatusFilter === 'SERVED' && norm !== OrderStatuses.Served) return false;
+        if (liveStatusFilter === 'DELIVERED' && norm !== OrderStatuses.Delivered) return false;
+        if (liveStatusFilter === 'READY' && norm !== OrderStatuses.Ready) return false;
+        if (liveStatusFilter === 'PREPARING' && norm !== OrderStatuses.Preparing) return false;
+        if (liveStatusFilter === 'COOKING' && norm !== OrderStatuses.Preparing) return false;
+        if (
+          liveStatusFilter === 'PLACED' &&
+          norm !== OrderStatuses.Placed &&
+          norm !== OrderStatuses.Confirmed &&
+          norm !== OrderStatuses.PendingPayment
+        ) {
+          return false;
+        }
       }
 
       // Search query
       if (liveSearchQuery.trim()) {
         const q = liveSearchQuery.toLowerCase();
         const matchId = String(order.id).includes(q);
+        const matchToken = String(order.pickupToken || order.tokenNumber || '').toLowerCase().includes(q);
         const matchTable = (order.tableName || '').toLowerCase().includes(q);
         const matchCustomer = (order.customerName || '').toLowerCase().includes(q);
         const matchPhone = (order.mobileNumber || '').includes(q);
         const matchItems = Array.isArray(order.items) && order.items.some((i) => i.itemName.toLowerCase().includes(q));
-        if (!matchId && !matchTable && !matchCustomer && !matchPhone && !matchItems) return false;
+        if (!matchId && !matchToken && !matchTable && !matchCustomer && !matchPhone && !matchItems) return false;
       }
 
       return true;
@@ -539,9 +556,10 @@ export default function OrdersPage() {
                   {[
                     { id: 'ALL', label: 'All Active' },
                     { id: 'SERVED', label: 'Served (Needs Bill)', highlight: true },
-                    { id: 'READY', label: 'Ready' },
-                    { id: 'COOKING', label: 'Cooking' },
-                    { id: 'PLACED', label: 'Placed' },
+                    { id: 'DELIVERED', label: 'Delivered (Takeaway)' },
+                    { id: 'READY', label: 'Ready on Pass' },
+                    { id: 'PREPARING', label: 'Cooking (Kitchen)' },
+                    { id: 'PLACED', label: 'Placed (New)' },
                   ].map((filter) => (
                     <button
                       key={filter.id}

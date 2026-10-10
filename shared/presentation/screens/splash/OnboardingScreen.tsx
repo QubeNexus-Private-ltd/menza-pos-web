@@ -14,6 +14,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { UtensilsCrossed, ShoppingBag, TrendingUp, Sparkles, ArrowRight, Scale } from 'lucide-react-native';
 import { useAuthStore } from '../../state/useAuthStore';
 import { TermsAndConditionsModal } from '../legal/TermsAndConditionsModal';
+import { PrivacyPolicyModal } from '../legal/PrivacyPolicyModal';
 import { logger } from '../../../core/logging';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -48,6 +49,7 @@ const STITCH_ONBOARDING_SLIDES = [
 export const OnboardingScreen: React.FC = () => {
   const [activeIndex, setActiveIndex] = useState(0);
   const [termsModalVisible, setTermsModalVisible] = useState(false);
+  const [privacyModalVisible, setPrivacyModalVisible] = useState(false);
   const setCompletedOnboarding = useAuthStore((state) => state.setCompletedOnboarding);
 
   const currentSlide = STITCH_ONBOARDING_SLIDES[activeIndex];
@@ -162,17 +164,26 @@ export const OnboardingScreen: React.FC = () => {
               </LinearGradient>
             </TouchableOpacity>
 
-            {/* Legal Terms & Rules Link */}
-            <TouchableOpacity
-              onPress={() => setTermsModalVisible(true)}
-              style={styles.onboardingTermsLink}
-              activeOpacity={0.7}
-            >
+            {/* Legal Terms & Privacy Links */}
+            <View style={styles.onboardingTermsLink}>
               <Scale size={12} color="#8C7A6B" style={{ marginRight: 4 }} />
               <Text style={styles.onboardingTermsText}>
-                Review Menza <Text style={{ textDecorationLine: 'underline', color: '#D96B14', fontWeight: '600' }}>Terms & Regulations</Text>
+                Review Menza{' '}
+                <Text
+                  onPress={() => setTermsModalVisible(true)}
+                  style={{ textDecorationLine: 'underline', color: '#D96B14', fontWeight: '600' }}
+                >
+                  Terms
+                </Text>
+                {' & '}
+                <Text
+                  onPress={() => setPrivacyModalVisible(true)}
+                  style={{ textDecorationLine: 'underline', color: '#059669', fontWeight: '600' }}
+                >
+                  Privacy Policy
+                </Text>
               </Text>
-            </TouchableOpacity>
+            </View>
           </View>
         </View>
       </View>
@@ -181,6 +192,14 @@ export const OnboardingScreen: React.FC = () => {
       <TermsAndConditionsModal
         visible={termsModalVisible}
         onClose={() => setTermsModalVisible(false)}
+        onOpenPrivacyPolicy={() => setPrivacyModalVisible(true)}
+      />
+
+      {/* Privacy Policy & DPDP Modal */}
+      <PrivacyPolicyModal
+        visible={privacyModalVisible}
+        onClose={() => setPrivacyModalVisible(false)}
+        onOpenTerms={() => setTermsModalVisible(true)}
       />
     </SafeAreaView>
   );

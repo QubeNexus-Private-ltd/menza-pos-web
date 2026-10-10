@@ -2,28 +2,7 @@ import { apiClient } from '../../core/network/apiClient';
 import { AuthResponse } from '../../domain/models/AuthResponse';
 import { RestaurantDetail } from '../../domain/models/Restaurant';
 import { useAuthStore } from '../../presentation/state/useAuthStore';
-
-function decodeJwtClaims(token: string): Record<string, any> {
-  try {
-    if (!token || typeof token !== 'string') return {};
-    const parts = token.split('.');
-    if (parts.length < 2) return {};
-    const base64Url = parts[1];
-    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-    if (typeof atob !== 'undefined') {
-      const jsonPayload = decodeURIComponent(
-        atob(base64)
-          .split('')
-          .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
-          .join('')
-      );
-      return JSON.parse(jsonPayload);
-    }
-    return {};
-  } catch {
-    return {};
-  }
-}
+import { decodeJwtClaims } from '../../core/auth/jwtUtils';
 
 export class AuthRemoteDataSource {
   async generateOtp(mobile: string, deviceId?: string): Promise<{ message: string; otpCode?: string }> {
@@ -32,9 +11,6 @@ export class AuthRemoteDataSource {
       mobileNumber: cleanMobile,
       mobile: cleanMobile,
       deviceId,
-      smsHash: '7nP3ic8JzV5',
-      appHash: '7nP3ic8JzV5',
-      hash: '7nP3ic8JzV5',
     });
     const resData = response.data?.data ?? response.data;
     const otpCode = resData?.otpCode || resData?.OtpCode || resData?.otp || resData?.Otp || resData?.code || resData?.Code;
@@ -49,10 +25,7 @@ export class AuthRemoteDataSource {
     const response = await apiClient.post('/Auth/GenerateOtp', {
       mobileNumber: cleanMobile,
       mobile: cleanMobile,
-      deviceId: deviceId || 'web-client',
-      smsHash: '7nP3ic8JzV5',
-      appHash: '7nP3ic8JzV5',
-      hash: '7nP3ic8JzV5',
+      deviceId,
     });
     const resData = response.data?.data ?? response.data;
     const otpCode = resData?.otpCode || resData?.OtpCode || resData?.otp || resData?.Otp || resData?.code || resData?.Code;
@@ -168,7 +141,10 @@ export class AuthRemoteDataSource {
         role: r.role || r.Role || defaultRole,
         isDefault: Boolean(r.isDefault || r.IsDefault),
       }));
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.response?.status === 401) {
+        throw err;
+      }
       if (storeState.restaurants.length > 0) {
         return storeState.restaurants;
       }

@@ -55,6 +55,7 @@ import {
 } from 'lucide-react-native';
 import { Typography } from '../../../core/theme/typography';
 import { Spacing } from '../../../core/theme/spacing';
+import { getSanitizedErrorMessage } from '../../../core/utils/errorSanitizer';
 import { SkeletonLoader } from '../../components/SkeletonLoader';
 import {
   TableMaster,
@@ -528,7 +529,7 @@ export const FloorTableScreen: React.FC<FloorTableScreenProps> = ({ onClose, onO
       setTableSeatsInput('4');
       setTableMinSeatsInput('2');
     } catch (err: any) {
-      showAlert('Error', err?.message || 'Could not save table configuration.', 'danger');
+      showAlert('Error', getSanitizedErrorMessage(err, 'Could not save table configuration.'), 'danger');
     } finally {
       setSavingTable(false);
     }
@@ -686,7 +687,7 @@ export const FloorTableScreen: React.FC<FloorTableScreenProps> = ({ onClose, onO
         }
       );
     } catch (err: any) {
-      showAlert('Booking Error', err?.message || 'Could not create reservation.', 'danger');
+      showAlert('Booking Error', getSanitizedErrorMessage(err, 'Could not create reservation.'), 'danger');
     } finally {
       setSavingBooking(false);
     }
@@ -747,7 +748,7 @@ export const FloorTableScreen: React.FC<FloorTableScreenProps> = ({ onClose, onO
         }
       );
     } catch (err: any) {
-      showAlert('Error', err?.message || 'Could not update seating status.', 'danger');
+      showAlert('Error', getSanitizedErrorMessage(err, 'Could not update seating status.'), 'danger');
     }
   };
 
@@ -793,7 +794,7 @@ export const FloorTableScreen: React.FC<FloorTableScreenProps> = ({ onClose, onO
       setSelectedResForAssignment(null);
       showAlert('Table Assigned', `Table ${table.tableNumber} assigned to ${selectedResForAssignment.customerName}.`, 'success');
     } catch (err: any) {
-      showAlert('Assignment Error', err?.message || 'Could not assign table.', 'danger');
+      showAlert('Assignment Error', getSanitizedErrorMessage(err, 'Could not assign table.'), 'danger');
     }
   };
 
@@ -803,7 +804,7 @@ export const FloorTableScreen: React.FC<FloorTableScreenProps> = ({ onClose, onO
       setSettingsModalVisible(false);
       showAlert('Settings Saved', 'Reservation policy and booking slot rules updated.', 'success');
     } catch (err: any) {
-      showAlert('Error', err?.message || 'Could not save policy settings.', 'danger');
+      showAlert('Error', getSanitizedErrorMessage(err, 'Could not save policy settings.'), 'danger');
     }
   };
 
@@ -846,7 +847,7 @@ export const FloorTableScreen: React.FC<FloorTableScreenProps> = ({ onClose, onO
             );
           }
         } catch (err: any) {
-          showAlert('Update Failed', err?.message || 'Could not update date block status.', 'danger');
+          showAlert('Update Failed', getSanitizedErrorMessage(err, 'Could not update date block status.'), 'danger');
         }
       }
     );
@@ -883,7 +884,7 @@ export const FloorTableScreen: React.FC<FloorTableScreenProps> = ({ onClose, onO
             );
           }
         } catch (err: any) {
-          showAlert('Update Failed', err?.message || 'Could not update table booking mode.', 'danger');
+          showAlert('Update Failed', getSanitizedErrorMessage(err, 'Could not update table booking mode.'), 'danger');
         }
       }
     );

@@ -126,15 +126,24 @@ export class CashfreeSdkService {
 
     // 3. Fallback for Expo Go or Unlinked Native SDK Runtime
     if (this.isExpoGoRuntime()) {
-      logger.payment('PAYMENT_SDK_COMPLETED', `Expo Go sandbox fallback payment executed for order ${orderId}`, {
+      logger.payment('PAYMENT_SDK_STARTED', `Expo Go unlinked runtime detected for order ${orderId}. Opening browser payment link.`, {
         orderId,
-        success: true,
+        hasPaymentLink: Boolean(paymentLink),
       });
 
+      if (paymentLink) {
+        try {
+          const { Linking } = require('react-native');
+          Linking.openURL(paymentLink);
+        } catch (linkErr: any) {
+          logger.payment('PAYMENT_SDK_COMPLETED', `Failed to open payment link: ${linkErr?.message}`, { orderId, success: false });
+        }
+      }
+
       return {
-        success: true,
+        success: false,
         orderId,
-        rawDetails: { note: 'Executed via Sandbox Web Checkout fallback for Expo Go runtime.' },
+        rawDetails: { note: 'Cashfree Native SDK requires a custom dev build. Payment link opened in browser.' },
       };
     }
 

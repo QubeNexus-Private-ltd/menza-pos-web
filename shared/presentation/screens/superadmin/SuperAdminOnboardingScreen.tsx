@@ -43,6 +43,7 @@ import {
 import { Colors } from '../../../core/theme/colors';
 import { Typography } from '../../../core/theme/typography';
 import { Spacing } from '../../../core/theme/spacing';
+import { getSanitizedErrorMessage } from '../../../core/utils/errorSanitizer';
 import { StatusBadge } from '../../components/StatusBadge';
 import { OnboardRestaurantRequest } from '../../../domain/models/OnboardRestaurantRequest';
 import { StateMaster } from '../../../domain/models/MasterData';
@@ -232,10 +233,12 @@ export const SuperAdminOnboardingScreen: React.FC<SuperAdminOnboardingScreenProp
     }
 
     try {
-      const permissionResult = await ImagePickerModule.requestMediaLibraryPermissionsAsync();
-      if (!permissionResult.granted) {
-        Alert.alert('Permission Denied', 'Permission to access gallery is required.');
-        return;
+      if (Platform.OS === 'ios') {
+        const permissionResult = await ImagePickerModule.requestMediaLibraryPermissionsAsync();
+        if (!permissionResult.granted) {
+          Alert.alert('Permission Denied', 'Permission to access gallery is required.');
+          return;
+        }
       }
 
       const result = await ImagePickerModule.launchImageLibraryAsync({
@@ -271,8 +274,8 @@ export const SuperAdminOnboardingScreen: React.FC<SuperAdminOnboardingScreenProp
         Alert.alert('Store Creation Error', 'Could not save restaurant configuration.');
       }
     } catch (err: any) {
-      const errorMsg = err.response?.data?.message || err.response?.data || err.message || 'Failed to create restaurant configuration.';
-      Alert.alert('Store Creation Error', typeof errorMsg === 'string' ? errorMsg : 'Failed to save store.');
+      const errorMsg = getSanitizedErrorMessage(err, 'Failed to create restaurant configuration.');
+      Alert.alert('Store Creation Error', errorMsg);
     } finally {
       setSubmitting(false);
     }
@@ -344,8 +347,8 @@ export const SuperAdminOnboardingScreen: React.FC<SuperAdminOnboardingScreenProp
         Alert.alert('User Creation Error', 'Could not obtain created User ID.');
       }
     } catch (err: any) {
-      const errorMsg = err.response?.data?.message || err.response?.data || err.message || 'Could not create user profile.';
-      Alert.alert('User Creation Error', typeof errorMsg === 'string' ? errorMsg : 'Failed to save owner.');
+      const errorMsg = getSanitizedErrorMessage(err, 'Could not create user profile.');
+      Alert.alert('User Creation Error', errorMsg);
     } finally {
       setSubmitting(false);
     }
@@ -379,8 +382,8 @@ export const SuperAdminOnboardingScreen: React.FC<SuperAdminOnboardingScreenProp
       });
       setSuccessModalVisible(true);
     } catch (err: any) {
-      const errorMsg = err.response?.data?.message || err.response?.data || err.message || 'Failed to assign role.';
-      Alert.alert('Role Assignment Error', typeof errorMsg === 'string' ? errorMsg : 'Could not complete role assignment.');
+      const errorMsg = getSanitizedErrorMessage(err, 'Failed to assign role.');
+      Alert.alert('Role Assignment Error', errorMsg);
     } finally {
       setSubmitting(false);
     }

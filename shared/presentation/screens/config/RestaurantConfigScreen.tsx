@@ -73,9 +73,11 @@ import { useAuthStore } from '../../state/useAuthStore';
 import { useKitchenStationStore } from '../../state/useKitchenStationStore';
 import { GildedAlertModal, GildedAlertConfig } from '../../components/GildedAlertModal';
 import { TermsAndConditionsModal } from '../legal/TermsAndConditionsModal';
+import { PrivacyPolicyModal } from '../legal/PrivacyPolicyModal';
 import { RestaurantQrModal } from '../../components/RestaurantQrModal';
 import { RestaurantBankAccountScreen } from './RestaurantBankAccountScreen';
 import { WalletEvents } from '../../../core/utils/walletEvents';
+import { APP_CONSTANTS } from '../../../core/constants/appConstants';
 
 const configDataSource = new RestaurantConfigRemoteDataSource();
 const configRepository = new RestaurantConfigRepositoryImpl(configDataSource);
@@ -154,6 +156,7 @@ export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ 
   const [availableStates, setAvailableStates] = useState<StateMaster[]>([]);
   const [stateModalVisible, setStateModalVisible] = useState(false);
   const [termsModalVisible, setTermsModalVisible] = useState(false);
+  const [privacyModalVisible, setPrivacyModalVisible] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -1060,7 +1063,7 @@ export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ 
                   </View>
                 </View>
                 <Text style={styles.bankSettlementCardDesc}>
-                  Link owner bank account to receive 100% direct payouts for customer QR orders via Cashfree Easy Split
+                  Link owner bank account to receive 100% direct payouts for customer QR orders via {APP_CONSTANTS.IS_RAZORPAY ? 'Razorpay Route' : 'Cashfree Easy Split'}
                 </Text>
               </View>
             </View>
@@ -2332,6 +2335,23 @@ export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ 
               </View>
               <ChevronRight size={16} color="#8C7A6B" />
             </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.legalTermsButton, { marginTop: 10 }]}
+              onPress={() => setPrivacyModalVisible(true)}
+              activeOpacity={0.8}
+            >
+              <View style={[styles.legalIconBox, { backgroundColor: '#ECFDF5', borderColor: '#A7F3D0' }]}>
+                <ShieldCheck size={18} color="#059669" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.legalTitleText}>Privacy Policy & Data Protection</Text>
+                <Text style={styles.legalSubtitleText}>
+                  DPDP Act 2023 compliance, data retention, sub-processors & grievances
+                </Text>
+              </View>
+              <ChevronRight size={16} color="#8C7A6B" />
+            </TouchableOpacity>
           </View>
 
           {/* 9. MASTER SAVE ALL SETTINGS BUTTON OR LOCKED NOTICE */}
@@ -2373,6 +2393,14 @@ export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ 
       <TermsAndConditionsModal
         visible={termsModalVisible}
         onClose={() => setTermsModalVisible(false)}
+        onOpenPrivacyPolicy={() => setPrivacyModalVisible(true)}
+      />
+
+      {/* Privacy Policy & DPDP Modal */}
+      <PrivacyPolicyModal
+        visible={privacyModalVisible}
+        onClose={() => setPrivacyModalVisible(false)}
+        onOpenTerms={() => setTermsModalVisible(true)}
       />
 
       {/* State Picker Modal */}

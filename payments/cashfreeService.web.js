@@ -98,9 +98,11 @@ export const startCashfreePayment = async ({
         return { success: true, orderId };
       }
 
-      // Default resolution for modal dismissal or completed transaction
-      registeredCallbacks?.onSuccess?.(orderId);
-      return { success: true, orderId };
+      // When the modal is closed without payment details or user backs out
+      const cancelMsg = 'Payment was not completed or was cancelled.';
+      console.log(`${logPrefix} ${cancelMsg}`);
+      registeredCallbacks?.onFailure?.(cancelMsg, orderId);
+      return { success: false, error: cancelMsg, orderId };
     }
   } catch (sdkError) {
     console.warn(`${logPrefix} Web Drop Checkout modal error, checking paymentLink fallback...`, sdkError);
@@ -109,8 +111,7 @@ export const startCashfreePayment = async ({
       console.log(`${logPrefix} Opening paymentLink URL: ${paymentLink}`);
       if (typeof window !== 'undefined') {
         window.open(paymentLink, '_blank');
-        registeredCallbacks?.onSuccess?.(orderId);
-        return { success: true, orderId, paymentLink };
+        return { success: false, orderId, paymentLink, pendingVerification: true };
       }
     }
 

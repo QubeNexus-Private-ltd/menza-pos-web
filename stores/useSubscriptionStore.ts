@@ -26,11 +26,12 @@ interface SubscriptionStoreState {
   // UI Flow State
   isRenewalModalOpen: boolean;
   selectedPlan: SubscriptionPlan | null;
+  activeModalTab: 'renew' | 'explore';
 
   // Actions
   fetchSubscriptionStatus: (restaurantId?: number) => Promise<UserSubscriptionStatus | null>;
   fetchPlans: () => Promise<SubscriptionPlan[]>;
-  openRenewalModal: (plan?: SubscriptionPlan) => void;
+  openRenewalModal: (plan?: SubscriptionPlan, initialTab?: 'renew' | 'explore') => void;
   closeRenewalModal: () => void;
   setExpired: (expired: boolean) => void;
   assignPlan: (
@@ -49,9 +50,20 @@ interface SubscriptionStoreState {
     orderId?: string;
     paymentSessionId?: string;
     paymentLink?: string;
+    gateway?: string;
+    keyId?: string;
+    amount?: number;
+    currency?: string;
     message?: string;
   }>;
-  verifyPayment: (orderId: string) => Promise<{ success: boolean; isPaid: boolean; message?: string }>;
+  verifyPayment: (
+    orderId: string,
+    restaurantId?: number,
+    subscriptionConfigurationId?: number,
+    amountPaid?: number,
+    razorpayPaymentId?: string,
+    razorpaySignature?: string
+  ) => Promise<{ success: boolean; isPaid: boolean; message?: string }>;
   canTakeOrders: () => boolean;
   hasEntitlement: (configKey: string) => boolean;
   reset: () => void;
@@ -74,6 +86,7 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
 
   isRenewalModalOpen: false,
   selectedPlan: null,
+  activeModalTab: 'renew',
 
   fetchSubscriptionStatus: async (restaurantId?: number) => {
     const authRestId = useAuthStore.getState().activeRestaurant?.restaurantId;
@@ -106,7 +119,7 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
           daysRemaining: 0,
           isInGracePeriod: false,
           graceDaysRemaining: 0,
-          isExpired: true,
+          isExpired: false,
           isNoSubscription: true,
           hasLoaded: true,
           isLoading: false,
@@ -179,10 +192,12 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
     }
   },
 
-  openRenewalModal: (plan?: SubscriptionPlan) => {
+  openRenewalModal: (plan?: SubscriptionPlan, initialTab?: 'renew' | 'explore') => {
+    const hasSub = Boolean(get().subscription);
     set({
       isRenewalModalOpen: true,
       selectedPlan: plan || null,
+      activeModalTab: initialTab || (hasSub ? 'renew' : 'explore'),
     });
   },
 
@@ -226,14 +241,28 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
     return await SubscriptionService.initiateCashFreePayment(restaurantId, planId, amount, mobileNumber);
   },
 
-  verifyPayment: async (orderId: string) => {
-    return await SubscriptionService.verifyCashFreePayment(orderId);
+  verifyPayment: async (
+    orderId: string,
+    restaurantId?: number,
+    subscriptionConfigurationId?: number,
+    amountPaid?: number,
+    razorpayPaymentId?: string,
+    razorpaySignature?: string
+  ) => {
+    return await SubscriptionService.verifyCashFreePayment(
+      orderId,
+      restaurantId,
+      subscriptionConfigurationId,
+      amountPaid,
+      razorpayPaymentId,
+      razorpaySignature
+    );
   },
 
   canTakeOrders: () => {
-    const { subscription, lifecycleState, isExpired } = get();
-    // If no subscription at all, or expired, orders must be strictly blocked
-    if (!subscription || lifecycleState === 'NONE' || lifecycleState === 'EXPIRED' || isExpired) {
+    const { lifecycleState, isExpired } = get();
+    // Only block if explicitly expired beyond grace period
+    if (lifecycleState === 'EXPIRED' || isExpired) {
       return false;
     }
     return true;
@@ -241,9 +270,10 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
 
   hasEntitlement: (configKey: string): boolean => {
     const { subscription, lifecycleState, isExpired } = get();
-    if (!subscription || lifecycleState === 'NONE' || lifecycleState === 'EXPIRED' || isExpired) {
+    if (lifecycleState === 'EXPIRED' || isExpired) {
       return false;
     }
+    if (!subscription) return true; // Permissive fallback while loading or unspecified
     const entitlements = subscription.entitlements || [];
     const item = entitlements.find((e) => (e.configKey || '').toLowerCase() === configKey.toLowerCase());
     return item ? Boolean(item.isAllowed) : true;

@@ -21,6 +21,7 @@ import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { WebWalletService, RestaurantWalletDTO, WalletTransactionDTO } from '@/services/walletService';
+import { PaymentGatewayService, isRazorpayActive } from '@/payments/paymentGatewayService.web';
 
 export default function WalletPage() {
   const { activeRestaurant, restaurants, user } = useAuthStore();
@@ -68,22 +69,63 @@ export default function WalletPage() {
       return;
     }
 
+    if (!currentRestId) {
+      alert('Please select an active restaurant location first.');
+      return;
+    }
+
     try {
       setIsRecharging(true);
       const res = await WebWalletService.initiateRecharge(currentRestId, rechargeAmount, user?.mobile || '9999999999');
-      if (res.paymentLink) {
-        window.open(res.paymentLink, '_blank');
-      } else {
-        // Simulated local topup if in test/sandbox
+
+      if (!res.success || !res.orderId) {
+        alert(res.message || 'Could not initiate recharge order.');
+        setIsRecharging(false);
+        return;
+      }
+
+      // Check isRazorpay: if true, opens Razorpay Checkout modal; else opens Cashfree Drop modal
+      const paymentResult = await PaymentGatewayService.startPayment({
+        orderId: res.orderId,
+        amount: rechargeAmount,
+        currency: res.currency || 'INR',
+        gateway: res.gateway,
+        keyId: res.keyId,
+        paymentSessionId: res.paymentSessionId,
+        paymentLink: res.paymentLink,
+        customerName: activeRestaurant?.restaurantName || user?.name || 'Restaurant Owner',
+        customerPhone: user?.mobile || activeRestaurant?.ownerMobile || '9999999999',
+        customerEmail: (user as any)?.email || 'billing@menza.com',
+        orderNotes: `Platform Fee Wallet Top-up (₹${rechargeAmount})`,
+      });
+
+      if (!paymentResult.success) {
+        alert(paymentResult.error || 'Payment checkout was cancelled or failed.');
+        setIsRecharging(false);
+        return;
+      }
+
+      // Verify and credit wallet in database
+      const verifyRes = await WebWalletService.verifyRecharge(
+        res.orderId,
+        currentRestId,
+        rechargeAmount,
+        paymentResult.razorpayPaymentId,
+        paymentResult.razorpaySignature
+      );
+
+      if (verifyRes.success) {
         setPaymentSuccess(true);
         setTimeout(() => {
           setRechargeModalOpen(false);
           setPaymentSuccess(false);
           loadData();
         }, 1500);
+      } else {
+        alert(verifyRes.message || 'Recharge verification pending.');
       }
     } catch (err: any) {
-      alert(err?.message || 'Failed to initiate recharge');
+      alert(err?.message || 'Failed to complete wallet recharge');
     } finally {
       setIsRecharging(false);
     }
@@ -174,7 +216,7 @@ export default function WalletPage() {
                   ₹{Number(wallet?.totalRecharged || 0).toLocaleString('en-IN')}
                 </h2>
                 <p className="mt-1 text-xs text-[#667085] dark:text-[#94A3B8]">
-                  Lifetime credits via Cashfree
+                  Lifetime credits via {isRazorpayActive() ? 'Razorpay' : 'Cashfree'}
                 </p>
               </div>
             </div>
@@ -336,7 +378,7 @@ export default function WalletPage() {
                   <div className="rounded-xl bg-amber-500/5 border border-amber-500/20 p-3 text-[11px] text-[#667085] dark:text-[#94A3B8]">
                     <div className="flex items-center gap-1.5 font-bold text-[#DE8626] mb-1">
                       <ShieldCheck className="h-4 w-4" />
-                      <span>Instant Cashfree Gateway</span>
+                      <span>{isRazorpayActive() ? 'Secure Razorpay Payment Gateway' : 'Instant Cashfree Gateway'}</span>
                     </div>
                     <span>Supports UPI (Google Pay, PhonePe, Paytm), Netbanking, and Debit/Credit Cards.</span>
                   </div>

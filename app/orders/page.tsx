@@ -25,6 +25,8 @@ import {
   ArrowRight,
   Check,
   History as HistoryIcon,
+  Ban,
+  FileText,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
@@ -32,13 +34,28 @@ import { OrderSettleModal } from '@/components/orders/OrderSettleModal';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { usePrinterStore } from '@shared/presentation/state/usePrinterStore';
 import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
+import { TableRemoteDataSource } from '@shared/data/datasources/TableRemoteDataSource';
 import { OrderMaster, OrderItem } from '@shared/domain/models/Order';
 import { WebPrinterService } from '@/services/webPrinterService';
 import { WebWhatsAppService } from '@/services/whatsAppService';
 import { WebOrderHistoryService } from '@/services/orderHistoryService';
 import { ReceiptData } from '@shared/core/printer/EscPosBuilder';
+import {
+  startPosSignalRConnection,
+  onPosOrderCreated,
+  onPosOrderStatusChanged,
+  onPosOrderSettled,
+  onKitchenStatusChanged,
+} from '@/lib/signalr/signalrService';
+import {
+  normalizeOrderStatus,
+  OrderStatuses,
+  getOrderStatusBadge,
+  isOrderSettled as isOrderCanonicalSettled,
+} from '@/lib/utils/orderStatusEngine';
 
 const orderDataSource = new OrderRemoteDataSource();
+const tableDataSource = new TableRemoteDataSource();
 
 type ActiveTab = 'LIVE' | 'HISTORY';
 
@@ -62,6 +79,11 @@ export default function OrdersPage() {
   const [historyOrders, setHistoryOrders] = useState<OrderMaster[]>([]);
   const [historySearchQuery, setHistorySearchQuery] = useState('');
   const [historyPaymentFilter, setHistoryPaymentFilter] = useState<string>('ALL');
+  const [historyStatusFilter, setHistoryStatusFilter] = useState<string>('ALL');
+  const [historyDatePreset, setHistoryDatePreset] = useState<'TODAY' | 'YESTERDAY' | '7_DAYS' | '30_DAYS' | 'CUSTOM'>('TODAY');
+  const [historyFromDate, setHistoryFromDate] = useState<string>('');
+  const [historyToDate, setHistoryToDate] = useState<string>('');
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [historyPage, setHistoryPage] = useState(1);
   const [historyTotalPages, setHistoryTotalPages] = useState(1);
   const [historyTotalCount, setHistoryTotalCount] = useState(0);
@@ -73,6 +95,80 @@ export default function OrdersPage() {
   const [orderTimeline, setOrderTimeline] = useState<Array<{ id?: number; action: string; description: string; createdDateUtc?: string }> | null>(null);
   const [loadingTimeline, setLoadingTimeline] = useState(false);
   const [printingOrderId, setPrintingOrderId] = useState<number | null>(null);
+  const [cancellingOrderId, setCancellingOrderId] = useState<number | null>(null);
+
+  // Helper to reliably check if order is settled
+  const isOrderSettled = useCallback((o: OrderMaster): boolean => {
+    return isOrderCanonicalSettled(o);
+  }, []);
+
+  // Helper to get preset date bounds (YYYY-MM-DD)
+  const getPresetDates = useCallback((preset: 'TODAY' | 'YESTERDAY' | '7_DAYS' | '30_DAYS') => {
+    const now = new Date();
+    const format = (d: Date) => d.toISOString().split('T')[0];
+    if (preset === 'TODAY') {
+      const t = format(now);
+      return { from: t, to: t };
+    }
+    if (preset === 'YESTERDAY') {
+      const y = new Date(now);
+      y.setDate(y.getDate() - 1);
+      const yStr = format(y);
+      return { from: yStr, to: yStr };
+    }
+    if (preset === '7_DAYS') {
+      const past = new Date(now);
+      past.setDate(past.getDate() - 6);
+      return { from: format(past), to: format(now) };
+    }
+    if (preset === '30_DAYS') {
+      const past = new Date(now);
+      past.setDate(past.getDate() - 29);
+      return { from: format(past), to: format(now) };
+    }
+    return { from: format(now), to: format(now) };
+  }, []);
+
+  // Fetch Historical Orders by Date Range & Status
+  const fetchHistoricalOrders = useCallback(async () => {
+    if (!currentRestId) return;
+    try {
+      setHistoryLoading(true);
+      let fromDate: string | undefined = undefined;
+      let toDate: string | undefined = undefined;
+
+      if (historyDatePreset !== 'TODAY') {
+        if (historyDatePreset === 'CUSTOM') {
+          fromDate = historyFromDate || undefined;
+          toDate = historyToDate || undefined;
+        } else {
+          const p = getPresetDates(historyDatePreset);
+          fromDate = p.from;
+          toDate = p.to;
+        }
+      }
+
+      const statusParam = historyStatusFilter !== 'ALL' ? historyStatusFilter : undefined;
+      const res = await orderDataSource.getTodayOrders(
+        currentRestId,
+        statusParam,
+        historyPage,
+        50,
+        historySearchQuery || undefined,
+        fromDate,
+        toDate
+      );
+
+      const items = res?.items || [];
+      setHistoryOrders(items);
+      setHistoryTotalCount(res?.totalCount || items.length);
+      setHistoryTotalPages(res?.totalPages || Math.ceil((res?.totalCount || items.length) / 50) || 1);
+    } catch (err) {
+      console.warn('Failed to load historical orders:', err);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [currentRestId, historyDatePreset, historyFromDate, historyToDate, historyStatusFilter, historyPage, historySearchQuery, getPresetDates]);
 
   // Load Data
   const loadOrders = useCallback(async () => {
@@ -80,35 +176,61 @@ export default function OrdersPage() {
     try {
       setLoading(true);
 
-      // Fetch live & recent orders today
+      // Fetch live & recent orders today (with backend carryover unsettled rule)
       const todayRes = await orderDataSource.getTodayOrders(currentRestId, 'ALL', 1, 100);
       const allToday = todayRes?.items || [];
 
       // Partition into live (unsettled, non-cancelled) and settled
       const active = allToday.filter(
-        (o) => o.status?.toUpperCase() !== 'SETTLED' && o.status?.toUpperCase() !== 'CANCELLED'
+        (o) => !isOrderSettled(o) && o.status?.toUpperCase() !== 'CANCELLED'
       );
       const settled = allToday.filter(
-        (o) => o.status?.toUpperCase() === 'SETTLED' || o.status?.toUpperCase() === 'CANCELLED'
+        (o) => isOrderSettled(o) || o.status?.toUpperCase() === 'CANCELLED'
       );
 
       setLiveOrders(active);
-      setHistoryOrders(settled);
-      setHistoryTotalCount(settled.length);
-      setHistoryTotalPages(Math.ceil(settled.length / 20) || 1);
+      if (historyDatePreset === 'TODAY') {
+        setHistoryOrders(settled);
+        setHistoryTotalCount(settled.length);
+        setHistoryTotalPages(Math.ceil(settled.length / 20) || 1);
+      }
     } catch (err) {
       console.warn('Failed to load orders:', err);
     } finally {
       setLoading(false);
     }
-  }, [currentRestId]);
+  }, [currentRestId, isOrderSettled, historyDatePreset]);
+
+  // Trigger historical fetch when preset/date/status changes
+  useEffect(() => {
+    if (activeTab === 'HISTORY' && historyDatePreset !== 'TODAY') {
+      fetchHistoricalOrders();
+    }
+  }, [activeTab, historyDatePreset, historyStatusFilter, historyPage, fetchHistoricalOrders]);
 
   useEffect(() => {
     loadOrders();
-    // Auto-refresh every 30 seconds for live updates
-    const interval = setInterval(loadOrders, 30000);
-    return () => clearInterval(interval);
-  }, [loadOrders]);
+
+    if (currentRestId) {
+      // Start Real-Time SignalR Connection
+      startPosSignalRConnection(currentRestId).catch(() => {});
+      const unsub1 = onPosOrderCreated(() => loadOrders());
+      const unsub2 = onPosOrderStatusChanged(() => loadOrders());
+      const unsub3 = onPosOrderSettled(() => loadOrders());
+      const unsub4 = onKitchenStatusChanged(() => loadOrders());
+
+      // Auto-refresh fallback every 30 seconds
+      const interval = setInterval(loadOrders, 30000);
+
+      return () => {
+        clearInterval(interval);
+        unsub1();
+        unsub2();
+        unsub3();
+        unsub4();
+      };
+    }
+  }, [currentRestId, loadOrders]);
 
   // Load Timeline for selected order
   const handleViewTimeline = async (order: OrderMaster) => {
@@ -125,8 +247,8 @@ export default function OrdersPage() {
     }
   };
 
-  // Quick Print Receipt
-  const handlePrintReceipt = async (order: OrderMaster) => {
+  // Quick Print Receipt (supports standard, duplicate reprint, or proforma/guest check)
+  const handlePrintReceipt = async (order: OrderMaster, isDuplicate = false, isProforma = false) => {
     try {
       setPrintingOrderId(order.id);
       const receiptData: ReceiptData = {
@@ -157,6 +279,8 @@ export default function OrdersPage() {
         tenderedAmount: Number(order.tenderedAmount || 0),
         changeAmount: Number(order.changeAmount || 0),
         footerMessage: customFooter || 'Thank you for dining with us! Please visit again.',
+        isDuplicate,
+        isProforma,
       };
 
       await WebPrinterService.printReceipt(receiptData, paperWidth);
@@ -164,6 +288,73 @@ export default function OrdersPage() {
       alert(`Printing failed: ${err?.message || 'Check printer connection'}`);
     } finally {
       setPrintingOrderId(null);
+    }
+  };
+
+  // Quick Print KOT (Kitchen Order Ticket)
+  const handlePrintKot = async (order: OrderMaster) => {
+    try {
+      setPrintingOrderId(order.id);
+      const kotData: ReceiptData = {
+        restaurantName: activeRestaurant?.restaurantName || order.restaurantName || 'Menza Restaurant',
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        pickupToken: order.orderNumber || String(order.id),
+        tableName: order.tableName,
+        orderType: order.orderTypeName || (order.tableId ? 'DINE_IN' : 'COUNTER'),
+        date: order.createdAt ? new Date(order.createdAt).toLocaleDateString('en-IN') : new Date().toLocaleDateString('en-IN'),
+        customerName: order.customerName,
+        customerPhone: order.mobileNumber,
+        items: Array.isArray(order.items)
+          ? order.items.map((i) => ({
+              itemName: i.itemName,
+              quantity: i.quantity,
+              unitPrice: Number(i.unitPrice || 0),
+              totalPrice: Number(i.totalPrice || (i.quantity * (i.unitPrice || 0))),
+            }))
+          : [],
+        grandTotal: Number(order.totalAmount || 0),
+        isKot: true,
+      };
+
+      await WebPrinterService.printKot(kotData, paperWidth);
+    } catch (err: any) {
+      alert(`KOT Printing failed: ${err?.message || 'Check printer connection'}`);
+    } finally {
+      setPrintingOrderId(null);
+    }
+  };
+
+  // Void / Cancel Order with mandatory reason & auto-free associated table
+  const handleCancelOrder = async (order: OrderMaster) => {
+    const reason = window.prompt(
+      `Void / Cancel Order #${order.id}?\n\nPlease enter reason for voiding this order (e.g., Customer cancelled, Guest left):`,
+      'Customer cancelled'
+    );
+    if (reason === null) return;
+    const trimmedReason = reason.trim() || 'Voided by Staff';
+
+    try {
+      setCancellingOrderId(order.id);
+      await orderDataSource.cancelOrder(order.id, trimmedReason);
+
+      if (order.tableId) {
+        await tableDataSource.freeTable(order.tableId, {
+          restaurantId: currentRestId,
+          settleActiveOrder: false,
+          remarks: `Order #${order.id} voided: ${trimmedReason}`,
+        }).catch((err) => console.warn('Free table after order cancel warning:', err));
+      }
+
+      await loadOrders();
+      if (viewingOrder?.id === order.id) {
+        setViewingOrder(null);
+      }
+      alert(`Order #${order.id} has been voided successfully.`);
+    } catch (err: any) {
+      alert(`Failed to cancel order: ${err?.message || 'Check network connection'}`);
+    } finally {
+      setCancellingOrderId(null);
     }
   };
 
@@ -192,23 +383,35 @@ export default function OrdersPage() {
   // Filtered Live Orders
   const filteredLiveOrders = useMemo(() => {
     return liveOrders.filter((order) => {
+      const norm = normalizeOrderStatus(order.status);
+
       // Status filter
       if (liveStatusFilter !== 'ALL') {
-        if (liveStatusFilter === 'SERVED' && order.status?.toUpperCase() !== 'SERVED') return false;
-        if (liveStatusFilter === 'COOKING' && !['COOKING', 'PREPARING'].includes(order.status?.toUpperCase() || '')) return false;
-        if (liveStatusFilter === 'READY' && order.status?.toUpperCase() !== 'READY') return false;
-        if (liveStatusFilter === 'PLACED' && !['PLACED', 'CONFIRMED'].includes(order.status?.toUpperCase() || '')) return false;
+        if (liveStatusFilter === 'SERVED' && norm !== OrderStatuses.Served) return false;
+        if (liveStatusFilter === 'DELIVERED' && norm !== OrderStatuses.Delivered) return false;
+        if (liveStatusFilter === 'READY' && norm !== OrderStatuses.Ready) return false;
+        if (liveStatusFilter === 'PREPARING' && norm !== OrderStatuses.Preparing) return false;
+        if (liveStatusFilter === 'COOKING' && norm !== OrderStatuses.Preparing) return false;
+        if (
+          liveStatusFilter === 'PLACED' &&
+          norm !== OrderStatuses.Placed &&
+          norm !== OrderStatuses.Confirmed &&
+          norm !== OrderStatuses.PendingPayment
+        ) {
+          return false;
+        }
       }
 
       // Search query
       if (liveSearchQuery.trim()) {
         const q = liveSearchQuery.toLowerCase();
         const matchId = String(order.id).includes(q);
+        const matchToken = String(order.pickupToken || order.tokenNumber || '').toLowerCase().includes(q);
         const matchTable = (order.tableName || '').toLowerCase().includes(q);
         const matchCustomer = (order.customerName || '').toLowerCase().includes(q);
         const matchPhone = (order.mobileNumber || '').includes(q);
         const matchItems = Array.isArray(order.items) && order.items.some((i) => i.itemName.toLowerCase().includes(q));
-        if (!matchId && !matchTable && !matchCustomer && !matchPhone && !matchItems) return false;
+        if (!matchId && !matchToken && !matchTable && !matchCustomer && !matchPhone && !matchItems) return false;
       }
 
       return true;
@@ -223,6 +426,14 @@ export default function OrdersPage() {
         if ((order.paymentMode || 'CASH').toUpperCase() !== historyPaymentFilter.toUpperCase()) return false;
       }
 
+      // Status filter
+      if (historyStatusFilter !== 'ALL') {
+        const norm = normalizeOrderStatus(order.status);
+        if (historyStatusFilter === 'SETTLED' && !isOrderSettled(order)) return false;
+        if (historyStatusFilter === 'CANCELLED' && norm !== OrderStatuses.Cancelled) return false;
+        if (historyStatusFilter === 'DUE' && order.paymentMode?.toUpperCase() !== 'DUE') return false;
+      }
+
       // Search query
       if (historySearchQuery.trim()) {
         const q = historySearchQuery.toLowerCase();
@@ -235,7 +446,7 @@ export default function OrdersPage() {
 
       return true;
     });
-  }, [historyOrders, historyPaymentFilter, historySearchQuery]);
+  }, [historyOrders, historyPaymentFilter, historyStatusFilter, historySearchQuery, isOrderSettled]);
 
   // Metrics
   const servedAwaitingCount = useMemo(
@@ -252,9 +463,9 @@ export default function OrdersPage() {
   const totalSettledTodayAmount = useMemo(
     () =>
       historyOrders
-        .filter((o) => o.status?.toUpperCase() === 'SETTLED')
+        .filter((o) => isOrderSettled(o))
         .reduce((sum, o) => sum + Number(o.totalAmount || 0), 0),
-    [historyOrders]
+    [historyOrders, isOrderSettled]
   );
 
   return (
@@ -359,7 +570,7 @@ export default function OrdersPage() {
                   ₹{totalSettledTodayAmount.toLocaleString('en-IN')}
                 </span>
                 <span className="text-xs text-emerald-600 font-bold">
-                  ({historyOrders.filter((o) => o.status === 'SETTLED').length} bills)
+                  ({historyOrders.filter((o) => isOrderSettled(o)).length} bills)
                 </span>
               </div>
               <p className="mt-1 text-[11px] text-[#667085] dark:text-[#94A3B8]">
@@ -431,9 +642,10 @@ export default function OrdersPage() {
                   {[
                     { id: 'ALL', label: 'All Active' },
                     { id: 'SERVED', label: 'Served (Needs Bill)', highlight: true },
-                    { id: 'READY', label: 'Ready' },
-                    { id: 'COOKING', label: 'Cooking' },
-                    { id: 'PLACED', label: 'Placed' },
+                    { id: 'DELIVERED', label: 'Delivered (Takeaway)' },
+                    { id: 'READY', label: 'Ready on Pass' },
+                    { id: 'PREPARING', label: 'Cooking (Kitchen)' },
+                    { id: 'PLACED', label: 'Placed (New)' },
                   ].map((filter) => (
                     <button
                       key={filter.id}
@@ -558,11 +770,44 @@ export default function OrdersPage() {
 
                         {/* Bottom: Total & Action Buttons */}
                         <div className="pt-3 border-t border-[#E7E1DA]/80 dark:border-[#2B3540]/80">
-                          <div className="flex items-baseline justify-between mb-3">
+                          <div className="flex items-baseline justify-between mb-2.5">
                             <span className="text-xs text-[#667085]">Total Bill:</span>
                             <span className="text-xl font-black text-[#DE8626]">
                               ₹{order.totalAmount}
                             </span>
+                          </div>
+
+                          {/* Quick Operations Strip: KOT, Guest Check, Void */}
+                          <div className="flex items-center justify-between gap-1 mb-2.5 pb-2 border-b border-[#E7E1DA]/60 dark:border-[#2B3540]/60">
+                            <button
+                              onClick={() => handlePrintKot(order)}
+                              disabled={printingOrderId === order.id}
+                              title="Reprint Kitchen KOT"
+                              className="flex items-center gap-1 rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] bg-black/[0.02] dark:bg-white/[0.02] px-2 py-1 text-[11px] font-semibold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-colors disabled:opacity-50"
+                            >
+                              <ChefHat className="h-3 w-3 text-amber-600" />
+                              <span>KOT</span>
+                            </button>
+
+                            <button
+                              onClick={() => handlePrintReceipt(order, false, true)}
+                              disabled={printingOrderId === order.id}
+                              title="Print Proforma / Guest Check Bill"
+                              className="flex items-center gap-1 rounded-lg border border-blue-500/30 bg-blue-500/10 px-2 py-1 text-[11px] font-semibold text-blue-700 dark:text-blue-400 hover:bg-blue-500/20 transition-colors disabled:opacity-50"
+                            >
+                              <FileText className="h-3 w-3 text-blue-600" />
+                              <span>Guest Check</span>
+                            </button>
+
+                            <button
+                              onClick={() => handleCancelOrder(order)}
+                              disabled={cancellingOrderId === order.id}
+                              title="Void / Cancel Order & Free Table"
+                              className="flex items-center gap-1 rounded-lg border border-red-500/30 bg-red-500/10 px-2 py-1 text-[11px] font-semibold text-red-600 dark:text-red-400 hover:bg-red-500/20 transition-colors disabled:opacity-50"
+                            >
+                              <Ban className="h-3 w-3 text-red-500" />
+                              <span>Void</span>
+                            </button>
                           </div>
 
                           <div className="grid grid-cols-2 gap-2">
@@ -594,26 +839,122 @@ export default function OrdersPage() {
           {/* TAB 2: ORDER HISTORY & SETTLED BILLS */}
           {activeTab === 'HISTORY' && (
             <div className="space-y-4">
-              {/* Filter & Search Bar */}
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-                <div className="relative flex-1 max-w-md">
-                  <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-[#667085]" />
-                  <input
-                    type="text"
-                    value={historySearchQuery}
-                    onChange={(e) => setHistorySearchQuery(e.target.value)}
-                    placeholder="Search settled bills by Order ID, Mobile, Table, Name..."
-                    className="w-full rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] pl-10 pr-4 py-2.5 text-xs text-[#1E2930] dark:text-[#F3F4F6] placeholder-[#667085] focus:border-[#DE8626] focus:outline-none"
-                  />
+              {/* Date Presets, Status & Payment Filters Bar */}
+              <div className="rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-4 shadow-xs space-y-3">
+                {/* Row 1: Date Range Presets & Status Selector */}
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-xs font-bold text-[#667085] dark:text-[#94A3B8] mr-1 flex items-center gap-1">
+                      <Calendar className="h-3.5 w-3.5 text-[#DE8626]" />
+                      <span>Date Range:</span>
+                    </span>
+                    {(
+                      [
+                        { id: 'TODAY', label: 'Today' },
+                        { id: 'YESTERDAY', label: 'Yesterday' },
+                        { id: '7_DAYS', label: 'Last 7 Days' },
+                        { id: '30_DAYS', label: 'Last 30 Days' },
+                        { id: 'CUSTOM', label: 'Custom Range' },
+                      ] as const
+                    ).map((preset) => (
+                      <button
+                        key={preset.id}
+                        onClick={() => {
+                          setHistoryDatePreset(preset.id);
+                          setHistoryPage(1);
+                        }}
+                        className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-all ${
+                          historyDatePreset === preset.id
+                            ? 'bg-[#DE8626] text-white shadow-xs'
+                            : 'bg-black/[0.04] dark:bg-white/[0.04] text-[#667085] hover:text-[#1E2930] dark:hover:text-[#F3F4F6]'
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Status Pills */}
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-xs font-bold text-[#667085] dark:text-[#94A3B8] mr-1">
+                      Status:
+                    </span>
+                    {(['ALL', 'SETTLED', 'DUE', 'CANCELLED'] as const).map((st) => (
+                      <button
+                        key={st}
+                        onClick={() => {
+                          setHistoryStatusFilter(st);
+                          setHistoryPage(1);
+                        }}
+                        className={`rounded-xl px-2.5 py-1 text-xs font-bold transition-all ${
+                          historyStatusFilter === st
+                            ? 'bg-[#1E2930] dark:bg-[#F3F4F6] text-white dark:text-[#1E2930]'
+                            : 'text-[#667085] hover:text-[#1E2930] dark:hover:text-[#F3F4F6] border border-[#E7E1DA] dark:border-[#2B3540]'
+                        }`}
+                      >
+                        {st}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <div className="flex items-center gap-1.5 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-1 text-xs">
+                {/* Row 2: Custom Date Inputs (when CUSTOM is active) */}
+                {historyDatePreset === 'CUSTOM' && (
+                  <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60">
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="text-[#667085] font-semibold">From Date:</span>
+                      <input
+                        type="date"
+                        value={historyFromDate}
+                        onChange={(e) => setHistoryFromDate(e.target.value)}
+                        className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3 py-1.5 text-xs text-[#1E2930] dark:text-[#F3F4F6] focus:border-[#DE8626] focus:outline-none"
+                      />
+                    </div>
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="text-[#667085] font-semibold">To Date:</span>
+                      <input
+                        type="date"
+                        value={historyToDate}
+                        onChange={(e) => setHistoryToDate(e.target.value)}
+                        className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3 py-1.5 text-xs text-[#1E2930] dark:text-[#F3F4F6] focus:border-[#DE8626] focus:outline-none"
+                      />
+                    </div>
+                    <button
+                      onClick={() => fetchHistoricalOrders()}
+                      className="rounded-xl bg-[#DE8626] hover:bg-[#C4721C] px-3.5 py-1.5 text-xs font-bold text-white shadow-xs transition-colors"
+                    >
+                      Search Range
+                    </button>
+                  </div>
+                )}
+
+                {/* Row 3: Text Search & Payment Method Filter */}
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-2 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60">
+                  <div className="relative flex-1 max-w-md">
+                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-[#667085]" />
+                    <input
+                      type="text"
+                      value={historySearchQuery}
+                      onChange={(e) => setHistorySearchQuery(e.target.value)}
+                      placeholder="Search settled bills by Order ID, Mobile, Table, Name..."
+                      className="w-full rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] pl-10 pr-4 py-2 text-xs text-[#1E2930] dark:text-[#F3F4F6] placeholder-[#667085] focus:border-[#DE8626] focus:outline-none"
+                    />
+                    {historySearchQuery && (
+                      <button
+                        onClick={() => setHistorySearchQuery('')}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[#667085]"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1.5 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-1 text-xs">
                     {['ALL', 'CASH', 'UPI', 'CARD', 'DUE'].map((mode) => (
                       <button
                         key={mode}
                         onClick={() => setHistoryPaymentFilter(mode)}
-                        className={`rounded-xl px-3 py-1.5 font-bold transition-colors ${
+                        className={`rounded-xl px-2.5 py-1 font-bold transition-colors ${
                           historyPaymentFilter === mode
                             ? 'bg-[#DE8626] text-white shadow-xs'
                             : 'text-[#667085] hover:text-[#1E2930] dark:hover:text-[#F3F4F6]'
@@ -675,7 +1016,13 @@ export default function OrdersPage() {
                               {Array.isArray(order.items) ? `${order.items.length} items` : '1 item'}
                             </td>
                             <td className="py-3 px-4">
-                              <span className="rounded-lg bg-blue-500/10 px-2.5 py-1 text-[10px] font-bold text-blue-600 uppercase">
+                              <span
+                                className={`rounded-lg px-2.5 py-1 text-[10px] font-bold uppercase ${
+                                  order.paymentMode === 'DUE'
+                                    ? 'bg-amber-500/10 text-amber-600 border border-amber-500/30'
+                                    : 'bg-blue-500/10 text-blue-600'
+                                }`}
+                              >
                                 {order.paymentMode || 'CASH'}
                               </span>
                             </td>
@@ -685,16 +1032,30 @@ export default function OrdersPage() {
                             <td className="py-3 px-4">
                               <span
                                 className={`rounded-md px-2 py-0.5 text-[10px] font-bold uppercase ${
-                                  order.status === 'SETTLED'
+                                  isOrderSettled(order)
                                     ? 'bg-emerald-500/10 text-emerald-600'
-                                    : 'bg-red-500/10 text-red-600'
+                                    : order.status === 'CANCELLED'
+                                    ? 'bg-red-500/10 text-red-600'
+                                    : 'bg-amber-500/10 text-[#DE8626]'
                                 }`}
                               >
-                                {order.status}
+                                {isOrderSettled(order) ? 'SETTLED' : order.status}
                               </span>
                             </td>
                             <td className="py-3 px-4 text-right">
                               <div className="inline-flex items-center gap-1.5">
+                                {/* Settle Due Bill Button */}
+                                {order.paymentMode === 'DUE' && order.status !== 'CANCELLED' && (
+                                  <button
+                                    onClick={() => setSettlingOrder(order)}
+                                    title="Settle Outstanding DUE Bill"
+                                    className="rounded-lg border border-amber-500/40 bg-amber-500/15 px-2 py-1 text-[10px] font-bold text-amber-700 dark:text-amber-400 hover:bg-amber-500/25 transition-colors inline-flex items-center gap-1"
+                                  >
+                                    <CreditCard className="h-3 w-3" />
+                                    <span>Settle Due</span>
+                                  </button>
+                                )}
+
                                 {/* View Receipt */}
                                 <button
                                   onClick={() => setReceiptModalOrder(order)}
@@ -704,14 +1065,24 @@ export default function OrdersPage() {
                                   <Receipt className="h-3.5 w-3.5" />
                                 </button>
 
-                                {/* Print Thermal Receipt */}
+                                {/* Print Thermal Receipt (with Duplicate watermark) */}
                                 <button
-                                  onClick={() => handlePrintReceipt(order)}
+                                  onClick={() => handlePrintReceipt(order, true, false)}
                                   disabled={printingOrderId === order.id}
-                                  title="Reprint Receipt"
+                                  title="Reprint Receipt (Duplicate Copy)"
                                   className="rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] p-1.5 text-[#667085] hover:bg-black/5 dark:hover:bg-white/5 transition-colors disabled:opacity-50"
                                 >
                                   <Printer className="h-3.5 w-3.5" />
+                                </button>
+
+                                {/* Thermal KOT Reprint */}
+                                <button
+                                  onClick={() => handlePrintKot(order)}
+                                  disabled={printingOrderId === order.id}
+                                  title="Reprint Kitchen KOT"
+                                  className="rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] p-1.5 text-[#667085] hover:bg-black/5 dark:hover:bg-white/5 transition-colors disabled:opacity-50"
+                                >
+                                  <ChefHat className="h-3.5 w-3.5 text-amber-600" />
                                 </button>
 
                                 {/* WhatsApp Share */}
@@ -739,6 +1110,32 @@ export default function OrdersPage() {
                         ))}
                       </tbody>
                     </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Pagination Controls */}
+              {historyTotalPages > 1 && (
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
+                  <p className="text-xs text-[#667085]">
+                    Showing Page <span className="font-bold text-[#1E2930] dark:text-[#F3F4F6]">{historyPage}</span> of{' '}
+                    <span className="font-bold text-[#1E2930] dark:text-[#F3F4F6]">{historyTotalPages}</span> ({historyTotalCount} total orders)
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setHistoryPage((p) => Math.max(1, p - 1))}
+                      disabled={historyPage <= 1 || historyLoading}
+                      className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] px-3.5 py-1.5 text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-colors disabled:opacity-40"
+                    >
+                      Previous
+                    </button>
+                    <button
+                      onClick={() => setHistoryPage((p) => Math.min(historyTotalPages, p + 1))}
+                      disabled={historyPage >= historyTotalPages || historyLoading}
+                      className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] px-3.5 py-1.5 text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-colors disabled:opacity-40"
+                    >
+                      Next
+                    </button>
                   </div>
                 </div>
               )}
@@ -861,19 +1258,67 @@ export default function OrdersPage() {
 
               {/* Action Buttons */}
               <div className="space-y-2">
-                {viewingOrder.status !== 'SETTLED' && viewingOrder.status !== 'CANCELLED' && (
+                {/* Print Operations Strip */}
+                <div className="grid grid-cols-2 gap-2">
                   <button
-                    onClick={() => {
-                      const o = viewingOrder;
-                      setViewingOrder(null);
-                      setSettlingOrder(o);
-                    }}
-                    className="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 hover:bg-emerald-700 py-3 text-xs font-bold text-white shadow-md transition-colors"
+                    onClick={() => handlePrintKot(viewingOrder)}
+                    disabled={printingOrderId === viewingOrder.id}
+                    className="flex items-center justify-center gap-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] py-2.5 text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-colors disabled:opacity-50"
                   >
-                    <Receipt className="h-4 w-4" />
-                    <span>Settle Bill (₹{viewingOrder.totalAmount})</span>
+                    <ChefHat className="h-3.5 w-3.5 text-amber-600" />
+                    <span>Print Kitchen KOT</span>
+                  </button>
+
+                  <button
+                    onClick={() =>
+                      handlePrintReceipt(
+                        viewingOrder,
+                        isOrderSettled(viewingOrder),
+                        !isOrderSettled(viewingOrder)
+                      )
+                    }
+                    disabled={printingOrderId === viewingOrder.id}
+                    className="flex items-center justify-center gap-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] py-2.5 text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-colors disabled:opacity-50"
+                  >
+                    <Printer className="h-3.5 w-3.5 text-blue-600" />
+                    <span>
+                      {isOrderSettled(viewingOrder) ? 'Reprint Receipt' : 'Guest Check'}
+                    </span>
+                  </button>
+                </div>
+
+                {/* Settle Bill Button (if unsettled or DUE) */}
+                {viewingOrder.status !== 'CANCELLED' &&
+                  (!isOrderSettled(viewingOrder) || viewingOrder.paymentMode === 'DUE') && (
+                    <button
+                      onClick={() => {
+                        const o = viewingOrder;
+                        setViewingOrder(null);
+                        setSettlingOrder(o);
+                      }}
+                      className="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 hover:bg-emerald-700 py-3 text-xs font-bold text-white shadow-md transition-colors"
+                    >
+                      <Receipt className="h-4 w-4" />
+                      <span>
+                        {viewingOrder.paymentMode === 'DUE'
+                          ? `Settle Due Payment (₹${viewingOrder.totalAmount})`
+                          : `Settle Bill (₹${viewingOrder.totalAmount})`}
+                      </span>
+                    </button>
+                  )}
+
+                {/* Void / Cancel Button (if active) */}
+                {!isOrderSettled(viewingOrder) && viewingOrder.status !== 'CANCELLED' && (
+                  <button
+                    onClick={() => handleCancelOrder(viewingOrder)}
+                    disabled={cancellingOrderId === viewingOrder.id}
+                    className="flex w-full items-center justify-center gap-2 rounded-2xl border border-red-500/30 bg-red-500/10 py-2.5 text-xs font-bold text-red-600 hover:bg-red-500/20 transition-colors disabled:opacity-50"
+                  >
+                    <Ban className="h-4 w-4" />
+                    <span>Void / Cancel Order & Release Table</span>
                   </button>
                 )}
+
                 <button
                   onClick={() => setViewingOrder(null)}
                   className="w-full rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] py-2.5 text-xs font-semibold text-[#667085] hover:bg-black/5"

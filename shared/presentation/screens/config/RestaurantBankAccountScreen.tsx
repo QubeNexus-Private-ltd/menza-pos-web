@@ -33,6 +33,7 @@ import {
 } from 'lucide-react-native';
 import { useAuthStore } from '../../state/useAuthStore';
 import { isCashierOnly, canEditStoreConfig } from '../../../core/auth/rolePermissions';
+import { APP_CONSTANTS } from '../../../core/constants/appConstants';
 import {
   RestaurantBankRemoteDataSource,
   RestaurantBankAccountResponse,
@@ -71,10 +72,24 @@ export const RestaurantBankAccountScreen: React.FC<RestaurantBankAccountScreenPr
   const [email, setEmail] = useState<string>('');
   const [phoneNumber, setPhoneNumber] = useState<string>('');
 
-  // Cashfree Penny Drop Verification State
+  // Penny Drop Verification State
   const [verifying, setVerifying] = useState<boolean>(false);
   const [verified, setVerified] = useState<boolean>(false);
   const [verificationResult, setVerificationResult] = useState<VerifyBankAccountResponse | null>(null);
+
+  // Dynamic Gateway Detection from Environment & Bank Data
+  const isRazorpay = Boolean(
+    process.env.EXPO_PUBLIC_IS_RAZORPAY === 'true' ||
+    process.env.NEXT_PUBLIC_IS_RAZORPAY === 'true' ||
+    process.env.EXPO_PUBLIC_PAYMENT_GATEWAY?.toLowerCase() === 'razorpay' ||
+    process.env.NEXT_PUBLIC_PAYMENT_GATEWAY?.toLowerCase() === 'razorpay' ||
+    APP_CONSTANTS.IS_RAZORPAY ||
+    bankData?.isRazorpay ||
+    bankData?.gateway?.toLowerCase() === 'razorpay' ||
+    verificationResult?.isRazorpay
+  );
+
+  const gatewayName = isRazorpay ? 'Razorpay' : 'Cashfree';
 
   // Alert Modal Config
   const [alertConfig, setAlertConfig] = useState<GildedAlertConfig>({
@@ -169,6 +184,9 @@ export const RestaurantBankAccountScreen: React.FC<RestaurantBankAccountScreenPr
         ifsc: cleanIfsc,
         accountHolder: cleanHolder || undefined,
         phoneNumber: cleanPhone.slice(-10) || undefined,
+        restaurantId: currentRestId,
+        isRazorpay,
+        gateway: gatewayName,
       });
 
       setVerificationResult(res);
@@ -183,7 +201,7 @@ export const RestaurantBankAccountScreen: React.FC<RestaurantBankAccountScreenPr
         }
         showAlert(
           'Bank Account Verified',
-          `✓ Bank account confirmed active via Cashfree Penny Drop.\n\n` +
+          `✓ Bank account confirmed active via ${gatewayName} Penny Drop.\n\n` +
             `• Registered Beneficiary: ${res.registeredName || cleanHolder || 'Active'}\n` +
             `• Bank: ${res.bankName || 'Verified'}\n` +
             (res.utr ? `• IMPS UTR: ${res.utr}\n\n` : '\n') +
@@ -205,7 +223,7 @@ export const RestaurantBankAccountScreen: React.FC<RestaurantBankAccountScreenPr
       const errMsg =
         error?.response?.data?.message ||
         error?.message ||
-        'Failed to verify bank account with Cashfree. Please check your network connection.';
+        `Failed to verify bank account with ${gatewayName}. Please check your network connection.`;
       showAlert('Verification Error', errMsg, 'danger');
       return false;
     } finally {
@@ -262,6 +280,8 @@ export const RestaurantBankAccountScreen: React.FC<RestaurantBankAccountScreenPr
         pan: cleanPan || undefined,
         email: email.trim() || undefined,
         phoneNumber: cleanPhone.slice(-10) || undefined,
+        isRazorpay,
+        gateway: gatewayName,
       });
 
       showAlert(
@@ -297,7 +317,7 @@ export const RestaurantBankAccountScreen: React.FC<RestaurantBankAccountScreenPr
       if (!verifyPassed) {
         showAlert(
           'Verification Unsuccessful',
-          'Cashfree Penny Drop could not verify this account with the bank.\n\nIn Sandbox/Test mode, real bank accounts cannot be routed over live IMPS.\n\nWould you like to save this account anyway for test purposes?',
+          `${gatewayName} Penny Drop could not verify this account with the bank.\n\nIn Sandbox/Test mode, real bank accounts cannot be routed over live IMPS.\n\nWould you like to save this account anyway for test purposes?`,
           'warning',
           () => {
             executeSave();
@@ -364,25 +384,19 @@ export const RestaurantBankAccountScreen: React.FC<RestaurantBankAccountScreenPr
               </View>
               <View style={styles.rbiBadge}>
                 <ShieldCheck size={11} color="#17845A" />
-                <Text style={styles.rbiBadgeText}>CASHFREE EASY SPLIT</Text>
+                <Text style={styles.rbiBadgeText}>{isRazorpay ? 'RAZORPAY ROUTE' : 'CASHFREE EASY SPLIT'}</Text>
               </View>
             </View>
 
             <Text style={styles.heroTitle}>Customer Bill Hits Your Bank Account Directly</Text>
             <Text style={styles.heroDescription}>
-              When customers scan Menza QR codes and pay online, Cashfree automatically transfers{' '}
+              When customers scan Menza QR codes and pay online, {gatewayName} automatically transfers{' '}
               <Text style={{ fontWeight: '800', color: '#1F2937' }}>100% of the bill amount</Text> directly
               into this registered bank account on T+1.
             </Text>
 
             <View style={styles.heroPillarsRow}>
-              <View style={styles.pillarItem}>
-                <View style={[styles.pillarIconCircle, { backgroundColor: '#E4F5EC' }]}>
-                  <Zap size={14} color="#17845A" />
-                </View>
-                <Text style={styles.pillarHeading}>100% Settle</Text>
-                <Text style={styles.pillarSub}>Zero gateway cut on bank payout</Text>
-              </View>
+              
 
               <View style={styles.pillarDivider} />
 
@@ -391,7 +405,7 @@ export const RestaurantBankAccountScreen: React.FC<RestaurantBankAccountScreenPr
                   <Wallet size={14} color="#D97706" />
                 </View>
                 <Text style={styles.pillarHeading}>Wallet Fee</Text>
-                <Text style={styles.pillarSub}>Commission debited from Menza wallet</Text>
+                <Text style={styles.pillarSub}>Platform fee debited from Menza wallet</Text>
               </View>
 
               <View style={styles.pillarDivider} />
@@ -569,11 +583,11 @@ export const RestaurantBankAccountScreen: React.FC<RestaurantBankAccountScreenPr
                 />
               </View>
 
-              {/* CASHFREE PENNY DROP VERIFICATION CARD */}
+              {/* PENNY DROP VERIFICATION CARD */}
               <View style={styles.verificationCard}>
                 <View style={styles.verificationTopRow}>
                   <View style={styles.verificationTitleCol}>
-                    <Text style={styles.verificationTitle}>Cashfree Penny Drop Verification</Text>
+                    <Text style={styles.verificationTitle}>{gatewayName} Penny Drop Verification</Text>
                     <Text style={styles.verificationSub}>
                       Deposits ₹1 to instantly confirm account validity, IFSC routing, and official bank beneficiary name before saving.
                     </Text>
@@ -595,7 +609,7 @@ export const RestaurantBankAccountScreen: React.FC<RestaurantBankAccountScreenPr
                   ) : verified ? (
                     <>
                       <CheckCircle2 size={16} color="#17845A" strokeWidth={2.5} />
-                      <Text style={styles.verifyActionSuccessText}>Verified Active via Cashfree</Text>
+                      <Text style={styles.verifyActionSuccessText}>Verified Active via {gatewayName}</Text>
                     </>
                   ) : (
                     <>
@@ -766,7 +780,7 @@ export const RestaurantBankAccountScreen: React.FC<RestaurantBankAccountScreenPr
             <View style={{ flex: 1 }}>
               <Text style={styles.securityFooterTitle}>Bank-Grade Payout Security</Text>
               <Text style={styles.securityFooterDesc}>
-                Payouts and vendor accounts are securely managed through Cashfree Payments, an RBI-regulated
+                Payouts and vendor accounts are securely managed through {gatewayName} Payments, an RBI-regulated
                 Payment Aggregator. Sensitive bank details are encrypted and tokenized.
               </Text>
             </View>

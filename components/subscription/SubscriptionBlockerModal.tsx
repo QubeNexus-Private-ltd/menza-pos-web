@@ -154,24 +154,9 @@ export const SubscriptionBlockerModal: React.FC = () => {
       );
 
       if (!initRes.success || (!initRes.paymentSessionId && !initRes.paymentLink && !initRes.orderId)) {
-        // Fallback to direct activation if sandbox bypass
-        const fallbackRes = await assignPlan(currentRestId, plan.id, duration, price);
-        if (fallbackRes.success) {
-          setStatusMessage({
-            type: 'success',
-            text: isRenewAction ? 'Subscription renewed successfully!' : 'Subscription activated successfully!',
-          });
-          setTimeout(async () => {
-            await fetchSubscriptionStatus(currentRestId);
-            closeRenewalModal();
-            setSubmitting(false);
-          }, 1200);
-          return;
-        }
-
         setStatusMessage({
           type: 'error',
-          text: initRes.message || fallbackRes.message || 'Payment initiation failed. Please try again.',
+          text: initRes.message || 'Payment gateway is not configured. Please contact administrator to set up payment credentials.',
         });
         setSubmitting(false);
         return;

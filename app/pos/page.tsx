@@ -41,10 +41,26 @@ import {
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
 import { DishImage } from '@/components/common/DishImage';
-import { StoreOperatingStatusModal } from '@/components/pos/StoreOperatingStatusModal';
-import { DishCustomizationModal, CustomizationResult } from '@/components/pos/DishCustomizationModal';
-import { QuickNumpadModal } from '@/components/pos/QuickNumpadModal';
-import { ParkedCartsModal, ParkedCart } from '@/components/pos/ParkedCartsModal';
+import dynamic from 'next/dynamic';
+import type { CustomizationResult } from '@/components/pos/DishCustomizationModal';
+import type { ParkedCart } from '@/components/pos/ParkedCartsModal';
+
+const StoreOperatingStatusModal = dynamic(
+  () => import('@/components/pos/StoreOperatingStatusModal').then((mod) => mod.StoreOperatingStatusModal),
+  { ssr: false }
+);
+const DishCustomizationModal = dynamic(
+  () => import('@/components/pos/DishCustomizationModal').then((mod) => mod.DishCustomizationModal),
+  { ssr: false }
+);
+const QuickNumpadModal = dynamic(
+  () => import('@/components/pos/QuickNumpadModal').then((mod) => mod.QuickNumpadModal),
+  { ssr: false }
+);
+const ParkedCartsModal = dynamic(
+  () => import('@/components/pos/ParkedCartsModal').then((mod) => mod.ParkedCartsModal),
+  { ssr: false }
+);
 import { WebPrinterService } from '@/services/webPrinterService';
 import { WebWhatsAppService } from '@/services/whatsAppService';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';

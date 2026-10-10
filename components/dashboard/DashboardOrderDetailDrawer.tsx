@@ -28,6 +28,7 @@ import {
   getOrderStatusBadge,
   getNextRecommendedStatus,
   canTransitionOrderStatus,
+  isOrderSettled,
 } from '@/lib/utils/orderStatusEngine';
 import { WebPrinterService } from '@/services/webPrinterService';
 import { WebWhatsAppService } from '@/services/whatsAppService';
@@ -68,11 +69,7 @@ export const DashboardOrderDetailDrawer: React.FC<DashboardOrderDetailDrawerProp
     Boolean(order.tableId) ||
     (order.orderTypeName && ['DINE-IN', 'DINE_IN', 'TABLE'].includes(order.orderTypeName.toUpperCase()));
 
-  const isSettled =
-    Boolean(order.settledDateUtc) ||
-    currentStatusNorm === OrderStatuses.Settled ||
-    (currentStatusNorm === OrderStatuses.Completed && order.paymentStatus?.toUpperCase() === 'PAID');
-
+  const isSettled = isOrderSettled(order);
   const isCancelled = currentStatusNorm === OrderStatuses.Cancelled;
 
   // Format Token

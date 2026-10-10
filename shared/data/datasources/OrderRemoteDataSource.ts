@@ -333,7 +333,9 @@ export class OrderRemoteDataSource {
     status?: string,
     pageNumber: number = 1,
     pageSize: number = 20,
-    search?: string
+    search?: string,
+    fromDate?: string,
+    toDate?: string
   ): Promise<PaginatedOrdersResult> {
     if (!restaurantId || restaurantId <= 0) {
       return { items: [], totalCount: 0, pageNumber: 1, pageSize, totalPages: 0, hasNextPage: false };
@@ -345,8 +347,14 @@ export class OrderRemoteDataSource {
       };
       if (status && status !== 'ALL') params.status = status;
       if (search && search.trim().length > 0) params.search = search.trim();
+      if (fromDate) params.fromDate = fromDate;
+      if (toDate) params.toDate = toDate;
 
-      const response = await apiClient.get(`/Order/Restaurant/${restaurantId}/Orders/Today`, { params });
+      const endpoint = (fromDate || toDate)
+        ? `/Order/Restaurant/${restaurantId}/Orders`
+        : `/Order/Restaurant/${restaurantId}/Orders/Today`;
+
+      const response = await apiClient.get(endpoint, { params });
       const data = response.data;
       const rawList = Array.isArray(data)
         ? data

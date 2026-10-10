@@ -18,6 +18,7 @@ import {
   PipelineStageKey,
   normalizeOrderStatus,
   OrderStatuses,
+  isOrderSettled,
 } from '@/lib/utils/orderStatusEngine';
 
 interface OrderStatusPipelineProps {
@@ -47,10 +48,7 @@ export const OrderStatusPipeline: React.FC<OrderStatusPipelineProps> = ({
 
     orders.forEach((order) => {
       const norm = normalizeOrderStatus(order.status);
-      const isSettled =
-        Boolean(order.settledDateUtc) ||
-        norm === OrderStatuses.Settled ||
-        (norm === OrderStatuses.Completed && order.paymentStatus?.toUpperCase() === 'PAID');
+      const isSettled = isOrderSettled(order);
       const isCancelled = norm === OrderStatuses.Cancelled;
       const amt = Number(order.totalAmount || 0);
 

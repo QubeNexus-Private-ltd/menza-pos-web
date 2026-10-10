@@ -52,6 +52,7 @@ import {
   OrderStatuses,
   getOrderStatusBadge,
   getNextRecommendedStatus,
+  isOrderSettled,
 } from '@/lib/utils/orderStatusEngine';
 import {
   startPosSignalRConnection,
@@ -153,7 +154,24 @@ export default function DashboardPage() {
       startPosSignalRConnection(currentRestId).catch(() => {});
       const unsub1 = onPosOrderCreated(() => loadDashboardData());
       const unsub2 = onPosOrderStatusChanged(() => loadDashboardData());
-      const unsub3 = onPosOrderSettled(() => loadDashboardData());
+      const unsub3 = onPosOrderSettled((settledData: any) => {
+        const settledId = Number(settledData?.orderId || settledData?.id || 0);
+        if (settledId > 0) {
+          setRecentOrders((prev) =>
+            prev.map((o) =>
+              o.id === settledId
+                ? {
+                    ...o,
+                    status: OrderStatuses.Settled,
+                    paymentStatus: 'PAID',
+                    settledDateUtc: new Date().toISOString(),
+                  }
+                : o
+            )
+          );
+        }
+        loadDashboardData();
+      });
       const unsub4 = onKitchenStatusChanged(() => loadDashboardData());
       const unsub5 = onSignalRReconnected(() => loadDashboardData());
 
@@ -218,10 +236,7 @@ export default function DashboardPage() {
   const filteredOrders = useMemo(() => {
     return recentOrders.filter((order) => {
       const norm = normalizeOrderStatus(order.status);
-      const isSettled =
-        Boolean(order.settledDateUtc) ||
-        norm === OrderStatuses.Settled ||
-        (norm === OrderStatuses.Completed && order.paymentStatus?.toUpperCase() === 'PAID');
+      const isSettled = isOrderSettled(order);
       const isCancelled = norm === OrderStatuses.Cancelled;
 
       // 1. Pipeline stage filtering
@@ -343,10 +358,7 @@ export default function DashboardPage() {
                 <h3 className="text-2xl font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
                   {
                     recentOrders.filter(
-                      (o) =>
-                        normalizeOrderStatus(o.status) !== OrderStatuses.Settled &&
-                        normalizeOrderStatus(o.status) !== OrderStatuses.Cancelled &&
-                        !o.settledDateUtc
+                      (o) => !isOrderSettled(o) && normalizeOrderStatus(o.status) !== OrderStatuses.Cancelled
                     ).length
                   }
                 </h3>
@@ -612,10 +624,7 @@ export default function DashboardPage() {
                     {filteredOrders.map((order) => {
                       const badge = getOrderStatusBadge(order.status);
                       const norm = normalizeOrderStatus(order.status);
-                      const isSettled =
-                        Boolean(order.settledDateUtc) ||
-                        norm === OrderStatuses.Settled ||
-                        (norm === OrderStatuses.Completed && order.paymentStatus?.toUpperCase() === 'PAID');
+                      const isSettled = isOrderSettled(order);
                       const token = formatTokenDisplay(order);
                       const nextProg = getNextRecommendedStatus(order.status, order.orderTypeName, order.tableId);
 
@@ -733,7 +742,22 @@ export default function DashboardPage() {
           isOpen={Boolean(settlingOrder)}
           onClose={() => setSettlingOrder(null)}
           order={settlingOrder}
-          onSettled={async () => {
+          onSettled={async (settledId: any) => {
+            const idNum = Number(settledId || settlingOrder?.id || 0);
+            if (idNum > 0) {
+              setRecentOrders((prev) =>
+                prev.map((o) =>
+                  o.id === idNum
+                    ? {
+                        ...o,
+                        status: OrderStatuses.Settled,
+                        paymentStatus: 'PAID',
+                        settledDateUtc: new Date().toISOString(),
+                      }
+                    : o
+                )
+              );
+            }
             await loadDashboardData();
             setSettlingOrder(null);
           }}

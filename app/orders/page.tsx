@@ -51,6 +51,7 @@ import {
   normalizeOrderStatus,
   OrderStatuses,
   getOrderStatusBadge,
+  isOrderSettled as isOrderCanonicalSettled,
 } from '@/lib/utils/orderStatusEngine';
 
 const orderDataSource = new OrderRemoteDataSource();
@@ -78,6 +79,11 @@ export default function OrdersPage() {
   const [historyOrders, setHistoryOrders] = useState<OrderMaster[]>([]);
   const [historySearchQuery, setHistorySearchQuery] = useState('');
   const [historyPaymentFilter, setHistoryPaymentFilter] = useState<string>('ALL');
+  const [historyStatusFilter, setHistoryStatusFilter] = useState<string>('ALL');
+  const [historyDatePreset, setHistoryDatePreset] = useState<'TODAY' | 'YESTERDAY' | '7_DAYS' | '30_DAYS' | 'CUSTOM'>('TODAY');
+  const [historyFromDate, setHistoryFromDate] = useState<string>('');
+  const [historyToDate, setHistoryToDate] = useState<string>('');
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [historyPage, setHistoryPage] = useState(1);
   const [historyTotalPages, setHistoryTotalPages] = useState(1);
   const [historyTotalCount, setHistoryTotalCount] = useState(0);
@@ -93,13 +99,76 @@ export default function OrdersPage() {
 
   // Helper to reliably check if order is settled
   const isOrderSettled = useCallback((o: OrderMaster): boolean => {
-    const st = (o.status || '').toUpperCase();
-    const pay = (o.paymentStatus || '').toUpperCase();
-    if (st === 'CANCELLED') return false;
-    if (Boolean(o.settledDateUtc) || st === 'SETTLED') return true;
-    if (st === 'COMPLETED' && pay === 'PAID') return true;
-    return false;
+    return isOrderCanonicalSettled(o);
   }, []);
+
+  // Helper to get preset date bounds (YYYY-MM-DD)
+  const getPresetDates = useCallback((preset: 'TODAY' | 'YESTERDAY' | '7_DAYS' | '30_DAYS') => {
+    const now = new Date();
+    const format = (d: Date) => d.toISOString().split('T')[0];
+    if (preset === 'TODAY') {
+      const t = format(now);
+      return { from: t, to: t };
+    }
+    if (preset === 'YESTERDAY') {
+      const y = new Date(now);
+      y.setDate(y.getDate() - 1);
+      const yStr = format(y);
+      return { from: yStr, to: yStr };
+    }
+    if (preset === '7_DAYS') {
+      const past = new Date(now);
+      past.setDate(past.getDate() - 6);
+      return { from: format(past), to: format(now) };
+    }
+    if (preset === '30_DAYS') {
+      const past = new Date(now);
+      past.setDate(past.getDate() - 29);
+      return { from: format(past), to: format(now) };
+    }
+    return { from: format(now), to: format(now) };
+  }, []);
+
+  // Fetch Historical Orders by Date Range & Status
+  const fetchHistoricalOrders = useCallback(async () => {
+    if (!currentRestId) return;
+    try {
+      setHistoryLoading(true);
+      let fromDate: string | undefined = undefined;
+      let toDate: string | undefined = undefined;
+
+      if (historyDatePreset !== 'TODAY') {
+        if (historyDatePreset === 'CUSTOM') {
+          fromDate = historyFromDate || undefined;
+          toDate = historyToDate || undefined;
+        } else {
+          const p = getPresetDates(historyDatePreset);
+          fromDate = p.from;
+          toDate = p.to;
+        }
+      }
+
+      const statusParam = historyStatusFilter !== 'ALL' ? historyStatusFilter : undefined;
+      const res = await orderDataSource.getTodayOrders(
+        currentRestId,
+        statusParam,
+        historyPage,
+        50,
+        historySearchQuery || undefined,
+        fromDate,
+        toDate
+      );
+
+      const items = res?.items || [];
+      setHistoryOrders(items);
+      setHistoryTotalCount(res?.totalCount || items.length);
+      setHistoryTotalPages(res?.totalPages || Math.ceil((res?.totalCount || items.length) / 50) || 1);
+    } catch (err) {
+      console.warn('Failed to load historical orders:', err);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [currentRestId, historyDatePreset, historyFromDate, historyToDate, historyStatusFilter, historyPage, historySearchQuery, getPresetDates]);
 
   // Load Data
   const loadOrders = useCallback(async () => {
@@ -107,7 +176,7 @@ export default function OrdersPage() {
     try {
       setLoading(true);
 
-      // Fetch live & recent orders today
+      // Fetch live & recent orders today (with backend carryover unsettled rule)
       const todayRes = await orderDataSource.getTodayOrders(currentRestId, 'ALL', 1, 100);
       const allToday = todayRes?.items || [];
 
@@ -120,15 +189,24 @@ export default function OrdersPage() {
       );
 
       setLiveOrders(active);
-      setHistoryOrders(settled);
-      setHistoryTotalCount(settled.length);
-      setHistoryTotalPages(Math.ceil(settled.length / 20) || 1);
+      if (historyDatePreset === 'TODAY') {
+        setHistoryOrders(settled);
+        setHistoryTotalCount(settled.length);
+        setHistoryTotalPages(Math.ceil(settled.length / 20) || 1);
+      }
     } catch (err) {
       console.warn('Failed to load orders:', err);
     } finally {
       setLoading(false);
     }
-  }, [currentRestId, isOrderSettled]);
+  }, [currentRestId, isOrderSettled, historyDatePreset]);
+
+  // Trigger historical fetch when preset/date/status changes
+  useEffect(() => {
+    if (activeTab === 'HISTORY' && historyDatePreset !== 'TODAY') {
+      fetchHistoricalOrders();
+    }
+  }, [activeTab, historyDatePreset, historyStatusFilter, historyPage, fetchHistoricalOrders]);
 
   useEffect(() => {
     loadOrders();
@@ -348,6 +426,14 @@ export default function OrdersPage() {
         if ((order.paymentMode || 'CASH').toUpperCase() !== historyPaymentFilter.toUpperCase()) return false;
       }
 
+      // Status filter
+      if (historyStatusFilter !== 'ALL') {
+        const norm = normalizeOrderStatus(order.status);
+        if (historyStatusFilter === 'SETTLED' && !isOrderSettled(order)) return false;
+        if (historyStatusFilter === 'CANCELLED' && norm !== OrderStatuses.Cancelled) return false;
+        if (historyStatusFilter === 'DUE' && order.paymentMode?.toUpperCase() !== 'DUE') return false;
+      }
+
       // Search query
       if (historySearchQuery.trim()) {
         const q = historySearchQuery.toLowerCase();
@@ -360,7 +446,7 @@ export default function OrdersPage() {
 
       return true;
     });
-  }, [historyOrders, historyPaymentFilter, historySearchQuery]);
+  }, [historyOrders, historyPaymentFilter, historyStatusFilter, historySearchQuery, isOrderSettled]);
 
   // Metrics
   const servedAwaitingCount = useMemo(
@@ -753,26 +839,122 @@ export default function OrdersPage() {
           {/* TAB 2: ORDER HISTORY & SETTLED BILLS */}
           {activeTab === 'HISTORY' && (
             <div className="space-y-4">
-              {/* Filter & Search Bar */}
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-                <div className="relative flex-1 max-w-md">
-                  <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-[#667085]" />
-                  <input
-                    type="text"
-                    value={historySearchQuery}
-                    onChange={(e) => setHistorySearchQuery(e.target.value)}
-                    placeholder="Search settled bills by Order ID, Mobile, Table, Name..."
-                    className="w-full rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] pl-10 pr-4 py-2.5 text-xs text-[#1E2930] dark:text-[#F3F4F6] placeholder-[#667085] focus:border-[#DE8626] focus:outline-none"
-                  />
+              {/* Date Presets, Status & Payment Filters Bar */}
+              <div className="rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-4 shadow-xs space-y-3">
+                {/* Row 1: Date Range Presets & Status Selector */}
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-xs font-bold text-[#667085] dark:text-[#94A3B8] mr-1 flex items-center gap-1">
+                      <Calendar className="h-3.5 w-3.5 text-[#DE8626]" />
+                      <span>Date Range:</span>
+                    </span>
+                    {(
+                      [
+                        { id: 'TODAY', label: 'Today' },
+                        { id: 'YESTERDAY', label: 'Yesterday' },
+                        { id: '7_DAYS', label: 'Last 7 Days' },
+                        { id: '30_DAYS', label: 'Last 30 Days' },
+                        { id: 'CUSTOM', label: 'Custom Range' },
+                      ] as const
+                    ).map((preset) => (
+                      <button
+                        key={preset.id}
+                        onClick={() => {
+                          setHistoryDatePreset(preset.id);
+                          setHistoryPage(1);
+                        }}
+                        className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-all ${
+                          historyDatePreset === preset.id
+                            ? 'bg-[#DE8626] text-white shadow-xs'
+                            : 'bg-black/[0.04] dark:bg-white/[0.04] text-[#667085] hover:text-[#1E2930] dark:hover:text-[#F3F4F6]'
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Status Pills */}
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-xs font-bold text-[#667085] dark:text-[#94A3B8] mr-1">
+                      Status:
+                    </span>
+                    {(['ALL', 'SETTLED', 'DUE', 'CANCELLED'] as const).map((st) => (
+                      <button
+                        key={st}
+                        onClick={() => {
+                          setHistoryStatusFilter(st);
+                          setHistoryPage(1);
+                        }}
+                        className={`rounded-xl px-2.5 py-1 text-xs font-bold transition-all ${
+                          historyStatusFilter === st
+                            ? 'bg-[#1E2930] dark:bg-[#F3F4F6] text-white dark:text-[#1E2930]'
+                            : 'text-[#667085] hover:text-[#1E2930] dark:hover:text-[#F3F4F6] border border-[#E7E1DA] dark:border-[#2B3540]'
+                        }`}
+                      >
+                        {st}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <div className="flex items-center gap-1.5 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-1 text-xs">
+                {/* Row 2: Custom Date Inputs (when CUSTOM is active) */}
+                {historyDatePreset === 'CUSTOM' && (
+                  <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60">
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="text-[#667085] font-semibold">From Date:</span>
+                      <input
+                        type="date"
+                        value={historyFromDate}
+                        onChange={(e) => setHistoryFromDate(e.target.value)}
+                        className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3 py-1.5 text-xs text-[#1E2930] dark:text-[#F3F4F6] focus:border-[#DE8626] focus:outline-none"
+                      />
+                    </div>
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="text-[#667085] font-semibold">To Date:</span>
+                      <input
+                        type="date"
+                        value={historyToDate}
+                        onChange={(e) => setHistoryToDate(e.target.value)}
+                        className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3 py-1.5 text-xs text-[#1E2930] dark:text-[#F3F4F6] focus:border-[#DE8626] focus:outline-none"
+                      />
+                    </div>
+                    <button
+                      onClick={() => fetchHistoricalOrders()}
+                      className="rounded-xl bg-[#DE8626] hover:bg-[#C4721C] px-3.5 py-1.5 text-xs font-bold text-white shadow-xs transition-colors"
+                    >
+                      Search Range
+                    </button>
+                  </div>
+                )}
+
+                {/* Row 3: Text Search & Payment Method Filter */}
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-2 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60">
+                  <div className="relative flex-1 max-w-md">
+                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-[#667085]" />
+                    <input
+                      type="text"
+                      value={historySearchQuery}
+                      onChange={(e) => setHistorySearchQuery(e.target.value)}
+                      placeholder="Search settled bills by Order ID, Mobile, Table, Name..."
+                      className="w-full rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] pl-10 pr-4 py-2 text-xs text-[#1E2930] dark:text-[#F3F4F6] placeholder-[#667085] focus:border-[#DE8626] focus:outline-none"
+                    />
+                    {historySearchQuery && (
+                      <button
+                        onClick={() => setHistorySearchQuery('')}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[#667085]"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1.5 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-1 text-xs">
                     {['ALL', 'CASH', 'UPI', 'CARD', 'DUE'].map((mode) => (
                       <button
                         key={mode}
                         onClick={() => setHistoryPaymentFilter(mode)}
-                        className={`rounded-xl px-3 py-1.5 font-bold transition-colors ${
+                        className={`rounded-xl px-2.5 py-1 font-bold transition-colors ${
                           historyPaymentFilter === mode
                             ? 'bg-[#DE8626] text-white shadow-xs'
                             : 'text-[#667085] hover:text-[#1E2930] dark:hover:text-[#F3F4F6]'
@@ -928,6 +1110,32 @@ export default function OrdersPage() {
                         ))}
                       </tbody>
                     </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Pagination Controls */}
+              {historyTotalPages > 1 && (
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
+                  <p className="text-xs text-[#667085]">
+                    Showing Page <span className="font-bold text-[#1E2930] dark:text-[#F3F4F6]">{historyPage}</span> of{' '}
+                    <span className="font-bold text-[#1E2930] dark:text-[#F3F4F6]">{historyTotalPages}</span> ({historyTotalCount} total orders)
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setHistoryPage((p) => Math.max(1, p - 1))}
+                      disabled={historyPage <= 1 || historyLoading}
+                      className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] px-3.5 py-1.5 text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-colors disabled:opacity-40"
+                    >
+                      Previous
+                    </button>
+                    <button
+                      onClick={() => setHistoryPage((p) => Math.min(historyTotalPages, p + 1))}
+                      disabled={historyPage >= historyTotalPages || historyLoading}
+                      className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] px-3.5 py-1.5 text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-colors disabled:opacity-40"
+                    >
+                      Next
+                    </button>
                   </div>
                 </div>
               )}

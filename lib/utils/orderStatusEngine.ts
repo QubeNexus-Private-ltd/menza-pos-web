@@ -87,6 +87,57 @@ export function isStatusTerminal(status?: string | null): boolean {
 }
 
 /**
+ * Authoritative settlement check matching F:\MenzaPos OrderDTO.IsSettled
+ * Returns true if the order is settled or paid by any financial or lifecycle signal.
+ */
+export function isOrderSettled(order?: Partial<any> | null): boolean {
+  if (!order) return false;
+
+  const rawStatus =
+    order.status ??
+    order.orderStatus ??
+    order.OrderStatus ??
+    order.Status;
+
+  const norm = normalizeOrderStatus(rawStatus);
+  if (norm === OrderStatuses.Cancelled) return false;
+
+  // 1. Explicit Settled or Completed status
+  if (norm === OrderStatuses.Settled || norm === OrderStatuses.Completed) return true;
+
+  // 2. Check Payment Status (PAID or SUCCESS)
+  const pay = String(
+    order.paymentStatus ??
+    order.PaymentStatus ??
+    order.payment_status ??
+    ''
+  ).trim().toUpperCase();
+
+  if (pay === 'PAID' || pay === 'SUCCESS') return true;
+
+  // 3. Check SettledDateUtc
+  const settledDate =
+    order.settledDateUtc ??
+    order.SettledDateUtc ??
+    order.settled_date_utc;
+  if (Boolean(settledDate)) return true;
+
+  // 4. Check SettledBy
+  const settledBy =
+    order.settledBy ??
+    order.SettledBy ??
+    order.settled_by;
+  if (Boolean(settledBy) && Number(settledBy) > 0) return true;
+
+  // 5. Check Paid Amount >= Total Amount
+  const total = Number(order.totalAmount ?? order.TotalAmount ?? 0);
+  const paid = Number(order.paidAmount ?? order.PaidAmount ?? 0);
+  if (total > 0 && paid >= total) return true;
+
+  return false;
+}
+
+/**
  * Validates transition from current status to target status
  * Enforces MenzaPOS.Domain.OrderStatuses.CanTransition state machine
  */

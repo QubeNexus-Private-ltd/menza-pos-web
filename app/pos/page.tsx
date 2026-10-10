@@ -30,17 +30,28 @@ import {
   Store,
   Layers,
   ShieldAlert,
+  PauseCircle,
+  Play,
+  Calculator,
+  Building2,
+  Split,
+  SlidersHorizontal,
+  Keyboard,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
 import { DishImage } from '@/components/common/DishImage';
 import { StoreOperatingStatusModal } from '@/components/pos/StoreOperatingStatusModal';
+import { DishCustomizationModal, CustomizationResult } from '@/components/pos/DishCustomizationModal';
+import { QuickNumpadModal } from '@/components/pos/QuickNumpadModal';
+import { ParkedCartsModal, ParkedCart } from '@/components/pos/ParkedCartsModal';
 import { WebPrinterService } from '@/services/webPrinterService';
 import { WebWhatsAppService } from '@/services/whatsAppService';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { usePrinterStore } from '@shared/presentation/state/usePrinterStore';
 import { useNotificationStore } from '@shared/presentation/state/useNotificationStore';
 import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
+import { apiClient } from '@shared/core/network/apiClient';
 import { CatalogRemoteDataSource } from '@shared/data/datasources/CatalogRemoteDataSource';
 import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
 import { OrderRepositoryImpl } from '@shared/data/repositories/OrderRepositoryImpl';
@@ -65,12 +76,17 @@ const orderRepository = new OrderRepositoryImpl(orderRemoteDataSource);
 const tableDataSource = new TableRemoteDataSource();
 const configDataSource = new RestaurantConfigRemoteDataSource();
 
-interface CartItem {
+export interface CartItem {
+  cartKey: string;
   itemId: number;
   itemName: string;
   price: number;
+  basePrice: number;
   quantity: number;
   isVeg: boolean;
+  variantId?: number;
+  variantName?: string;
+  modifiers?: Array<{ id: number; modifierName: string; extraPrice: number }>;
   notes?: string;
 }
 
@@ -108,12 +124,28 @@ export default function PosPage() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
+  const [isCustomerLookupVerified, setIsCustomerLookupVerified] = useState(false);
+  const [isLookingUpCustomer, setIsLookingUpCustomer] = useState(false);
   const [discountAmount, setDiscountAmount] = useState(0);
+
+  // Modals: Customization & Numpad
+  const [customizingItem, setCustomizingItem] = useState<MenuItem | null>(null);
+  const [numpadCartItem, setNumpadCartItem] = useState<CartItem | null>(null);
+
+  // Parked Carts (Hold Orders)
+  const [parkedCarts, setParkedCarts] = useState<ParkedCart[]>([]);
+  const [parkedModalOpen, setParkedModalOpen] = useState(false);
 
   // Settlement Modal State
   const [settleModalOpen, setSettleModalOpen] = useState(false);
-  const [paymentMode, setPaymentMode] = useState<'CASH' | 'UPI' | 'CARD' | 'DUE'>('CASH');
+  const [paymentMode, setPaymentMode] = useState<'CASH' | 'UPI' | 'CARD' | 'DUE' | 'SPLIT'>('CASH');
   const [tenderedAmount, setTenderedAmount] = useState('');
+  const [splitCash, setSplitCash] = useState<string>('');
+  const [splitDigital, setSplitDigital] = useState<string>('');
+  const [splitDigitalMode, setSplitDigitalMode] = useState<'UPI' | 'CARD'>('UPI');
+  const [showB2bFields, setShowB2bFields] = useState(false);
+  const [companyName, setCompanyName] = useState('');
+  const [customerGstin, setCustomerGstin] = useState('');
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
   const [orderSuccessData, setOrderSuccessData] = useState<any | null>(null);
 
@@ -262,21 +294,48 @@ export default function PosPage() {
     });
   }, [items, selectedCategory, vegFilter, searchQuery]);
 
+  // Phone Lookup
+  const handlePhoneChange = (val: string) => {
+    const clean = val.replace(/[^0-9]/g, '').slice(0, 10);
+    setCustomerPhone(clean);
+    setIsCustomerLookupVerified(false);
+
+    if (clean.length === 10) {
+      setIsLookingUpCustomer(true);
+      apiClient
+        .get(`/UserMaster/by-mobile/${clean}`)
+        .then((res) => {
+          if (res.data?.name || res.data?.Name) {
+            const foundName = String(res.data.name ?? res.data.Name);
+            if (!customerName || customerName.trim() === '') {
+              setCustomerName(foundName);
+            }
+            setIsCustomerLookupVerified(true);
+          }
+        })
+        .catch(() => {})
+        .finally(() => setIsLookingUpCustomer(false));
+    }
+  };
+
   // Cart Operations
-  const addToCart = (item: MenuItem) => {
+  const addToCartQuick = (item: MenuItem) => {
+    const cartKey = `${item.id}_v0_`;
     setCart((prev) => {
-      const existing = prev.find((ci) => ci.itemId === item.id);
+      const existing = prev.find((ci) => ci.cartKey === cartKey);
       if (existing) {
         return prev.map((ci) =>
-          ci.itemId === item.id ? { ...ci, quantity: ci.quantity + 1 } : ci
+          ci.cartKey === cartKey ? { ...ci, quantity: ci.quantity + 1 } : ci
         );
       }
       return [
         ...prev,
         {
+          cartKey,
           itemId: item.id,
           itemName: item.itemName,
           price: item.price,
+          basePrice: item.price,
           quantity: 1,
           isVeg: Boolean(item.isVeg),
         },
@@ -284,11 +343,46 @@ export default function PosPage() {
     });
   };
 
-  const updateQuantity = (itemId: number, delta: number) => {
+  const handleCustomizationConfirm = (res: CustomizationResult) => {
+    setCart((prev) => {
+      const existing = prev.find((ci) => ci.cartKey === res.cartKey);
+      if (existing) {
+        return prev.map((ci) =>
+          ci.cartKey === res.cartKey ? { ...ci, quantity: ci.quantity + res.quantity } : ci
+        );
+      }
+      const displayName = res.selectedVariant
+        ? `${res.item.itemName} (${res.selectedVariant.variantName})`
+        : res.item.itemName;
+
+      return [
+        ...prev,
+        {
+          cartKey: res.cartKey,
+          itemId: res.item.id,
+          itemName: displayName,
+          price: res.effectiveUnitPrice,
+          basePrice: res.item.price,
+          quantity: res.quantity,
+          isVeg: Boolean(res.item.isVeg),
+          variantId: res.selectedVariant?.id,
+          variantName: res.selectedVariant?.variantName,
+          modifiers: res.selectedModifiers.map((m) => ({
+            id: m.id,
+            modifierName: m.modifierName,
+            extraPrice: m.extraPrice,
+          })),
+          notes: res.cookingInstructions,
+        },
+      ];
+    });
+  };
+
+  const updateQuantity = (cartKey: string, delta: number) => {
     setCart((prev) => {
       return prev
         .map((ci) => {
-          if (ci.itemId === itemId) {
+          if (ci.cartKey === cartKey) {
             const newQty = ci.quantity + delta;
             return newQty > 0 ? { ...ci, quantity: newQty } : null;
           }
@@ -298,8 +392,21 @@ export default function PosPage() {
     });
   };
 
-  const removeFromCart = (itemId: number) => {
-    setCart((prev) => prev.filter((ci) => ci.itemId !== itemId));
+  const updateExactQuantity = (cartKey: string, exactQty: number) => {
+    setCart((prev) => {
+      return prev
+        .map((ci) => {
+          if (ci.cartKey === cartKey) {
+            return exactQty > 0 ? { ...ci, quantity: exactQty } : null;
+          }
+          return ci;
+        })
+        .filter(Boolean) as CartItem[];
+    });
+  };
+
+  const removeFromCart = (cartKey: string) => {
+    setCart((prev) => prev.filter((ci) => ci.cartKey !== cartKey));
   };
 
   const clearCartOnly = () => {
@@ -313,6 +420,7 @@ export default function PosPage() {
     setSelectedTable(null);
     setCustomerName('');
     setCustomerPhone('');
+    setIsCustomerLookupVerified(false);
     setDiscountAmount(0);
     setTenderedAmount('');
     setActiveTableOrder(null);
@@ -321,6 +429,48 @@ export default function PosPage() {
   const clearFullSale = () => {
     clearCart();
     setOrderSuccessData(null);
+  };
+
+  // Park / Hold Cart Handlers
+  const handleParkCurrentCart = () => {
+    if (cart.length === 0) {
+      alert('Cart is empty. Nothing to park.');
+      return;
+    }
+    const newParked: ParkedCart = {
+      id: `park_${Date.now()}`,
+      parkedAt: new Date(),
+      cart: [...cart],
+      orderType,
+      table: selectedTable,
+      customerName,
+      customerPhone,
+      discountAmount,
+      subtotal: grandTotal,
+    };
+    setParkedCarts((prev) => [newParked, ...prev]);
+    clearCart();
+  };
+
+  const handleResumeParkedCart = (p: ParkedCart) => {
+    if (cart.length > 0) {
+      const confirmResume = window.confirm(
+        'Your current cart items will be replaced by the resumed order. Continue?'
+      );
+      if (!confirmResume) return;
+    }
+    setCart(p.cart);
+    setOrderType(p.orderType as any);
+    setSelectedTable(p.table);
+    setCustomerName(p.customerName);
+    setCustomerPhone(p.customerPhone);
+    setDiscountAmount(p.discountAmount);
+    setParkedCarts((prev) => prev.filter((item) => item.id !== p.id));
+    setParkedModalOpen(false);
+  };
+
+  const handleDiscardParkedCart = (id: string) => {
+    setParkedCarts((prev) => prev.filter((item) => item.id !== id));
   };
 
   // GST & Tax Calculations
@@ -350,8 +500,59 @@ export default function PosPage() {
   const payableGrandTotal = activeTableOrder ? consolidatedGrandTotal : grandTotal;
 
   // Cash change calculation
-  const numericTendered = parseFloat(tenderedAmount) || 0;
-  const changeToReturn = Math.max(0, Math.round((numericTendered - payableGrandTotal) * 100) / 100);
+  const numericTendered = parseFloat(tenderedAmount) || payableGrandTotal;
+  const changeToReturn = paymentMode === 'CASH' ? Math.max(0, Math.round((numericTendered - payableGrandTotal) * 100) / 100) : 0;
+
+  // Split calculation
+  const numSplitCash = parseFloat(splitCash) || 0;
+  const numSplitDigital = parseFloat(splitDigital) || 0;
+  const splitTotal = numSplitCash + numSplitDigital;
+  const isSplitBalanced = Math.abs(splitTotal - payableGrandTotal) < 0.01;
+
+  // Open Settle Modal Helper
+  const handleOpenSettleModal = () => {
+    setPaymentMode('CASH');
+    setTenderedAmount(String(payableGrandTotal));
+    setSplitCash(String(Math.floor(payableGrandTotal / 2)));
+    setSplitDigital(String(Math.ceil(payableGrandTotal / 2)));
+    setShowB2bFields(false);
+    setSettleModalOpen(true);
+  };
+
+  // Keyboard Hotkeys Listener (F1: Search, F2: Pay, F3: KOT, F4: Clear, Esc: Close)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'F1' || (e.altKey && e.key.toLowerCase() === 's')) {
+        e.preventDefault();
+        const searchInput = document.getElementById('pos-menu-search-input');
+        searchInput?.focus();
+      } else if (e.key === 'F2') {
+        e.preventDefault();
+        if (cart.length > 0 || activeTableOrder) {
+          handleOpenSettleModal();
+        }
+      } else if (e.key === 'F3') {
+        e.preventDefault();
+        if (cart.length > 0) {
+          executeOrder(true);
+        }
+      } else if (e.key === 'F4') {
+        e.preventDefault();
+        if (cart.length > 0 && window.confirm('Clear active cart?')) {
+          clearCart();
+        }
+      } else if (e.key === 'Escape') {
+        setCustomizingItem(null);
+        setNumpadCartItem(null);
+        setParkedModalOpen(false);
+        setTableModalOpen(false);
+        setSettleModalOpen(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [cart, activeTableOrder, payableGrandTotal]);
 
   // Place Order Execution (Send KOT vs Pay & Settle)
   const executeOrder = async (isPostPaidKOT: boolean) => {
@@ -362,13 +563,25 @@ export default function PosPage() {
       if (activeTableOrder && !isPostPaidKOT) {
         try {
           setIsPlacingOrder(true);
+
+          if (paymentMode === 'SPLIT' && !isSplitBalanced) {
+            alert(`Split amounts (₹${splitTotal}) do not match payable total (₹${payableGrandTotal})`);
+            return;
+          }
+
+          const effectivePaymentMode =
+            paymentMode === 'SPLIT'
+              ? `SPLIT (Cash ₹${numSplitCash} + ${splitDigitalMode} ₹${numSplitDigital})`
+              : paymentMode;
+
           await orderRemoteDataSource.settleOrder(activeTableOrder.id, {
             orderId: activeTableOrder.id,
-            paymentMode,
+            paymentMode: effectivePaymentMode,
             discountAmount,
             tenderedAmount: paymentMode === 'CASH' && numericTendered > 0 ? numericTendered : undefined,
             changeAmount: paymentMode === 'CASH' && changeToReturn > 0 ? changeToReturn : undefined,
             billingMode: BillingModes.PRE_PAID,
+            remarks: showB2bFields && customerGstin.trim() ? `B2B: ${companyName.trim()} | GSTIN: ${customerGstin.trim()}` : undefined,
             orderStatus: 'Settled',
           });
 
@@ -383,7 +596,7 @@ export default function PosPage() {
             state: restaurantConfig?.state || activeRestaurant?.state || '',
             contactPhone: restaurantConfig?.contactNumber || (activeRestaurant as any)?.contactNumber || activeRestaurant?.ownerMobile || '',
             gstNumber: hasGstNumber ? (restaurantConfig?.gstNumber || '') : undefined,
-            customerName: activeTableOrder.customerName || 'Dine-In Guest',
+            customerName: companyName.trim() || activeTableOrder.customerName || 'Dine-In Guest',
             customerPhone: activeTableOrder.mobileNumber || undefined,
             orderType: 'DINE_IN',
             tableName: selectedTable ? `Table ${selectedTable.tableNumber}` : activeTableOrder.tableName,
@@ -402,7 +615,7 @@ export default function PosPage() {
             sgstAmount: hasGstNumber ? (activeTableOrder.sgst || 0) : undefined,
             taxAmount: hasGstNumber ? ((activeTableOrder.cgst || 0) + (activeTableOrder.sgst || 0)) : 0,
             grandTotal: payableGrandTotal,
-            paymentMode,
+            paymentMode: effectivePaymentMode,
             tenderedAmount: numericTendered,
             changeAmount: changeToReturn,
             date: new Date().toLocaleString('en-IN'),
@@ -417,13 +630,13 @@ export default function PosPage() {
             orderId: activeTableOrder.id,
             orderType: 'DINE_IN',
             table: selectedTable?.tableNumber,
-            customerName: activeTableOrder.customerName,
+            customerName: companyName.trim() || activeTableOrder.customerName,
             customerPhone: activeTableOrder.mobileNumber,
             items: activeTableOrder.items || [],
             subtotal: activeTableOrder.subtotal || existingTableTotal,
             totalTax: hasGstNumber ? ((activeTableOrder.cgst || 0) + (activeTableOrder.sgst || 0)) : 0,
             grandTotal: payableGrandTotal,
-            paymentMode,
+            paymentMode: effectivePaymentMode,
             tendered: numericTendered,
             change: changeToReturn,
             date: new Date().toLocaleTimeString(),
@@ -498,6 +711,11 @@ export default function PosPage() {
       return;
     }
 
+    if (!isPostPaidKOT && paymentMode === 'SPLIT' && !isSplitBalanced) {
+      alert(`Split amounts (₹${splitTotal}) do not match payable total (₹${payableGrandTotal})`);
+      return;
+    }
+
     try {
       setIsPlacingOrder(true);
       const itemsPayload = cart.map((item) => ({
@@ -512,7 +730,12 @@ export default function PosPage() {
       const orderTypeId =
         orderType === 'DINE_IN' ? 1 : orderType === 'TAKEAWAY' ? 2 : orderType === 'DELIVERY' ? 3 : 4;
 
-      const effectiveCustomerName = customerName.trim() || (selectedTable ? `Table ${selectedTable.tableNumber}` : 'Walk-in Customer');
+      const effectiveCustomerName = companyName.trim() || customerName.trim() || (selectedTable ? `Table ${selectedTable.tableNumber}` : 'Walk-in Customer');
+
+      const effectivePaymentMode =
+        paymentMode === 'SPLIT'
+          ? `SPLIT (Cash ₹${numSplitCash} + ${splitDigitalMode} ₹${numSplitDigital})`
+          : paymentMode;
 
       const orderPayload: any = {
         restaurantId: currentRestId,
@@ -525,10 +748,11 @@ export default function PosPage() {
         orderStatus: 'Confirmed',
         paymentStatus: isPostPaidKOT ? 'Pending' : 'Paid',
         billingMode: isPostPaidKOT ? BillingModes.POST_PAID : BillingModes.PRE_PAID,
-        paymentMode: isPostPaidKOT ? undefined : paymentMode,
+        paymentMode: isPostPaidKOT ? undefined : effectivePaymentMode,
         tenderedAmount: !isPostPaidKOT && paymentMode === 'CASH' && numericTendered > 0 ? numericTendered : undefined,
         changeAmount: !isPostPaidKOT && paymentMode === 'CASH' && changeToReturn > 0 ? changeToReturn : undefined,
         source: selectedTable ? `Table ${selectedTable.tableNumber}` : 'POS_ADMIN',
+        remarks: showB2bFields && customerGstin.trim() ? `B2B: ${companyName.trim()} | GSTIN: ${customerGstin.trim()}` : undefined,
         cgst: cgstAmount,
         sgst: sgstAmount,
         totalAmount: grandTotal,
@@ -545,11 +769,12 @@ export default function PosPage() {
           try {
             await orderRemoteDataSource.settleOrder(orderId, {
               orderId,
-              paymentMode,
+              paymentMode: effectivePaymentMode,
               discountAmount,
               tenderedAmount: paymentMode === 'CASH' && numericTendered > 0 ? numericTendered : undefined,
               changeAmount: paymentMode === 'CASH' && changeToReturn > 0 ? changeToReturn : undefined,
               billingMode: BillingModes.PRE_PAID,
+              remarks: orderPayload.remarks,
               orderStatus: 'Settled',
             });
           } catch (settleErr) {
@@ -587,7 +812,7 @@ export default function PosPage() {
           sgstAmount: hasGstNumber ? sgstAmount : undefined,
           taxAmount: totalTax,
           grandTotal,
-          paymentMode: isPostPaidKOT ? 'KOT (Pay Later)' : paymentMode,
+          paymentMode: isPostPaidKOT ? 'KOT (Pay Later)' : effectivePaymentMode,
           tenderedAmount: numericTendered,
           changeAmount: changeToReturn,
           date: new Date().toLocaleString('en-IN'),
@@ -628,7 +853,7 @@ export default function PosPage() {
           subtotal,
           totalTax,
           grandTotal,
-          paymentMode: isPostPaidKOT ? 'KOT (Pay Later)' : paymentMode,
+          paymentMode: isPostPaidKOT ? 'KOT (Pay Later)' : effectivePaymentMode,
           tendered: numericTendered,
           change: changeToReturn,
           date: new Date().toLocaleTimeString(),
@@ -638,7 +863,6 @@ export default function PosPage() {
         if (isPostPaidKOT) {
           clearCartOnly();
           setSettleModalOpen(false);
-          // If it was a table order, reload running active order on table
           if (selectedTable?.id) {
             loadActiveTableOrder(selectedTable.id);
           }
@@ -686,20 +910,6 @@ export default function PosPage() {
       paymentMode: orderSuccessData.paymentMode,
     });
     window.open(url, '_blank');
-
-    if (activeRestaurant?.restaurantId) {
-      WebWhatsAppService.sendOrderStatusNotification({
-        orderId: Number(orderSuccessData.orderId),
-        restaurantId: activeRestaurant.restaurantId,
-        restaurantName: activeRestaurant.restaurantName,
-        mobileNumber: phone,
-        customerName: orderSuccessData.customerName,
-        orderStatus: 'CONFIRMED',
-        orderTypeName: orderSuccessData.orderType,
-        tableName: orderSuccessData.table ? `Table ${orderSuccessData.table}` : undefined,
-        totalAmount: orderSuccessData.grandTotal,
-      }).catch((e) => console.warn('Background WhatsApp push failed:', e));
-    }
   };
 
   return (
@@ -780,36 +990,43 @@ export default function PosPage() {
                   </button>
                 </div>
 
-                {/* Veg / Non-Veg Toggle Filter */}
-                <div className="flex items-center gap-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-1 text-xs">
-                  <button
-                    onClick={() => setVegFilter('ALL')}
-                    className={`rounded-lg px-2.5 py-1 font-semibold ${
-                      vegFilter === 'ALL'
-                        ? 'bg-white dark:bg-[#1B2127] text-[#1E2930] dark:text-[#F3F4F6] shadow-sm'
-                        : 'text-[#667085]'
-                    }`}
-                  >
-                    All
-                  </button>
-                  <button
-                    onClick={() => setVegFilter('VEG')}
-                    className={`flex items-center gap-1 rounded-lg px-2.5 py-1 font-semibold ${
-                      vegFilter === 'VEG' ? 'bg-emerald-500 text-white shadow-sm' : 'text-[#667085]'
-                    }`}
-                  >
-                    <span className="h-2 w-2 rounded-full bg-emerald-300" />
-                    Veg
-                  </button>
-                  <button
-                    onClick={() => setVegFilter('NON_VEG')}
-                    className={`flex items-center gap-1 rounded-lg px-2.5 py-1 font-semibold ${
-                      vegFilter === 'NON_VEG' ? 'bg-red-500 text-white shadow-sm' : 'text-[#667085]'
-                    }`}
-                  >
-                    <span className="h-2 w-2 rounded-full bg-red-300" />
-                    Non-Veg
-                  </button>
+                {/* Right: Veg / Non-Veg Toggle & Keyboard Hints */}
+                <div className="flex items-center gap-2">
+                  <div className="hidden xl:flex items-center gap-1.5 text-[10px] text-[#667085] bg-[#FAF7F2] dark:bg-[#151A20] px-2.5 py-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540]">
+                    <Keyboard className="h-3.5 w-3.5 text-[#DE8626]" />
+                    <span>F1: Search • F2: Settle • F3: KOT</span>
+                  </div>
+
+                  <div className="flex items-center gap-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-1 text-xs">
+                    <button
+                      onClick={() => setVegFilter('ALL')}
+                      className={`rounded-lg px-2.5 py-1 font-semibold ${
+                        vegFilter === 'ALL'
+                          ? 'bg-white dark:bg-[#1B2127] text-[#1E2930] dark:text-[#F3F4F6] shadow-sm'
+                          : 'text-[#667085]'
+                      }`}
+                    >
+                      All
+                    </button>
+                    <button
+                      onClick={() => setVegFilter('VEG')}
+                      className={`flex items-center gap-1 rounded-lg px-2.5 py-1 font-semibold ${
+                        vegFilter === 'VEG' ? 'bg-emerald-500 text-white shadow-sm' : 'text-[#667085]'
+                      }`}
+                    >
+                      <span className="h-2 w-2 rounded-full bg-emerald-300" />
+                      Veg
+                    </button>
+                    <button
+                      onClick={() => setVegFilter('NON_VEG')}
+                      className={`flex items-center gap-1 rounded-lg px-2.5 py-1 font-semibold ${
+                        vegFilter === 'NON_VEG' ? 'bg-red-500 text-white shadow-sm' : 'text-[#667085]'
+                      }`}
+                    >
+                      <span className="h-2 w-2 rounded-full bg-red-300" />
+                      Non-Veg
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -817,10 +1034,11 @@ export default function PosPage() {
               <div className="relative">
                 <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-[#667085]" />
                 <input
+                  id="pos-menu-search-input"
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search dishes by name or item code (e.g. Masala Dosa, Chai, 101)..."
+                  placeholder="Search dishes or item codes (e.g. Biryani, Naan, 101) [Press F1]..."
                   className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] pl-10 pr-4 py-2 text-xs font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626] transition-colors"
                 />
                 {searchQuery && (
@@ -879,13 +1097,16 @@ export default function PosPage() {
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
                   {filteredItems.map((item) => {
-                    const inCart = cart.find((ci) => ci.itemId === item.id);
+                    const inCartCount = cart
+                      .filter((ci) => ci.itemId === item.id)
+                      .reduce((s, ci) => s + ci.quantity, 0);
+
                     return (
                       <div
                         key={item.id}
-                        onClick={() => addToCart(item)}
+                        onClick={() => setCustomizingItem(item)}
                         className={`group relative flex flex-col justify-between rounded-2xl border overflow-hidden shadow-sm transition-all cursor-pointer select-none ${
-                          inCart
+                          inCartCount > 0
                             ? 'border-[#DE8626] bg-amber-500/5 ring-1 ring-[#DE8626]'
                             : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] hover:border-[#DE8626] hover:shadow-md'
                         }`}
@@ -899,9 +1120,9 @@ export default function PosPage() {
                             showDietBadge
                             fallbackIconSize={22}
                           />
-                          {inCart && (
+                          {inCartCount > 0 && (
                             <span className="absolute top-1.5 right-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-[#DE8626] text-[11px] font-extrabold text-white shadow-sm">
-                              {inCart.quantity}
+                              {inCartCount}
                             </span>
                           )}
                         </div>
@@ -918,18 +1139,39 @@ export default function PosPage() {
                           </div>
 
                           <div className="mt-2.5 flex items-center justify-between pt-2 border-t border-[#E7E1DA]/40 dark:border-[#2B3540]/40">
-                            <span className="text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
-                              ₹{item.price}
-                            </span>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                addToCart(item);
-                              }}
-                              className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#FAF7F2] dark:bg-[#151A20] text-[#DE8626] group-hover:bg-[#DE8626] group-hover:text-white transition-colors"
-                            >
-                              <Plus className="h-4 w-4" />
-                            </button>
+                            <div>
+                              <span className="text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                                ₹{item.price}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-1.5">
+                              {/* Quick 1-tap Add Button */}
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  addToCartQuick(item);
+                                }}
+                                title="Quick Add 1 Qty"
+                                className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#FAF7F2] dark:bg-[#151A20] text-[#DE8626] hover:bg-[#DE8626] hover:text-white transition-colors"
+                              >
+                                <Plus className="h-4 w-4" />
+                              </button>
+
+                              {/* Customize Button */}
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setCustomizingItem(item);
+                                }}
+                                title="Customize Portions & Addons"
+                                className="flex h-7 w-7 items-center justify-center rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] text-[#667085] hover:text-[#DE8626] hover:border-[#DE8626] transition-colors"
+                              >
+                                <SlidersHorizontal className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -950,35 +1192,69 @@ export default function PosPage() {
                   Order Cart ({cart.reduce((s, i) => s + i.quantity, 0)})
                 </h3>
               </div>
-              {cart.length > 0 && (
+
+              <div className="flex items-center gap-2">
+                {/* Parked Carts Trigger Pill */}
                 <button
-                  onClick={clearCart}
-                  className="flex items-center gap-1 text-[11px] font-semibold text-red-500 hover:underline"
+                  type="button"
+                  onClick={() => setParkedModalOpen(true)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-extrabold transition-all ${
+                    parkedCarts.length > 0
+                      ? 'bg-amber-500/10 text-[#DE8626] border border-[#DE8626]/40 hover:bg-amber-500/20'
+                      : 'bg-black/5 dark:bg-white/5 text-[#667085] hover:text-[#1E2930]'
+                  }`}
+                  title="View Held / Parked Carts"
                 >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  <span>Clear</span>
+                  <Clock className="h-3.5 w-3.5" />
+                  <span>Held ({parkedCarts.length})</span>
                 </button>
-              )}
+
+                {cart.length > 0 && (
+                  <button
+                    onClick={clearCart}
+                    className="flex items-center gap-1 text-[11px] font-semibold text-red-500 hover:underline"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span>Clear</span>
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Customer & Table Meta */}
             <div className="p-3 border-b border-[#E7E1DA]/60 dark:border-[#2B3540]/60 space-y-2">
               <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={customerName}
-                  onChange={(e) => setCustomerName(e.target.value)}
-                  placeholder="Customer Name (Optional)"
-                  className="flex-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3 py-1.5 text-xs text-[#1E2930] dark:text-[#F3F4F6] outline-none"
-                />
-                <input
-                  type="tel"
-                  value={customerPhone}
-                  onChange={(e) => setCustomerPhone(e.target.value.replace(/[^0-9]/g, '').slice(0, 10))}
-                  placeholder="Phone"
-                  maxLength={10}
-                  className="w-28 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3 py-1.5 text-xs text-[#1E2930] dark:text-[#F3F4F6] outline-none"
-                />
+                <div className="flex-1 relative">
+                  <input
+                    type="text"
+                    value={customerName}
+                    onChange={(e) => setCustomerName(e.target.value)}
+                    placeholder="Customer Name (Optional)"
+                    className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3 py-1.5 text-xs text-[#1E2930] dark:text-[#F3F4F6] outline-none"
+                  />
+                  {isCustomerLookupVerified && (
+                    <span className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 text-[9px] font-bold text-emerald-600">
+                      <Check className="h-3 w-3" />
+                      Verified
+                    </span>
+                  )}
+                </div>
+
+                <div className="w-32 relative">
+                  <input
+                    type="tel"
+                    value={customerPhone}
+                    onChange={(e) => handlePhoneChange(e.target.value)}
+                    placeholder="Phone (10d)"
+                    maxLength={10}
+                    className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3 py-1.5 text-xs text-[#1E2930] dark:text-[#F3F4F6] outline-none"
+                  />
+                  {isLookingUpCustomer && (
+                    <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[9px] text-[#DE8626] animate-pulse">
+                      ...
+                    </span>
+                  )}
+                </div>
               </div>
 
               {orderType === 'DINE_IN' && (
@@ -1048,7 +1324,7 @@ export default function PosPage() {
               ) : (
                 cart.map((item) => (
                   <div
-                    key={item.itemId}
+                    key={item.cartKey}
                     className="flex items-center justify-between rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] p-2.5 bg-[#FAF7F2]/40 dark:bg-[#151A20]/40 text-xs"
                   >
                     <div className="flex-1 min-w-0 pr-2">
@@ -1060,22 +1336,45 @@ export default function PosPage() {
                         />
                         <p className="font-bold text-[#1E2930] dark:text-[#F3F4F6] truncate">{item.itemName}</p>
                       </div>
+
+                      {/* Modifiers & Notes Badges */}
+                      {item.modifiers && item.modifiers.length > 0 && (
+                        <p className="text-[10px] text-[#DE8626] truncate mt-0.5">
+                          + {item.modifiers.map((m) => m.modifierName).join(', ')}
+                        </p>
+                      )}
+                      {item.notes && (
+                        <p className="text-[10px] text-gray-500 italic truncate mt-0.5">
+                          "{item.notes}"
+                        </p>
+                      )}
+
                       <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] mt-0.5">
                         ₹{item.price} × {item.quantity} = ₹{item.price * item.quantity}
                       </p>
                     </div>
 
-                    {/* Stepper */}
+                    {/* Stepper with Numpad Trigger on Quantity Badge */}
                     <div className="flex items-center gap-1.5">
                       <button
-                        onClick={() => updateQuantity(item.itemId, -1)}
+                        onClick={() => updateQuantity(item.cartKey, -1)}
                         className="flex h-6 w-6 items-center justify-center rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5"
                       >
                         <Minus className="h-3 w-3" />
                       </button>
-                      <span className="w-5 text-center font-bold">{item.quantity}</span>
+
+                      {/* Clickable Quantity Badge (Opens Fast Numpad) */}
                       <button
-                        onClick={() => updateQuantity(item.itemId, 1)}
+                        type="button"
+                        onClick={() => setNumpadCartItem(item)}
+                        className="w-7 py-0.5 text-center font-bold text-xs bg-white dark:bg-[#1B2127] border rounded-lg hover:border-[#DE8626] transition-colors"
+                        title="Click to enter exact quantity via numpad"
+                      >
+                        {item.quantity}
+                      </button>
+
+                      <button
+                        onClick={() => updateQuantity(item.cartKey, 1)}
                         className="flex h-6 w-6 items-center justify-center rounded-lg bg-[#DE8626] text-white hover:bg-[#C4721C]"
                       >
                         <Plus className="h-3 w-3" />
@@ -1115,29 +1414,41 @@ export default function PosPage() {
                 </div>
               </div>
 
-              {/* Action Buttons: Send KOT vs Collect Payment */}
-              <div className="grid grid-cols-2 gap-2 pt-1">
-                {/* Send KOT Button */}
-                <button
-                  disabled={cart.length === 0 || isPlacingOrder}
-                  onClick={() => executeOrder(true)}
-                  className="flex items-center justify-center gap-1.5 rounded-xl border border-[#DE8626] bg-transparent py-2.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/10 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-                >
-                  <Utensils className="h-4 w-4" />
-                  <span>Send KOT</span>
-                </button>
+              {/* Action Buttons: Hold Order / Send KOT / Settle */}
+              <div className="space-y-2 pt-1">
+                <div className="grid grid-cols-2 gap-2">
+                  {/* Send KOT Button (F3) */}
+                  <button
+                    disabled={cart.length === 0 || isPlacingOrder}
+                    onClick={() => executeOrder(true)}
+                    className="flex items-center justify-center gap-1.5 rounded-xl border border-[#DE8626] bg-transparent py-2.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/10 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                  >
+                    <Utensils className="h-4 w-4" />
+                    <span>Send KOT [F3]</span>
+                  </button>
 
-                {/* Pay & Settle Button */}
+                  {/* Hold / Park Order Button */}
+                  <button
+                    disabled={cart.length === 0}
+                    onClick={handleParkCurrentCart}
+                    className="flex items-center justify-center gap-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] py-2.5 text-xs font-bold text-[#667085] hover:text-[#DE8626] hover:border-[#DE8626] disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                  >
+                    <PauseCircle className="h-4 w-4" />
+                    <span>Hold Order</span>
+                  </button>
+                </div>
+
+                {/* Pay & Settle Button (F2) */}
                 <button
                   disabled={(cart.length === 0 && !activeTableOrder) || isPlacingOrder}
-                  onClick={() => setSettleModalOpen(true)}
-                  className="flex items-center justify-center gap-1.5 rounded-xl bg-[#DE8626] py-2.5 text-xs font-bold text-white shadow-md shadow-[#DE8626]/20 hover:bg-[#C4721C] disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                  onClick={handleOpenSettleModal}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-[#DE8626] py-3 text-xs font-bold text-white shadow-md shadow-[#DE8626]/20 hover:bg-[#C4721C] disabled:opacity-40 disabled:cursor-not-allowed transition-all"
                 >
                   <IndianRupee className="h-4 w-4" />
                   <span>
                     {cart.length === 0 && activeTableOrder
-                      ? `Settle Tab ₹${payableGrandTotal}`
-                      : `Settle ₹${payableGrandTotal}`}
+                      ? `Settle Tab ₹${payableGrandTotal} [F2]`
+                      : `Pay & Settle ₹${payableGrandTotal} [F2]`}
                   </span>
                 </button>
               </div>
@@ -1194,7 +1505,7 @@ export default function PosPage() {
         {/* 2. Settlement & Payment Modal */}
         {settleModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <div className="w-full max-w-md rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-6 shadow-2xl">
+            <div className="w-full max-w-md rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-6 shadow-2xl max-h-[92vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-150">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">Collect Payment & Settle</h3>
                 <button onClick={() => setSettleModalOpen(false)} className="rounded-lg p-1 text-[#667085]">
@@ -1203,7 +1514,7 @@ export default function PosPage() {
               </div>
 
               {/* Amount Display */}
-              <div className="rounded-2xl bg-amber-500/10 p-4 text-center mb-5">
+              <div className="rounded-2xl bg-amber-500/10 p-4 text-center mb-4">
                 <span className="text-xs font-semibold text-[#DE8626] uppercase">Payable Bill Amount</span>
                 <h2 className="text-3xl font-extrabold text-[#DE8626]">₹{payableGrandTotal}</h2>
                 {activeTableOrder && (
@@ -1214,33 +1525,95 @@ export default function PosPage() {
               </div>
 
               {/* Payment Mode Options */}
-              <div className="mb-5">
+              <div className="mb-4">
                 <label className="block text-xs font-semibold text-[#667085] dark:text-[#94A3B8] uppercase mb-2">
                   Payment Method
                 </label>
-                <div className="grid grid-cols-4 gap-2">
-                  {(['CASH', 'UPI', 'CARD', 'DUE'] as const).map((mode) => (
+                <div className="grid grid-cols-5 gap-1.5">
+                  {(['CASH', 'UPI', 'CARD', 'DUE', 'SPLIT'] as const).map((mode) => (
                     <button
                       key={mode}
                       onClick={() => setPaymentMode(mode)}
-                      className={`rounded-xl border py-2.5 text-xs font-bold transition-all ${
+                      className={`rounded-xl border py-2 text-xs font-bold transition-all ${
                         paymentMode === mode
                           ? 'border-[#DE8626] bg-[#DE8626] text-white shadow-md'
                           : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#1E2930] dark:text-[#F3F4F6]'
                       }`}
                     >
-                      {mode}
+                      {mode === 'SPLIT' ? 'SPLIT ⚡' : mode}
                     </button>
                   ))}
                 </div>
               </div>
 
+              {/* SPLIT Mode Inputs */}
+              {paymentMode === 'SPLIT' && (
+                <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-3.5 space-y-2.5 mb-4">
+                  <div className="flex items-center justify-between text-xs font-bold text-[#DE8626]">
+                    <span>Split Portions</span>
+                    <span className={isSplitBalanced ? 'text-emerald-600' : 'text-red-500'}>
+                      {isSplitBalanced ? 'Balanced' : `Diff: ₹${(payableGrandTotal - splitTotal).toFixed(2)}`}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] text-[#667085] font-semibold mb-0.5">Cash (₹)</label>
+                      <input
+                        type="number"
+                        value={splitCash}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setSplitCash(v);
+                          setSplitDigital(String(Math.max(0, payableGrandTotal - (parseFloat(v) || 0))));
+                        }}
+                        className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-2.5 py-1.5 text-xs font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-[#667085] font-semibold mb-0.5">Digital ({splitDigitalMode}) (₹)</label>
+                      <input
+                        type="number"
+                        value={splitDigital}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setSplitDigital(v);
+                          setSplitCash(String(Math.max(0, payableGrandTotal - (parseFloat(v) || 0))));
+                        }}
+                        className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-2.5 py-1.5 text-xs font-bold"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setSplitDigitalMode('UPI')}
+                      className={`flex-1 py-1 text-[10px] font-bold rounded-lg border ${
+                        splitDigitalMode === 'UPI' ? 'border-[#DE8626] bg-[#DE8626]/10 text-[#DE8626]' : 'border-gray-300 text-gray-500'
+                      }`}
+                    >
+                      Digital as UPI
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSplitDigitalMode('CARD')}
+                      className={`flex-1 py-1 text-[10px] font-bold rounded-lg border ${
+                        splitDigitalMode === 'CARD' ? 'border-[#DE8626] bg-[#DE8626]/10 text-[#DE8626]' : 'border-gray-300 text-gray-500'
+                      }`}
+                    >
+                      Digital as Card
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Cash Tendered & Change Return (If Cash) */}
               {paymentMode === 'CASH' && (
-                <div className="space-y-3 mb-5 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] p-3.5 bg-[#FAF7F2] dark:bg-[#151A20]">
+                <div className="space-y-3 mb-4 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] p-3.5 bg-[#FAF7F2] dark:bg-[#151A20]">
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-semibold text-[#667085] dark:text-[#94A3B8]">
-                      Cash Tendered by Customer
+                      Cash Tendered
                     </label>
                     {numericTendered > 0 && (
                       <span
@@ -1300,6 +1673,41 @@ export default function PosPage() {
                 </div>
               )}
 
+              {/* B2B GSTIN Corporate Toggle */}
+              <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-3 mb-4">
+                <button
+                  type="button"
+                  onClick={() => setShowB2bFields(!showB2bFields)}
+                  className="flex items-center justify-between w-full text-xs font-bold text-[#667085]"
+                >
+                  <span className="flex items-center gap-1.5">
+                    <Building2 className="h-3.5 w-3.5 text-[#DE8626]" />
+                    <span>B2B Tax Invoice (Customer GSTIN)</span>
+                  </span>
+                  {showB2bFields ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                </button>
+
+                {showB2bFields && (
+                  <div className="grid grid-cols-2 gap-2 pt-2.5 mt-2 border-t border-[#E7E1DA] dark:border-[#2B3540]">
+                    <input
+                      type="text"
+                      value={companyName}
+                      onChange={(e) => setCompanyName(e.target.value)}
+                      placeholder="Company Name"
+                      className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-2.5 py-1.5 text-xs font-medium"
+                    />
+                    <input
+                      type="text"
+                      maxLength={15}
+                      value={customerGstin}
+                      onChange={(e) => setCustomerGstin(e.target.value.toUpperCase())}
+                      placeholder="GSTIN (15 Digits)"
+                      className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-2.5 py-1.5 text-xs font-mono font-medium"
+                    />
+                  </div>
+                )}
+              </div>
+
               {/* Action Button */}
               <button
                 disabled={isPlacingOrder}
@@ -1345,10 +1753,10 @@ export default function PosPage() {
                   <span>Customer: {orderSuccessData.customerName}</span>
                 </div>
                 <div className="border-t border-b border-dashed border-gray-400 my-2 py-1 space-y-1">
-                  {orderSuccessData.items.map((i: any) => (
-                    <div key={i.itemId} className="flex justify-between text-[11px]">
+                  {orderSuccessData.items.map((i: any, idx: number) => (
+                    <div key={idx} className="flex justify-between text-[11px]">
                       <span>{i.quantity}x {i.itemName}</span>
-                      <span>₹{i.price * i.quantity}</span>
+                      <span>₹{(i.price || i.unitPrice) * i.quantity}</span>
                     </div>
                   ))}
                 </div>
@@ -1399,7 +1807,37 @@ export default function PosPage() {
           </div>
         )}
 
-        {/* 4. Store Operating Status Controls Modal */}
+        {/* 4. Dish Customization Modal (Portions, Variants, Modifiers & Notes) */}
+        <DishCustomizationModal
+          isOpen={Boolean(customizingItem)}
+          item={customizingItem}
+          onClose={() => setCustomizingItem(null)}
+          onConfirm={handleCustomizationConfirm}
+        />
+
+        {/* 5. Fast Quantity Numpad Modal */}
+        <QuickNumpadModal
+          isOpen={Boolean(numpadCartItem)}
+          itemName={numpadCartItem?.itemName || ''}
+          currentQuantity={numpadCartItem?.quantity || 1}
+          onClose={() => setNumpadCartItem(null)}
+          onApply={(qty) => {
+            if (numpadCartItem) {
+              updateExactQuantity(numpadCartItem.cartKey, qty);
+            }
+          }}
+        />
+
+        {/* 6. Parked Carts (Hold Orders) Modal */}
+        <ParkedCartsModal
+          isOpen={parkedModalOpen}
+          parkedCarts={parkedCarts}
+          onClose={() => setParkedModalOpen(false)}
+          onResume={handleResumeParkedCart}
+          onDiscard={handleDiscardParkedCart}
+        />
+
+        {/* 7. Store Operating Status Controls Modal */}
         <StoreOperatingStatusModal
           isOpen={operatingModalOpen}
           onClose={() => setOperatingModalOpen(false)}

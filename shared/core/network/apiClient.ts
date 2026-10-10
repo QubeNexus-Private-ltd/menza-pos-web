@@ -10,13 +10,10 @@ import { SubscriptionEvents } from '../utils/subscriptionEvents';
  * burst pacing, and request deduplication.
  */
 class ApiRateLimiter {
-  private maxRequestsPerWindow: number = 50; // Max 50 requests
-  private windowMs: number = 1500;           // Per 1.5-second sliding window
-  private minIntervalMs: number = 40;         // Minimum 40ms pacing between concurrent requests to prevent burst 429s in Release mode
+  private maxRequestsPerWindow: number = 80; // Max 80 requests
+  private windowMs: number = 1000;           // Per 1-second sliding window
   private requestTimestamps: number[] = [];
-  private inFlightGetRequests: Map<string, Promise<any>> = new Map();
   private endpointLastCalled: Map<string, number> = new Map();
-  private queueMutex: Promise<void> = Promise.resolve();
 
   // Custom rate limits for sensitive / high-cost endpoints
   private endpointLimits: Record<string, number> = {
@@ -27,73 +24,49 @@ class ApiRateLimiter {
 
   /**
    * Acquire permission to execute an API request.
-   * Serializes burst requests in Release mode with a minimum spacing interval (40ms)
-   * and enforces sliding window capacity and sensitive endpoint limits.
+   * Enforces sliding window safety cap and sensitive endpoint limits
+   * without artificial serialization locks that block web concurrency.
    */
   async acquire(config: InternalAxiosRequestConfig): Promise<void> {
     const url = config.url || '';
 
-    // Chain execution onto sequential queue to prevent concurrent Hermes execution burst
-    const previousQueue = this.queueMutex;
-    let releaseLock: () => void;
-    this.queueMutex = new Promise((resolve) => {
-      releaseLock = resolve;
-    });
-
-    try {
-      await previousQueue;
-
-      // 1. Check endpoint-specific rate limiters
-      for (const [pattern, intervalMs] of Object.entries(this.endpointLimits)) {
-        if (url.includes(pattern)) {
-          const lastCall = this.endpointLastCalled.get(pattern) || 0;
-          const elapsed = Date.now() - lastCall;
-          if (elapsed < intervalMs) {
-            const delayNeeded = intervalMs - elapsed;
-            logger.api(
-              'API_REQUEST',
-              `UI Rate Limiting: Throttling ${url} by ${delayNeeded}ms`,
-              { url, delayNeeded, limitMs: intervalMs }
-            );
-            await this.sleep(delayNeeded);
-          }
-          this.endpointLastCalled.set(pattern, Date.now());
-          break;
+    // 1. Check endpoint-specific rate limiters
+    for (const [pattern, intervalMs] of Object.entries(this.endpointLimits)) {
+      if (url.includes(pattern)) {
+        const lastCall = this.endpointLastCalled.get(pattern) || 0;
+        const elapsed = Date.now() - lastCall;
+        if (elapsed < intervalMs) {
+          const delayNeeded = intervalMs - elapsed;
+          logger.api(
+            'API_REQUEST',
+            `UI Rate Limiting: Throttling ${url} by ${delayNeeded}ms`,
+            { url, delayNeeded, limitMs: intervalMs }
+          );
+          await this.sleep(delayNeeded);
         }
+        this.endpointLastCalled.set(pattern, Date.now());
+        break;
       }
-
-      // 2. Sliding Window Rate Limiter
-      let now = Date.now();
-      this.requestTimestamps = this.requestTimestamps.filter((t) => now - t < this.windowMs);
-
-      if (this.requestTimestamps.length >= this.maxRequestsPerWindow) {
-        const oldestInWindow = this.requestTimestamps[0];
-        const timeToWait = this.windowMs - (now - oldestInWindow) + 15;
-        logger.api(
-          'API_REQUEST',
-          `UI Rate Limiting: Window limit reached (${this.maxRequestsPerWindow} reqs / ${this.windowMs}ms). Pacing request by ${timeToWait}ms`,
-          { url, timeToWait, activeRequestsInWindow: this.requestTimestamps.length }
-        );
-        await this.sleep(timeToWait);
-        now = Date.now();
-        this.requestTimestamps = this.requestTimestamps.filter((t) => now - t < this.windowMs);
-      }
-
-      // 3. Minimum Inter-Request Spacing Pacing (prevents burst socket exhaustion)
-      if (this.requestTimestamps.length > 0) {
-        const lastReqTime = this.requestTimestamps[this.requestTimestamps.length - 1];
-        const timeSinceLast = now - lastReqTime;
-        if (timeSinceLast < this.minIntervalMs) {
-          const sleepDuration = this.minIntervalMs - timeSinceLast;
-          await this.sleep(sleepDuration);
-          now = Date.now();
-        }
-      }
-
-      this.requestTimestamps.push(now);
-    } finally {
-      releaseLock!();
     }
+
+    // 2. Sliding Window Safety Cap
+    let now = Date.now();
+    this.requestTimestamps = this.requestTimestamps.filter((t) => now - t < this.windowMs);
+
+    if (this.requestTimestamps.length >= this.maxRequestsPerWindow) {
+      const oldestInWindow = this.requestTimestamps[0];
+      const timeToWait = this.windowMs - (now - oldestInWindow) + 15;
+      logger.api(
+        'API_REQUEST',
+        `UI Rate Limiting: Window limit reached (${this.maxRequestsPerWindow} reqs / ${this.windowMs}ms). Pacing request by ${timeToWait}ms`,
+        { url, timeToWait, activeRequestsInWindow: this.requestTimestamps.length }
+      );
+      await this.sleep(timeToWait);
+      now = Date.now();
+      this.requestTimestamps = this.requestTimestamps.filter((t) => now - t < this.windowMs);
+    }
+
+    this.requestTimestamps.push(now);
   }
 
   private sleep(ms: number): Promise<void> {
@@ -118,9 +91,14 @@ class ApiCacheManager {
   private routeTtl: Array<{ pattern: string; ttlMs: number }> = [
     { pattern: '/CategoryMaster', ttlMs: 30000 },
     { pattern: '/ItemMaster', ttlMs: 30000 },
+    { pattern: '/RestaurantConfig', ttlMs: 60000 },
     { pattern: '/RestaurantConfiguration', ttlMs: 60000 },
+    { pattern: '/TableMaster', ttlMs: 15000 },
     { pattern: '/RestaurantTable', ttlMs: 15000 },
+    { pattern: '/RestaurantFloor', ttlMs: 60000 },
+    { pattern: '/OperatingStatus', ttlMs: 15000 },
     { pattern: '/Reports', ttlMs: 15000 },
+    { pattern: '/Revenue/Today', ttlMs: 10000 },
     { pattern: '/Order/TodayRevenue', ttlMs: 10000 },
     { pattern: '/Wallet', ttlMs: 15000 },
     { pattern: '/Subscription/ActivePlan', ttlMs: 60000 },
@@ -180,6 +158,8 @@ class ApiCacheManager {
         urlPattern.includes('CategoryMaster') ||
         urlPattern.includes('Order') ||
         urlPattern.includes('Table') ||
+        urlPattern.includes('RestaurantConfig') ||
+        urlPattern.includes('OperatingStatus') ||
         urlPattern.includes('Subscription')
       ) {
         this.cache.delete(key);

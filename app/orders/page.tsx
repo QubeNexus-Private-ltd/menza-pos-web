@@ -30,7 +30,12 @@ import {
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
-import { OrderSettleModal } from '@/components/orders/OrderSettleModal';
+import dynamic from 'next/dynamic';
+
+const OrderSettleModal = dynamic(
+  () => import('@/components/orders/OrderSettleModal').then((mod) => mod.OrderSettleModal),
+  { ssr: false }
+);
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { usePrinterStore } from '@shared/presentation/state/usePrinterStore';
 import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';

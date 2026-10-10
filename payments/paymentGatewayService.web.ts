@@ -112,6 +112,15 @@ export class PaymentGatewayService {
       orderNotes,
     } = params;
 
+    if (!keyId || keyId.trim() === '' || keyId.toLowerCase().includes('placeholder')) {
+      return {
+        success: false,
+        orderId,
+        gateway: 'Razorpay',
+        error: 'Payment gateway is not configured. Razorpay Key ID is missing or invalid.',
+      };
+    }
+
     const rzpLoaded = await loadRazorpayWebSdk();
 
     if (rzpLoaded && typeof window !== 'undefined' && (window as any).Razorpay && keyId) {
@@ -175,14 +184,15 @@ export class PaymentGatewayService {
       });
     }
 
-    // Fallback: If checkout.js couldn't open or keyId is missing, open payment link in new window
+    // Fallback: If checkout.js couldn't open but paymentLink exists, redirect to payment link
     if (paymentLink && typeof window !== 'undefined') {
       window.open(paymentLink, '_blank', 'noopener,noreferrer');
       return {
-        success: true,
+        success: false,
         orderId,
         gateway: 'Razorpay',
-        rawDetails: { paymentLink, note: 'Payment link opened in a new tab.' },
+        error: 'Payment link opened in a new tab. Please complete payment and verify status.',
+        rawDetails: { paymentLink },
       };
     }
 
@@ -190,7 +200,7 @@ export class PaymentGatewayService {
       success: false,
       orderId,
       gateway: 'Razorpay',
-      error: 'Razorpay checkout could not be opened. Missing key or checkout script.',
+      error: 'Payment gateway is not configured or checkout script failed to load.',
     };
   }
 

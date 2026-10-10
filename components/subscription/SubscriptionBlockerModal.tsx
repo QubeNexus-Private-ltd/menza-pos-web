@@ -29,7 +29,7 @@ import { PaymentGatewayService } from '@/payments/paymentGatewayService.web';
 
 export const SubscriptionBlockerModal: React.FC = () => {
   const router = useRouter();
-  const { user, activeRestaurant, restaurants, logout } = useAuthStore();
+  const { user, activeRestaurant, restaurants, setActiveRestaurant, logout } = useAuthStore();
   const {
     subscription,
     isExpired,
@@ -51,12 +51,17 @@ export const SubscriptionBlockerModal: React.FC = () => {
     hasLoaded,
   } = useSubscriptionStore();
 
-  const [modalTab, setModalTab] = useState<'renew' | 'explore'>(activeModalTab || 'renew');
+  const [modalTab, setModalTab] = useState<'renew' | 'explore'>(activeModalTab || 'explore');
   const [selectedPlanId, setSelectedPlanId] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
 
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
+  const isSuperAdmin = Boolean(
+    user?.roles?.some((r) =>
+      ['SUPERADMIN', 'SUPER_ADMIN', 'SUPERADMINONLY'].includes(r.toUpperCase().replace(/[^A-Z]/g, ''))
+    )
+  );
   const isOwner =
     user?.roles?.some((r) => ['OWNER', 'ADMIN', 'SUPERADMIN', 'SUPER_ADMIN'].includes(r.toUpperCase().replace(/[^A-Z]/g, ''))) ||
     !user?.roles ||
@@ -64,27 +69,40 @@ export const SubscriptionBlockerModal: React.FC = () => {
 
   // Sync tab from store when opened
   useEffect(() => {
-    if (activeModalTab) {
-      setModalTab(activeModalTab);
-    } else if (!subscription || isNoSubscription) {
+    if (!subscription || isNoSubscription) {
       setModalTab('explore');
+    } else if (activeModalTab) {
+      setModalTab(activeModalTab);
     } else {
       setModalTab('renew');
     }
   }, [activeModalTab, subscription, isNoSubscription, isRenewalModalOpen]);
 
-  // Auto-fetch plans when modal opens
+  // Ensure subscription status is fetched when restaurant is set
   useEffect(() => {
-    if (isExpired || isNoSubscription || isRenewalModalOpen || lifecycleState === 'EXPIRED') {
+    if (!hasLoaded && currentRestId > 0) {
+      fetchSubscriptionStatus(currentRestId);
+    }
+  }, [hasLoaded, currentRestId, fetchSubscriptionStatus]);
+
+  // Strictly locked when no active subscription or expired beyond grace period (SuperAdmin exempt)
+  const isStrictlyLocked =
+    !isSuperAdmin &&
+    (isNoSubscription || !subscription || isExpired || lifecycleState === 'EXPIRED' || lifecycleState === 'NONE');
+  const isVisible = hasLoaded && (isStrictlyLocked || isRenewalModalOpen);
+
+  // Auto-fetch plans when modal opens or locked
+  useEffect(() => {
+    if (isStrictlyLocked || isRenewalModalOpen) {
       if (plans.length === 0) {
         fetchPlans();
       }
     }
-  }, [isExpired, isNoSubscription, isRenewalModalOpen, lifecycleState, plans.length, fetchPlans]);
+  }, [isStrictlyLocked, isRenewalModalOpen, plans.length, fetchPlans]);
 
   // Set default plan selection
   useEffect(() => {
-    if (plans.length > 0 && selectedPlanId === null) {
+    if (plans.length > 0 && (selectedPlanId === null || !plans.some((p) => p.id === selectedPlanId))) {
       // Find matching current plan, or default to first
       const currentPlanMatch = plans.find(
         (p) =>
@@ -95,9 +113,14 @@ export const SubscriptionBlockerModal: React.FC = () => {
     }
   }, [plans, selectedPlanId, subscription]);
 
-  // Strictly locked only if expired beyond grace period
-  const isStrictlyLocked = isExpired || lifecycleState === 'EXPIRED';
-  const isVisible = hasLoaded && (isStrictlyLocked || isRenewalModalOpen);
+  const handleSelectOutlet = async (restId: number) => {
+    const target = restaurants.find((r) => r.restaurantId === restId);
+    if (target) {
+      setActiveRestaurant(target);
+      setStatusMessage(null);
+      await fetchSubscriptionStatus(target.restaurantId);
+    }
+  };
 
   if (!isVisible) {
     return null;
@@ -246,57 +269,93 @@ export const SubscriptionBlockerModal: React.FC = () => {
     : 'No active date';
 
   return (
-    <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in duration-300">
+    <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-in fade-in duration-300">
       <div className="relative w-full max-w-4xl max-h-[92vh] overflow-hidden rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] shadow-2xl flex flex-col">
-        {/* Close Button (Enabled when not strictly locked) */}
-        {!isStrictlyLocked && (
-          <button
-            onClick={closeRenewalModal}
-            className="absolute top-5 right-5 z-20 rounded-full p-2 text-[#667085] hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-            aria-label="Close"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        )}
-
         {/* Modal Header */}
         <div className="border-b border-[#E7E1DA] dark:border-[#2B3540] px-6 py-5 bg-[#FAF7F2] dark:bg-[#151A20]">
-          <div className="flex items-start gap-4">
-            <div
-              className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ${
-                isStrictlyLocked ? 'bg-red-500/10 text-red-600' : 'bg-amber-500/10 text-[#DE8626]'
-              }`}
-            >
-              {isStrictlyLocked ? <ShieldAlert className="h-6 w-6" /> : <Crown className="h-6 w-6" />}
-            </div>
-            <div className="flex-1 min-w-0 pr-8">
-              <div className="flex items-center gap-2.5 flex-wrap">
-                <h2 className="text-xl font-black tracking-tight text-[#1E2930] dark:text-[#F3F4F6]">
-                  {isNoSubscription
-                    ? 'Subscription Plan Required'
-                    : isStrictlyLocked
-                    ? 'Subscription Expired'
-                    : 'Manage Restaurant Subscription'}
-                </h2>
-                <span
-                  className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-extrabold uppercase ${
-                    isStrictlyLocked
-                      ? 'bg-red-500/15 text-red-600 border border-red-500/30'
-                      : 'bg-amber-500/15 text-[#DE8626] border border-amber-500/30'
-                  }`}
-                >
-                  <Lock className="h-3 w-3" />
-                  {isStrictlyLocked ? 'Locked' : subscription ? 'Active' : 'Plan Required'}
-                </span>
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-start gap-4">
+              <div
+                className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ${
+                  isStrictlyLocked ? 'bg-red-500/10 text-red-600' : 'bg-amber-500/10 text-[#DE8626]'
+                }`}
+              >
+                {isStrictlyLocked ? <ShieldAlert className="h-6 w-6" /> : <Crown className="h-6 w-6" />}
               </div>
-              <p className="mt-1 text-xs text-[#667085] dark:text-[#94A3B8]">
-                {activeRestaurant?.restaurantName || 'Active Store'} • Seamless billing, KOT kitchen routing, and multi-terminal sync.
-              </p>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <h2 className="text-xl font-black tracking-tight text-[#1E2930] dark:text-[#F3F4F6]">
+                    {isNoSubscription || !subscription
+                      ? 'Subscription Plan Required'
+                      : isStrictlyLocked
+                      ? 'Subscription Expired'
+                      : 'Manage Restaurant Subscription'}
+                  </h2>
+                  <span
+                    className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-extrabold uppercase ${
+                      isStrictlyLocked
+                        ? 'bg-red-500/15 text-red-600 border border-red-500/30'
+                        : 'bg-amber-500/15 text-[#DE8626] border border-amber-500/30'
+                    }`}
+                  >
+                    <Lock className="h-3 w-3" />
+                    {isStrictlyLocked ? 'Locked' : subscription ? 'Active' : 'Plan Required'}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-[#667085] dark:text-[#94A3B8]">
+                  {isNoSubscription || !subscription
+                    ? `No active subscription found for ${activeRestaurant?.restaurantName || 'this store'}. Please purchase a plan below to unlock POS.`
+                    : isStrictlyLocked
+                    ? `Subscription for ${activeRestaurant?.restaurantName || 'this store'} has expired. Please renew or select a plan to resume operations.`
+                    : `${activeRestaurant?.restaurantName || 'Active Store'} • Seamless billing, KOT kitchen routing, and multi-terminal sync.`}
+                </p>
+              </div>
+            </div>
+
+            {/* Header Right Actions: Outlet Switcher + Logout + Optional Close */}
+            <div className="flex items-center gap-2 shrink-0">
+              {restaurants.length > 1 && (
+                <select
+                  value={activeRestaurant?.restaurantId || currentRestId}
+                  onChange={(e) => handleSelectOutlet(Number(e.target.value))}
+                  className="text-xs font-semibold py-1.5 px-2.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#1E2930] dark:text-[#F3F4F6] focus:outline-none focus:ring-2 focus:ring-[#DE8626]"
+                  title="Switch Restaurant Outlet"
+                >
+                  {restaurants.map((r) => (
+                    <option key={r.restaurantId} value={r.restaurantId}>
+                      {r.restaurantName}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  logout();
+                  router.replace('/login');
+                }}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-3 py-1.5 text-xs font-bold text-[#667085] hover:text-red-600 hover:border-red-500/30 transition-colors"
+                title="Log Out of Menza POS"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Log Out</span>
+              </button>
+
+              {!isStrictlyLocked && (
+                <button
+                  onClick={closeRenewalModal}
+                  className="rounded-full p-2 text-[#667085] hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                  aria-label="Close"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              )}
             </div>
           </div>
         </div>
 
-        {/* 2 Primary Tabs: "Renew Current Plan" vs "Explore Other Plans" */}
+        {/* Primary Tabs */}
         <div className="flex border-b border-[#E7E1DA] dark:border-[#2B3540] px-6 bg-white dark:bg-[#1B2127]">
           {subscription && !isNoSubscription && (
             <button
@@ -304,7 +363,7 @@ export const SubscriptionBlockerModal: React.FC = () => {
                 setModalTab('renew');
                 setStatusMessage(null);
               }}
-              className={`flex items-center gap-2 border-b-2 py-3 px-2 text-xs font-bold transition-all ${
+              className={`flex items-center gap-2 border-b-2 py-3 px-3 text-xs font-bold transition-all ${
                 modalTab === 'renew'
                   ? 'border-[#DE8626] text-[#DE8626]'
                   : 'border-transparent text-[#667085] hover:text-[#1E2930] dark:hover:text-[#F3F4F6]'
@@ -330,7 +389,11 @@ export const SubscriptionBlockerModal: React.FC = () => {
             }`}
           >
             <Layers className="h-4 w-4" />
-            <span>Explore Other Plans ({plans.length})</span>
+            <span>
+              {subscription && !isNoSubscription
+                ? `Explore Other Plans (${plans.length})`
+                : `Choose Subscription Plan (${plans.length})`}
+            </span>
           </button>
         </div>
 
@@ -344,8 +407,21 @@ export const SubscriptionBlockerModal: React.FC = () => {
                 <span>Staff Notice</span>
               </div>
               <p>
-                You are logged in as a staff member. Only the <strong>Restaurant Owner</strong> can purchase or renew subscription plans.
+                You are logged in as a staff member. An active subscription is required to use Menza POS. Only the <strong>Restaurant Owner</strong> can purchase or renew subscription plans.
               </p>
+              <div className="mt-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    logout();
+                    router.replace('/login');
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-600 text-white font-bold text-xs hover:bg-amber-700 transition-colors"
+                >
+                  <LogOut className="h-3.5 w-3.5" />
+                  <span>Log Out & Switch Account</span>
+                </button>
+              </div>
             </div>
           )}
 

@@ -33,7 +33,12 @@ import {
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
 import { TermsConsentCard } from '@/components/common/TermsConsentCard';
-import { OrderSettleModal } from '@/components/orders/OrderSettleModal';
+import dynamic from 'next/dynamic';
+
+const OrderSettleModal = dynamic(
+  () => import('@/components/orders/OrderSettleModal').then((mod) => mod.OrderSettleModal),
+  { ssr: false }
+);
 import { OrderStatusPipeline } from '@/components/dashboard/OrderStatusPipeline';
 import { DashboardOrderDetailDrawer } from '@/components/dashboard/DashboardOrderDetailDrawer';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
@@ -120,7 +125,7 @@ export default function DashboardPage() {
       setLoading(true);
       const [rev, orders, op, tables] = await Promise.allSettled([
         orderRemoteDataSource.getTodayRevenue(currentRestId),
-        orderRemoteDataSource.getTodayOrders(currentRestId, 'ALL', 1, 100),
+        orderRemoteDataSource.getTodayOrders(currentRestId, 'ALL', 1, 20),
         configRemoteDataSource.getOperatingStatus(currentRestId),
         tableRemoteDataSource.getTables(currentRestId),
       ]);

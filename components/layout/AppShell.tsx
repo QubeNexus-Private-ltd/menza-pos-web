@@ -34,11 +34,22 @@ import {
   Printer,
   TrendingUp,
 } from 'lucide-react';
-import { StoreShiftModal } from '../common/StoreShiftModal';
+import dynamic from 'next/dynamic';
+
+const StoreShiftModal = dynamic(
+  () => import('../common/StoreShiftModal').then((mod) => mod.StoreShiftModal),
+  { ssr: false }
+);
 import { WalletBalanceWidget } from '../common/WalletBalanceWidget';
-import { WalletRechargeModal } from '../common/WalletRechargeModal';
+const WalletRechargeModal = dynamic(
+  () => import('../common/WalletRechargeModal').then((mod) => mod.WalletRechargeModal),
+  { ssr: false }
+);
 import { SubscriptionGraceBanner } from '../subscription/SubscriptionGraceBanner';
-import { SubscriptionBlockerModal } from '../subscription/SubscriptionBlockerModal';
+const SubscriptionBlockerModal = dynamic(
+  () => import('../subscription/SubscriptionBlockerModal').then((mod) => mod.SubscriptionBlockerModal),
+  { ssr: false }
+);
 import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { useNotificationStore } from '@shared/presentation/state/useNotificationStore';

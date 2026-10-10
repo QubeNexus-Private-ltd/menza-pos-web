@@ -110,6 +110,16 @@ export class PaymentGatewayManager {
       orderNotes,
     } = params;
 
+    if (!keyId || keyId.trim() === '' || keyId.toLowerCase().includes('placeholder')) {
+      logger.payment('PAYMENT_SDK_COMPLETED', `Razorpay payment blocked: KeyId is missing or placeholder for order ${orderId}`);
+      return {
+        success: false,
+        orderId,
+        gateway: 'Razorpay',
+        error: 'Payment gateway is not configured. Razorpay Key ID is missing.',
+      };
+    }
+
     const resolvedLink =
       paymentLink && paymentLink.startsWith('http')
         ? paymentLink

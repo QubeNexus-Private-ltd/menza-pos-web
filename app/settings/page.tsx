@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import {
   Settings,
   Store,
@@ -300,10 +301,10 @@ export default function SettingsHubPage() {
                   {superAdminActions.map((item) => {
                     const Icon = item.icon;
                     return (
-                      <div
+                      <Link
                         key={item.href}
-                        onClick={() => router.push(item.href)}
-                        className="group cursor-pointer flex items-start gap-4 rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-5 shadow-xs hover:border-[#DE8626] hover:shadow-lg transition-all"
+                        href={item.href}
+                        className="group cursor-pointer flex items-start gap-4 rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-5 shadow-xs hover:border-[#DE8626] hover:shadow-lg transition-all block"
                       >
                         <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-amber-500/10 text-[#DE8626] group-hover:scale-105 transition-transform">
                           <Icon className="h-6 w-6" />
@@ -324,7 +325,7 @@ export default function SettingsHubPage() {
                             </span>
                           </div>
                         </div>
-                      </div>
+                      </Link>
                     );
                   })}
                 </div>

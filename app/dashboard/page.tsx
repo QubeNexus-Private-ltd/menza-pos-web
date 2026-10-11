@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import {
   ShoppingBag,
   IndianRupee,
@@ -471,9 +472,9 @@ export default function DashboardPage() {
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   {/* Module 1: Onboard Outlet */}
-                  <div
-                    onClick={() => router.push('/superadmin/onboard')}
-                    className="group cursor-pointer rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-6 shadow-xs hover:border-[#DE8626] hover:shadow-xl transition-all"
+                  <Link
+                    href="/superadmin/onboard"
+                    className="group cursor-pointer rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-6 shadow-xs hover:border-[#DE8626] hover:shadow-xl transition-all block"
                   >
                     <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500/10 text-[#DE8626] mb-4 group-hover:scale-105 transition-transform">
                       <Globe className="h-6 w-6" />
@@ -491,12 +492,12 @@ export default function DashboardPage() {
                       <span>Launch Onboarding</span>
                       <span className="rounded-full bg-amber-500/10 px-2 py-0.5">3-Stage Wizard</span>
                     </div>
-                  </div>
+                  </Link>
 
                   {/* Module 2: Outlets Directory */}
-                  <div
-                    onClick={() => router.push('/superadmin/directory')}
-                    className="group cursor-pointer rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-6 shadow-xs hover:border-[#DE8626] hover:shadow-xl transition-all"
+                  <Link
+                    href="/superadmin/directory"
+                    className="group cursor-pointer rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-6 shadow-xs hover:border-[#DE8626] hover:shadow-xl transition-all block"
                   >
                     <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-500/10 text-blue-600 mb-4 group-hover:scale-105 transition-transform">
                       <Building2 className="h-6 w-6" />
@@ -514,12 +515,12 @@ export default function DashboardPage() {
                       <span>View Outlets</span>
                       <span className="rounded-full bg-blue-500/10 px-2 py-0.5">{superAdminMetrics.totalStores} Active Stores</span>
                     </div>
-                  </div>
+                  </Link>
 
                   {/* Module 3: Subscription Plans */}
-                  <div
-                    onClick={() => router.push('/superadmin/plans')}
-                    className="group cursor-pointer rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-6 shadow-xs hover:border-[#DE8626] hover:shadow-xl transition-all"
+                  <Link
+                    href="/superadmin/plans"
+                    className="group cursor-pointer rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-6 shadow-xs hover:border-[#DE8626] hover:shadow-xl transition-all block"
                   >
                     <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-purple-500/10 text-purple-600 mb-4 group-hover:scale-105 transition-transform">
                       <Sparkles className="h-6 w-6" />
@@ -537,7 +538,7 @@ export default function DashboardPage() {
                       <span>Manage SaaS Plans</span>
                       <span className="rounded-full bg-purple-500/10 px-2 py-0.5">SaaS Pricing</span>
                     </div>
-                  </div>
+                  </Link>
                 </div>
               </div>
 

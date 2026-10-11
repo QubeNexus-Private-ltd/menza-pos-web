@@ -26,6 +26,7 @@ import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { SubscriptionPlan } from '@/types/subscription';
 import { PaymentGatewayService } from '@/payments/paymentGatewayService.web';
+import { WalletEvents } from '@shared/core/utils/walletEvents';
 
 export const SubscriptionBlockerModal: React.FC = () => {
   const router = useRouter();
@@ -153,6 +154,11 @@ export const SubscriptionBlockerModal: React.FC = () => {
       if (price <= 0) {
         const res = await assignPlan(currentRestId, plan.id, duration, 0);
         if (res.success) {
+          try {
+            WalletEvents.emit();
+          } catch (e) {
+            console.warn('Error emitting WalletEvents on free plan activate:', e);
+          }
           setStatusMessage({
             type: 'success',
             text: isRenewAction
@@ -220,6 +226,11 @@ export const SubscriptionBlockerModal: React.FC = () => {
       );
 
       if (verifyRes?.success) {
+        try {
+          WalletEvents.emit();
+        } catch (e) {
+          console.warn('Error emitting WalletEvents on verifyPayment:', e);
+        }
         setStatusMessage({
           type: 'success',
           text: isRenewAction
@@ -235,6 +246,11 @@ export const SubscriptionBlockerModal: React.FC = () => {
         await fetchSubscriptionStatus(currentRestId);
         const latestSub = useSubscriptionStore.getState().subscription;
         if (latestSub && !useSubscriptionStore.getState().isExpired) {
+          try {
+            WalletEvents.emit();
+          } catch (e) {
+            console.warn('Error emitting WalletEvents on sub activate:', e);
+          }
           setStatusMessage({
             type: 'success',
             text: 'Subscription activated successfully! POS unlocked.',

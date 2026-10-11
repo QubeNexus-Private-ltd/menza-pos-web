@@ -62,6 +62,8 @@ import {
   onStoreOperatingStatusChanged,
   onServiceRequestCreated,
   onServiceRequestResolved,
+  onWalletBalanceChanged,
+  onPaymentVerified,
   onSignalRReconnected,
 } from '@/lib/signalr/signalrService';
 import { RestaurantDetail } from '@shared/domain/models/Restaurant';
@@ -71,6 +73,7 @@ import { RestaurantConfigRemoteDataSource } from '@shared/data/datasources/Resta
 import { StoreOperatingStatus } from '@shared/domain/models/RestaurantConfig';
 import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
 import { WalletRemoteDataSource } from '@shared/data/datasources/WalletRemoteDataSource';
+import { WalletEvents } from '@shared/core/utils/walletEvents';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -219,6 +222,18 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       useNotificationStore.getState().handleServiceRequestResolved(res);
     });
 
+    const unsubWallet = onWalletBalanceChanged((_data) => {
+      loadData();
+    });
+
+    const unsubPayment = onPaymentVerified((_data) => {
+      loadData();
+    });
+
+    const unsubWalletEvents = WalletEvents.subscribe(() => {
+      loadData();
+    });
+
     const unsubReconnected = onSignalRReconnected(() => {
       loadData();
     });
@@ -241,6 +256,9 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       unsubOp();
       unsubServiceCreated();
       unsubServiceResolved();
+      unsubWallet();
+      unsubPayment();
+      unsubWalletEvents();
       unsubReconnected();
       clearInterval(pollInterval);
     };
@@ -349,12 +367,10 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
             const Icon = item.icon;
 
             return (
-              <button
+              <Link
                 key={item.href}
-                onClick={() => {
-                  router.push(item.href);
-                  setSidebarOpen(false);
-                }}
+                href={item.href}
+                onClick={() => setSidebarOpen(false)}
                 className={`group flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-medium transition-all ${
                   isActive
                     ? 'bg-[#DE8626] text-white shadow-sm shadow-[#DE8626]/30 font-semibold'
@@ -374,7 +390,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                     Sale
                   </span>
                 )}
-              </button>
+              </Link>
             );
           })}
         </nav>

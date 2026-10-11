@@ -5,4 +5,5 @@ export interface Category {
   isActive?: boolean;
   kitchenStationId?: number;
   kitchenStationName?: string;
+  imageUrl?: string;
 }

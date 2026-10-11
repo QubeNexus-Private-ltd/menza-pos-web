@@ -111,6 +111,7 @@ export const TodayOrdersModal: React.FC<TodayOrdersModalProps> = ({
     { key: 'Settled', label: 'Settled', category: 'TERMINAL', displayOrder: 9 },
   ]);
   const [activeFilter, setActiveFilter] = useState<string>('ALL');
+  const [datePreset, setDatePreset] = useState<'TODAY' | 'YESTERDAY' | '7_DAYS'>('TODAY');
   const [pageNumber, setPageNumber] = useState<number>(1);
   const [totalCount, setTotalCount] = useState<number>(0);
   const [totalPages, setTotalPages] = useState<number>(1);
@@ -565,8 +566,25 @@ export const TodayOrdersModal: React.FC<TodayOrdersModalProps> = ({
         logger.action(
           'POS',
           'FETCH_TODAY_ORDERS_LIST',
-          `Fetching today orders list: rest=#${restaurantId}, filter=${activeFilter}, search="${debouncedSearch}", page=${page}`
+          `Fetching today orders list: rest=#${restaurantId}, filter=${activeFilter}, search="${debouncedSearch}", datePreset=${datePreset}, page=${page}`
         );
+
+        let fromDateVal: string | undefined = undefined;
+        let toDateVal: string | undefined = undefined;
+        const now = new Date();
+        const formatDateStr = (d: Date) => d.toISOString().split('T')[0];
+
+        if (datePreset === 'YESTERDAY') {
+          const y = new Date(now);
+          y.setDate(y.getDate() - 1);
+          fromDateVal = formatDateStr(y);
+          toDateVal = formatDateStr(y);
+        } else if (datePreset === '7_DAYS') {
+          const past = new Date(now);
+          past.setDate(past.getDate() - 6);
+          fromDateVal = formatDateStr(past);
+          toDateVal = formatDateStr(now);
+        }
 
         const statusParam = activeFilter === 'ALL' ? undefined : activeFilter;
         const result = await orderDataSource.getTodayOrders(
@@ -574,7 +592,9 @@ export const TodayOrdersModal: React.FC<TodayOrdersModalProps> = ({
           statusParam,
           page,
           20,
-          debouncedSearch
+          debouncedSearch,
+          fromDateVal,
+          toDateVal
         );
 
         if (append) {
@@ -603,7 +623,7 @@ export const TodayOrdersModal: React.FC<TodayOrdersModalProps> = ({
         setLoadingMore(false);
       }
     },
-    [restaurantId, activeFilter, debouncedSearch]
+    [restaurantId, activeFilter, debouncedSearch, datePreset]
   );
 
   useEffect(() => {
@@ -611,7 +631,7 @@ export const TodayOrdersModal: React.FC<TodayOrdersModalProps> = ({
       setPageNumber(1);
       fetchOrders(1, false);
     }
-  }, [visible, restaurantId, activeFilter, debouncedSearch, fetchOrders]);
+  }, [visible, restaurantId, activeFilter, debouncedSearch, datePreset, fetchOrders]);
 
   // Real-time synchronization of order updates and settlement via SignalR
   useEffect(() => {
@@ -1107,6 +1127,43 @@ export const TodayOrdersModal: React.FC<TodayOrdersModalProps> = ({
                 </TouchableOpacity>
               )}
             </View>
+          </View>
+
+          {/* 3.5 DATE RANGE PRESET CHIPS */}
+          <View style={{ paddingHorizontal: Spacing.md, paddingBottom: 6, flexDirection: 'row', gap: 6, alignItems: 'center' }}>
+            <Calendar size={13} color="#DE8626" />
+            <Text style={{ fontSize: 11, fontWeight: '700', color: '#8C7A6B' }}>Date:</Text>
+            {(
+              [
+                { key: 'TODAY', label: 'Today' },
+                { key: 'YESTERDAY', label: 'Yesterday' },
+                { key: '7_DAYS', label: 'Last 7 Days' },
+              ] as const
+            ).map((dp) => {
+              const isDateActive = datePreset === dp.key;
+              return (
+                <TouchableOpacity
+                  key={`date-preset-${dp.key}`}
+                  style={[
+                    styles.filterTabPill,
+                    { paddingHorizontal: 10, paddingVertical: 4 },
+                    isDateActive && { backgroundColor: '#1E2930', borderColor: '#1E2930' },
+                  ]}
+                  onPress={() => setDatePreset(dp.key)}
+                  activeOpacity={0.8}
+                >
+                  <Text
+                    style={[
+                      styles.filterTabText,
+                      { fontSize: 10.5 },
+                      isDateActive && { color: '#FFFFFF', fontWeight: '700' },
+                    ]}
+                  >
+                    {dp.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
 
           {/* 4. DYNAMIC FILTER STATUS TABS */}

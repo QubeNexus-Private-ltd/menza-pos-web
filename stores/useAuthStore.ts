@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { User, RestaurantDetail } from '@/types/auth';
-import { isOwnerUser } from '@/lib/auth/permissions';
+import { isOwnerUser, isSuperAdminUser } from '@/lib/auth/permissions';
 import { apiClient } from '@/lib/api/client';
 import { APP_CONSTANTS } from '@/lib/constants';
 
@@ -64,8 +64,9 @@ export const useAuthStore = create<AuthState>()(
             if (token && userStr) {
               const user = JSON.parse(userStr);
               const activeRest = activeRestStr ? JSON.parse(activeRestStr) : null;
-              const isOwner = isOwnerUser(user?.roles);
-              const hasAcceptedTerms = !isOwner || localStorage.getItem(APP_CONSTANTS.STORAGE_KEYS.CONSENT_ACCEPTED) === 'true';
+              const isSuperAdmin = isSuperAdminUser(user?.roles);
+              const isOwner = !isSuperAdmin && isOwnerUser(user?.roles);
+              const hasAcceptedTerms = isSuperAdmin || !isOwner || localStorage.getItem(APP_CONSTANTS.STORAGE_KEYS.CONSENT_ACCEPTED) === 'true';
 
               set({
                 isHydrating: false,
@@ -107,8 +108,9 @@ export const useAuthStore = create<AuthState>()(
           activeRest = restaurants.find((r) => r.isDefault) || restaurants[0];
         }
 
-        const isOwner = isOwnerUser(user.roles);
-        const hasAcceptedTerms = !isOwner || Boolean(hasAcceptedTermsExplicit);
+        const isSuperAdmin = isSuperAdminUser(user.roles);
+        const isOwner = !isSuperAdmin && isOwnerUser(user.roles);
+        const hasAcceptedTerms = isSuperAdmin || !isOwner || Boolean(hasAcceptedTermsExplicit);
 
         if (typeof window !== 'undefined') {
           try {
@@ -153,7 +155,7 @@ export const useAuthStore = create<AuthState>()(
       checkTermsStatus: async () => {
         const { user, token } = get();
         if (!user?.userId) return false;
-        if (!isOwnerUser(user.roles)) {
+        if (isSuperAdminUser(user.roles) || !isOwnerUser(user.roles)) {
           set({ hasAcceptedTerms: true });
           return true;
         }

@@ -1,12 +1,13 @@
 import { apiClient } from '@shared/core/network/apiClient';
 
 export class WebMenuService {
-  static async updateCategory(id: number, categoryName: string, categoryDescription: string, restaurantId: number, kitchenStationId?: number): Promise<boolean> {
+  static async updateCategory(id: number, categoryName: string, categoryDescription: string, restaurantId: number, kitchenStationId?: number, imageUrl?: string): Promise<boolean> {
     try {
       const response = await apiClient.put(`/CategoryMaster/${id}`, {
         restaurantId,
         categoryName,
         categoryDescription,
+        imageUrl: imageUrl || '',
         kitchenStationId: kitchenStationId || null,
       });
       return response.status === 200;

@@ -3,7 +3,7 @@
 import React, { useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
-import { isOwnerUser } from '@shared/core/auth/rolePermissions';
+import { isOwnerUser, isSuperAdminUser } from '@shared/core/auth/rolePermissions';
 import { Loader2 } from 'lucide-react';
 
 export const AuthGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -19,6 +19,15 @@ export const AuthGuard: React.FC<{ children: React.ReactNode }> = ({ children })
 
   useEffect(() => {
     if (isHydrating) return;
+
+    // SuperAdmin exemption: SuperAdmins have root platform privileges and are exempt from onboarding carousels and owner T&C consent locks
+    const isSuperAdmin = isSuperAdminUser(user, activeRestaurant);
+    if (isSuperAdmin) {
+      if (!isAuthenticated && pathname !== '/login') {
+        router.replace('/login');
+      }
+      return;
+    }
 
     if (!hasCompletedOnboarding && pathname !== '/onboarding') {
       router.replace('/onboarding');

@@ -33,6 +33,8 @@ import {
   Receipt,
   Printer,
   TrendingUp,
+  Maximize2,
+  Minimize2,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 
@@ -113,6 +115,28 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
   const [todaySales, setTodaySales] = useState<{ revenue: number; orderCount: number }>({ revenue: 0, orderCount: 0 });
   const [walletBalance, setWalletBalance] = useState<number | null>(null);
   const [isLiveConnected, setIsLiveConnected] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  const toggleFullscreen = () => {
+    if (typeof document === 'undefined') return;
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => {});
+      setIsFullscreen(true);
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+        setIsFullscreen(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    const handleFsChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFsChange);
+    return () => document.removeEventListener('fullscreenchange', handleFsChange);
+  }, []);
 
   const outletMenuRef = useRef<HTMLDivElement>(null);
   const profileMenuRef = useRef<HTMLDivElement>(null);
@@ -718,6 +742,16 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
               title="Toggle Day / Night Mode"
             >
               {isDark ? <Sun className="h-4 w-4 text-amber-400" /> : <Moon className="h-4 w-4" />}
+            </button>
+
+            {/* 6. Fullscreen Kiosk Mode Toggle */}
+            <button
+              type="button"
+              onClick={toggleFullscreen}
+              title={isFullscreen ? 'Exit Fullscreen' : 'Enter Kiosk Fullscreen Mode'}
+              className="hidden sm:inline-flex h-[36px] w-[36px] items-center justify-center rounded-full border border-[#E7E0D6] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#667085] hover:border-[#DE8626] hover:text-[#DE8626] transition-all shadow-xs"
+            >
+              {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
             </button>
 
             {/* 6. Quick POS Terminal Button (when not on POS page) */}

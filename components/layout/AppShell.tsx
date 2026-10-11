@@ -65,6 +65,7 @@ import {
   onSignalRReconnected,
 } from '@/lib/signalr/signalrService';
 import { RestaurantDetail } from '@shared/domain/models/Restaurant';
+import { extractUserRoles } from '@shared/core/auth/rolePermissions';
 import { playOrderNotificationSound } from '@shared/core/utils/notificationSound';
 import { RestaurantConfigRemoteDataSource } from '@shared/data/datasources/RestaurantConfigRemoteDataSource';
 import { StoreOperatingStatus } from '@shared/domain/models/RestaurantConfig';
@@ -114,11 +115,15 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
   const profileMenuRef = useRef<HTMLDivElement>(null);
   const notifMenuRef = useRef<HTMLDivElement>(null);
 
-  const roleName = user?.roles?.[0] || 'Owner';
+  const extractedRoles = extractUserRoles(user, activeRestaurant);
   const isSuperAdmin =
+    extractedRoles.some((r) => r.includes('superadmin') || r.includes('super_admin')) ||
     user?.roles?.some((r) =>
+      typeof r === 'string' &&
       ['SUPERADMIN', 'SUPER_ADMIN', 'SUPERADMINONLY'].includes(r.toUpperCase().replace(/[^A-Z]/g, ''))
-    ) || Boolean(roleName && roleName.toLowerCase().includes('superadmin'));
+    ) ||
+    (typeof user?.roles?.[0] === 'string' && user.roles[0].toLowerCase().includes('superadmin'));
+  const roleName = isSuperAdmin ? 'SuperAdmin' : (typeof user?.roles?.[0] === 'string' ? user.roles[0] : extractedRoles[0] || 'Owner');
 
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
@@ -425,6 +430,17 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
               <Menu className="h-5 w-5" />
             </button>
 
+            {/* SuperAdmin Master Indicator */}
+            {isSuperAdmin && (
+              <div className="inline-flex h-[36px] items-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-3 text-xs font-bold text-[#DE8626] shadow-xs">
+                <Crown className="h-3.5 w-3.5 text-[#DE8626]" />
+                <span className="font-extrabold tracking-tight">Menza Master</span>
+                <span className="hidden sm:inline-block rounded-full bg-[#DE8626] px-1.5 py-0.5 text-[9px] font-black uppercase text-white">
+                  SuperAdmin Access
+                </span>
+              </div>
+            )}
+
             {/* Restaurant Outlet Selector Pill */}
             {!isSuperAdmin && restaurants.length > 0 && (
               <div className="relative" ref={outletMenuRef}>
@@ -697,6 +713,19 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
               >
                 <ShoppingBag className="h-3.5 w-3.5" />
                 <span>New Sale</span>
+              </button>
+            )}
+
+            {/* 7. SuperAdmin Quick Sign Out Button (parity with F:\Menza) */}
+            {isSuperAdmin && (
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="hidden sm:inline-flex h-[36px] items-center gap-1.5 rounded-full border border-red-500/30 bg-red-500/10 px-3.5 text-xs font-bold text-red-600 dark:text-red-400 hover:bg-red-500/20 transition-all shadow-xs"
+                title="Sign Out of Menza SuperAdmin"
+              >
+                <LogOut className="h-3.5 w-3.5 text-red-500" />
+                <span>Logout</span>
               </button>
             )}
           </div>

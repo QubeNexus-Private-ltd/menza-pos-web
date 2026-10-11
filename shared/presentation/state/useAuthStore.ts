@@ -6,7 +6,7 @@ import { SessionStorage } from '../../core/storage/SessionStorage';
 import { AuthRemoteDataSource } from '../../data/datasources/AuthRemoteDataSource';
 import { TermsConditionRemoteDataSource } from '../../data/datasources/TermsConditionRemoteDataSource';
 import { TermsConditionRepositoryImpl } from '../../data/repositories/TermsConditionRepositoryImpl';
-import { isOwnerUser } from '../../core/auth/rolePermissions';
+import { isOwnerUser, isSuperAdminUser } from '../../core/auth/rolePermissions';
 import { isJwtExpired } from '../../core/auth/jwtUtils';
 
 const termsRepository = new TermsConditionRepositoryImpl(new TermsConditionRemoteDataSource());
@@ -121,9 +121,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           logger.setRestaurantId(session.activeRestaurant.restaurantId);
         }
 
-        const isOwner = isOwnerUser(session.user, session.activeRestaurant);
-        // Terms & Conditions consent is strictly for the Owner role; non-owners automatically pass
-        const hasAcceptedTerms = !isOwner || Boolean(session.hasAcceptedTerms);
+        const isSuperAdmin = isSuperAdminUser(session.user, session.activeRestaurant);
+        const isOwner = !isSuperAdmin && isOwnerUser(session.user, session.activeRestaurant);
+        // Terms & Conditions consent is strictly for the Owner role; non-owners and SuperAdmins automatically pass
+        const hasAcceptedTerms = isSuperAdmin || !isOwner || Boolean(session.hasAcceptedTerms);
 
         set({
           isHydrating: false,
@@ -173,9 +174,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       activeRest = restaurants.find((r) => r.isDefault) || restaurants[0];
     }
 
-    const isOwner = isOwnerUser(user, activeRest);
-    // Non-owner roles never require terms consent
-    const hasAcceptedTerms = !isOwner || Boolean(hasAcceptedTermsExplicit);
+    const isSuperAdmin = isSuperAdminUser(user, activeRest);
+    const isOwner = !isSuperAdmin && isOwnerUser(user, activeRest);
+    // Non-owner roles and SuperAdmins never require terms consent
+    const hasAcceptedTerms = isSuperAdmin || !isOwner || Boolean(hasAcceptedTermsExplicit);
 
     logger.auth('AUTH_SESSION_CREATED', `Setting authentication session for user: ${user.name} (${user.mobile})`, {
       userId: user.id,
@@ -236,7 +238,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const user = get().user;
     const activeRest = get().activeRestaurant;
     if (!user?.id) return false;
-    if (!isOwnerUser(user, activeRest)) {
+    if (isSuperAdminUser(user, activeRest) || !isOwnerUser(user, activeRest)) {
       set({ hasAcceptedTerms: true });
       return true;
     }

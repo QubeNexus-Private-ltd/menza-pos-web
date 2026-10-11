@@ -110,8 +110,21 @@ export const isCashierOnly = (
 };
 
 /**
+ * Checks if the user has the SuperAdmin role.
+ */
+export const isSuperAdminUser = (
+  user: User | null,
+  activeRestaurant?: RestaurantDetail | null
+): boolean => {
+  if (!user && !activeRestaurant) return false;
+  const roles = extractUserRoles(user, activeRestaurant || null);
+  return roles.some((r) => r.includes('superadmin') || r.includes('super_admin'));
+};
+
+/**
  * Checks if the user has the Owner role.
  * Terms & Conditions consent is strictly required only for Owners.
+ * SuperAdmins are root platform administrators and are exempt from owner T&C consent locks.
  */
 export const isOwnerUser = (
   user: User | null,
@@ -119,6 +132,9 @@ export const isOwnerUser = (
 ): boolean => {
   if (!user) return false;
   const roles = extractUserRoles(user, activeRestaurant || null);
+  if (roles.some((r) => r.includes('superadmin') || r.includes('super_admin'))) {
+    return false;
+  }
   return roles.some((r) => r === 'owner' || r.includes('owner') || r.includes('tenant_admin'));
 };
 

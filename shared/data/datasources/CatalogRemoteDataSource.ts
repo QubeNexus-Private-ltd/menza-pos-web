@@ -18,6 +18,8 @@ export class CatalogRemoteDataSource {
         ...cat,
         id: Number(cat.id ?? cat.Id ?? 0),
         categoryName: String(cat.categoryName ?? cat.CategoryName ?? 'Category'),
+        description: cat.description ?? cat.Description ?? cat.categoryDescription ?? cat.CategoryDescription ?? '',
+        imageUrl: cat.imageUrl ?? cat.ImageUrl ?? '',
         kitchenStationId: cat.kitchenStationId ?? cat.KitchenStationId ?? undefined,
         kitchenStationName: cat.kitchenStationName ?? cat.KitchenStationName ?? undefined,
       }));
@@ -67,12 +69,15 @@ export class CatalogRemoteDataSource {
         categoryId: item.categoryId ?? item.CategoryId,
         categoryName: item.categoryName ?? item.CategoryName,
         isVeg: item.isVeg !== undefined ? Boolean(item.isVeg) : item.IsVeg !== undefined ? Boolean(item.IsVeg) : true,
+        isSpicy: item.isSpicy !== undefined ? Boolean(item.isSpicy) : item.IsSpicy !== undefined ? Boolean(item.IsSpicy) : false,
         isAvailable: item.isAvailable !== undefined ? Boolean(item.isAvailable) : item.IsAvailable !== undefined ? Boolean(item.IsAvailable) : Boolean(item.isActive ?? item.IsActive ?? true),
+        preparationTimeMinutes: Number(item.preparationTimeMinutes ?? item.PreparationTimeMinutes ?? 15),
         imageUrl: item.imageUrl || item.ImageUrl || item.image || item.Image || item.itemImage || item.ItemImage || item.photoUrl || item.PhotoUrl || '',
         kitchenStationId: item.kitchenStationId ?? item.KitchenStationId ?? undefined,
         kitchenStationName: item.kitchenStationName ?? item.KitchenStationName ?? undefined,
         unitId: item.unitId ?? item.UnitId ?? undefined,
         unitName: item.unitName ?? item.UnitName ?? undefined,
+        quantity: Number(item.quantity ?? item.Quantity ?? 1),
         portionDisplay: item.portionDisplay ?? item.PortionDisplay ?? undefined,
       }));
     } catch (err) {

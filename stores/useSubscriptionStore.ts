@@ -6,6 +6,7 @@ import {
 } from '@/types/subscription';
 import { SubscriptionService } from '@/services/subscriptionService';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
+import { WalletEvents } from '@shared/core/utils/walletEvents';
 
 interface SubscriptionStoreState {
   subscription: UserSubscriptionStatus | null;
@@ -222,6 +223,11 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
       const res = await SubscriptionService.assignSubscription(restaurantId, planId, durationDays, price);
 
       if (res.success) {
+        try {
+          WalletEvents.emit();
+        } catch (e) {
+          console.warn('Error emitting WalletEvents on assignPlan:', e);
+        }
         await get().fetchSubscriptionStatus(restaurantId);
         set({ isRenewalModalOpen: false });
       } else {
@@ -249,7 +255,7 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
     razorpayPaymentId?: string,
     razorpaySignature?: string
   ) => {
-    return await SubscriptionService.verifyCashFreePayment(
+    const res = await SubscriptionService.verifyCashFreePayment(
       orderId,
       restaurantId,
       subscriptionConfigurationId,
@@ -257,6 +263,14 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
       razorpayPaymentId,
       razorpaySignature
     );
+    if (res?.success || res?.isPaid) {
+      try {
+        WalletEvents.emit();
+      } catch (e) {
+        console.warn('Error emitting WalletEvents on verifyPayment:', e);
+      }
+    }
+    return res;
   },
 
   canTakeOrders: () => {

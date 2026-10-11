@@ -1,4 +1,5 @@
 import * as signalR from '@microsoft/signalr';
+import { WalletEvents } from '@shared/core/utils/walletEvents';
 
 let connection: signalR.HubConnection | null = null;
 let currentConnectedRestId: number | null = null;
@@ -105,6 +106,11 @@ export async function startPosSignalRConnection(restaurantId: number): Promise<v
   });
 
   connection.on('OnOrderSettled', (data) => {
+    try {
+      WalletEvents.emit();
+    } catch (e) {
+      console.warn('[SignalR] Error emitting WalletEvents on order settled:', e);
+    }
     orderSettledListeners.forEach((listener) => {
       try {
         listener(data);
@@ -147,6 +153,11 @@ export async function startPosSignalRConnection(restaurantId: number): Promise<v
   connection.on('KitchenStationStatusChanged', handleStationUpdate);
 
   connection.on('OnWalletBalanceChanged', (data) => {
+    try {
+      WalletEvents.emit();
+    } catch (e) {
+      console.warn('[SignalR] Error emitting WalletEvents on balance change:', e);
+    }
     walletBalanceListeners.forEach((listener) => {
       try {
         listener(data);
@@ -196,6 +207,11 @@ export async function startPosSignalRConnection(restaurantId: number): Promise<v
   connection.on('OnServiceRequestResolved', handleServiceResolved);
 
   connection.on('OnPaymentVerified', (data) => {
+    try {
+      WalletEvents.emit();
+    } catch (e) {
+      console.warn('[SignalR] Error emitting WalletEvents on payment verified:', e);
+    }
     paymentVerifiedListeners.forEach((listener) => {
       try {
         listener(data);
@@ -303,6 +319,18 @@ export function onServiceRequestResolved(callback: (request: any) => void): () =
 export function onPaymentVerified(callback: (payment: any) => void): () => void {
   paymentVerifiedListeners.add(callback);
   return () => paymentVerifiedListeners.delete(callback);
+}
+
+export async function joinOrderGroup(orderId: string | number): Promise<void> {
+  if (!orderId) return;
+  if (connection && connection.state === signalR.HubConnectionState.Connected) {
+    try {
+      await connection.invoke('JoinOrderGroup', String(orderId));
+      console.log(`[SignalR] Joined Order_${orderId} group`);
+    } catch (err: any) {
+      console.warn(`[SignalR] Failed to join order group ${orderId}:`, err);
+    }
+  }
 }
 
 export function onSignalRReconnected(callback: () => void): () => void {

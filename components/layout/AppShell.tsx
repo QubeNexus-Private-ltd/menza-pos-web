@@ -33,11 +33,19 @@ import {
   Receipt,
   Printer,
   TrendingUp,
+  Maximize2,
+  Minimize2,
+  Wifi,
+  BellRing,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 
 const StoreShiftModal = dynamic(
   () => import('../common/StoreShiftModal').then((mod) => mod.StoreShiftModal),
+  { ssr: false }
+);
+const StoreOperatingStatusModal = dynamic(
+  () => import('../pos/StoreOperatingStatusModal').then((mod) => mod.StoreOperatingStatusModal),
   { ssr: false }
 );
 import { WalletBalanceWidget } from '../common/WalletBalanceWidget';
@@ -62,14 +70,18 @@ import {
   onStoreOperatingStatusChanged,
   onServiceRequestCreated,
   onServiceRequestResolved,
+  onWalletBalanceChanged,
+  onPaymentVerified,
   onSignalRReconnected,
 } from '@/lib/signalr/signalrService';
 import { RestaurantDetail } from '@shared/domain/models/Restaurant';
+import { extractUserRoles } from '@shared/core/auth/rolePermissions';
 import { playOrderNotificationSound } from '@shared/core/utils/notificationSound';
 import { RestaurantConfigRemoteDataSource } from '@shared/data/datasources/RestaurantConfigRemoteDataSource';
 import { StoreOperatingStatus } from '@shared/domain/models/RestaurantConfig';
 import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
 import { WalletRemoteDataSource } from '@shared/data/datasources/WalletRemoteDataSource';
+import { WalletEvents } from '@shared/core/utils/walletEvents';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -104,21 +116,64 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
   const [notifDrawerOpen, setNotifDrawerOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [shiftModalOpen, setShiftModalOpen] = useState(false);
+  const [operatingModalOpen, setOperatingModalOpen] = useState(false);
   const [walletModalOpen, setWalletModalOpen] = useState(false);
   const [operatingStatus, setOperatingStatus] = useState<StoreOperatingStatus | null>(null);
   const [todaySales, setTodaySales] = useState<{ revenue: number; orderCount: number }>({ revenue: 0, orderCount: 0 });
   const [walletBalance, setWalletBalance] = useState<number | null>(null);
   const [isLiveConnected, setIsLiveConnected] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  const getPageSubtitle = () => {
+    if (isSuperAdmin) return 'SuperAdmin Platform Governance';
+    if (pathname === '/pos') return 'POS Terminal • Quick Billing';
+    if (pathname === '/dashboard') return 'Dashboard • Executive Overview';
+    if (pathname === '/orders') return 'Orders Hub • Live Stream';
+    if (pathname === '/kitchen') return 'Kitchen Display • Live KDS';
+    if (pathname === '/tables') return 'Floor Tables • Dining Grid';
+    if (pathname === '/menu') return 'Menu Catalog • Live Items';
+    if (pathname === '/reservations') return 'Table Reservations';
+    if (pathname === '/wallet') return 'Prepaid Wallet • Credits';
+    if (pathname === '/reports') return 'Reports & Analytics';
+    if (pathname === '/staff') return 'Staff & Permissions';
+    if (pathname?.startsWith('/settings')) return 'Store Settings & Hardware';
+    return `${activeRestaurant?.city || activeRestaurant?.address || 'Outlet'} • Quick Billing`;
+  };
+
+  const toggleFullscreen = () => {
+    if (typeof document === 'undefined') return;
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => {});
+      setIsFullscreen(true);
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+        setIsFullscreen(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    const handleFsChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFsChange);
+    return () => document.removeEventListener('fullscreenchange', handleFsChange);
+  }, []);
 
   const outletMenuRef = useRef<HTMLDivElement>(null);
   const profileMenuRef = useRef<HTMLDivElement>(null);
   const notifMenuRef = useRef<HTMLDivElement>(null);
 
-  const roleName = user?.roles?.[0] || 'Owner';
+  const extractedRoles = extractUserRoles(user, activeRestaurant);
   const isSuperAdmin =
+    extractedRoles.some((r) => r.includes('superadmin') || r.includes('super_admin')) ||
     user?.roles?.some((r) =>
+      typeof r === 'string' &&
       ['SUPERADMIN', 'SUPER_ADMIN', 'SUPERADMINONLY'].includes(r.toUpperCase().replace(/[^A-Z]/g, ''))
-    ) || Boolean(roleName && roleName.toLowerCase().includes('superadmin'));
+    ) ||
+    (typeof user?.roles?.[0] === 'string' && user.roles[0].toLowerCase().includes('superadmin'));
+  const roleName = isSuperAdmin ? 'SuperAdmin' : (typeof user?.roles?.[0] === 'string' ? user.roles[0] : extractedRoles[0] || 'Owner');
 
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
@@ -214,6 +269,18 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       useNotificationStore.getState().handleServiceRequestResolved(res);
     });
 
+    const unsubWallet = onWalletBalanceChanged((_data) => {
+      loadData();
+    });
+
+    const unsubPayment = onPaymentVerified((_data) => {
+      loadData();
+    });
+
+    const unsubWalletEvents = WalletEvents.subscribe(() => {
+      loadData();
+    });
+
     const unsubReconnected = onSignalRReconnected(() => {
       loadData();
     });
@@ -236,6 +303,9 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       unsubOp();
       unsubServiceCreated();
       unsubServiceResolved();
+      unsubWallet();
+      unsubPayment();
+      unsubWalletEvents();
       unsubReconnected();
       clearInterval(pollInterval);
     };
@@ -344,12 +414,10 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
             const Icon = item.icon;
 
             return (
-              <button
+              <Link
                 key={item.href}
-                onClick={() => {
-                  router.push(item.href);
-                  setSidebarOpen(false);
-                }}
+                href={item.href}
+                onClick={() => setSidebarOpen(false)}
                 className={`group flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-medium transition-all ${
                   isActive
                     ? 'bg-[#DE8626] text-white shadow-sm shadow-[#DE8626]/30 font-semibold'
@@ -369,7 +437,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                     Sale
                   </span>
                 )}
-              </button>
+              </Link>
             );
           })}
         </nav>
@@ -413,112 +481,184 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
 
       {/* 3. Main Workspace Area */}
       <div className="flex flex-1 flex-col overflow-hidden">
-        {/* Top Header Bar */}
-        <header className="sticky top-0 z-30 flex h-16 w-full items-center justify-between border-b border-[#E7E1DA] dark:border-[#2B3540] bg-white/95 dark:bg-[#1B2127]/95 backdrop-blur-md px-3 sm:px-5 lg:px-6 transition-colors">
-          {/* LEFT: Mobile Toggle + Outlet Switcher + Operating Shift + Live Cloud */}
+        {/* Top Streamlined Unified Header (Identical to Menza POS Terminal) */}
+        <header className="sticky top-0 z-30 flex h-16 w-full items-center justify-between border-b border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] px-3 sm:px-4 lg:px-6 transition-colors shadow-xs shrink-0">
+          {/* LEFT: Mobile Toggle + Outlet Logo + Outlet Name & Dropdown + Status Pill & Subtitle */}
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            {/* Mobile Sidebar Hamburger Trigger */}
             <button
+              type="button"
               onClick={() => setSidebarOpen(true)}
-              className="rounded-full p-2 text-[#667085] hover:bg-black/5 dark:hover:bg-white/5 transition-colors lg:hidden"
+              className="rounded-xl p-1.5 text-[#667085] hover:bg-black/5 dark:hover:bg-white/5 transition-colors lg:hidden shrink-0"
               aria-label="Toggle navigation menu"
             >
               <Menu className="h-5 w-5" />
             </button>
 
-            {/* Restaurant Outlet Selector Pill */}
-            {!isSuperAdmin && restaurants.length > 0 && (
-              <div className="relative" ref={outletMenuRef}>
-                <button
-                  type="button"
-                  onClick={() => setOutletMenuOpen(!outletMenuOpen)}
-                  className="group inline-flex h-[36px] items-center gap-2 rounded-full border border-[#E7E0D6] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] pl-2 pr-3 text-xs font-bold transition-all shadow-xs hover:border-[#DE8626] hover:bg-white dark:hover:bg-[#1B2127]"
-                  title="Switch Active Restaurant Outlet"
+            {/* Outlet Logo & Title Block */}
+            {isSuperAdmin ? (
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#DE8626] to-[#B7791F] text-white shadow-xs shrink-0">
+                  <Crown className="h-5 w-5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <h2 className="text-xs sm:text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6] truncate">
+                      Menza Master
+                    </h2>
+                    <span className="hidden sm:inline-block rounded-full bg-[#DE8626] px-1.5 py-0.5 text-[9px] font-black uppercase text-white">
+                      SuperAdmin
+                    </span>
+                  </div>
+                  <p className="text-[11px] font-medium text-[#667085] dark:text-[#94A3B8] truncate">
+                    Platform Root Governance • Multi-Tenant
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+                {/* Store Logo Thumbnail */}
+                <div
+                  onClick={() => restaurants.length > 1 && setOutletMenuOpen(!outletMenuOpen)}
+                  className={`h-9 w-9 sm:h-10 sm:w-10 relative rounded-xl overflow-hidden border border-[#E7E1DA] dark:border-[#2B3540] bg-amber-500/5 shrink-0 shadow-xs flex items-center justify-center ${
+                    restaurants.length > 1 ? 'cursor-pointer hover:border-[#DE8626] transition-colors' : ''
+                  }`}
+                  title={restaurants.length > 1 ? 'Switch Outlet' : (activeRestaurant?.restaurantName || 'Outlet Logo')}
                 >
-                  <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-[#DE8626]">
-                    <Store className="h-3 w-3" />
-                  </div>
-                  <span className="truncate max-w-[110px] sm:max-w-[180px] font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
-                    {activeRestaurant?.restaurantName || 'Select Outlet'}
-                  </span>
-                  <ChevronDown className="h-3 w-3 shrink-0 text-[#667085] group-hover:text-[#DE8626] transition-colors" />
-                </button>
+                  {activeRestaurant?.logoUrl?.trim() ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={activeRestaurant.logoUrl.trim()}
+                      alt={activeRestaurant.restaurantName || 'Menza Outlet'}
+                      className="h-full w-full object-contain p-0.5"
+                      onError={(e) => {
+                        (e.target as HTMLElement).style.display = 'none';
+                      }}
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-[#DE8626] to-[#B7791F] text-white">
+                      <span className="font-extrabold text-sm sm:text-base tracking-wider">
+                        {activeRestaurant?.restaurantName ? activeRestaurant.restaurantName.charAt(0).toUpperCase() : 'M'}
+                      </span>
+                    </div>
+                  )}
+                </div>
 
-                {outletMenuOpen && (
-                  <div className="absolute left-0 mt-2 w-72 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-2 shadow-2xl z-50 animate-in fade-in zoom-in-95 duration-150">
-                    <div className="flex items-center justify-between px-3 py-1.5 border-b border-[#E7E1DA]/60 dark:border-[#2B3540]/60 mb-1">
-                      <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#667085]">
-                        Switch Outlet ({restaurants.length})
-                      </span>
-                      <span className="text-[10px] text-emerald-600 font-bold flex items-center gap-1">
-                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                        Live
-                      </span>
-                    </div>
-                    <div className="max-h-60 overflow-y-auto space-y-1">
-                      {restaurants.map((r) => {
-                        const isSelected = r.restaurantId === activeRestaurant?.restaurantId;
-                        return (
-                          <button
-                            key={r.restaurantId}
-                            onClick={() => handleSelectRestaurant(r)}
-                            className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs transition-colors text-left ${
-                              isSelected
-                                ? 'bg-amber-500/10 font-bold text-[#DE8626]'
-                                : 'text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5'
-                            }`}
-                          >
-                            <div className="truncate min-w-0 pr-2">
-                              <p className="truncate font-bold">{r.restaurantName}</p>
-                              <p className="text-[10px] text-[#667085] truncate">{r.address || r.city || 'Outlet'}</p>
-                            </div>
-                            {isSelected && <Check className="h-4 w-4 shrink-0 text-[#DE8626]" />}
-                          </button>
-                        );
-                      })}
-                    </div>
+                {/* Outlet Name & Subtitle Row with Operating Status */}
+                <div className="min-w-0">
+                  <div className="relative" ref={outletMenuRef}>
+                    <button
+                      type="button"
+                      onClick={() => restaurants.length > 1 && setOutletMenuOpen(!outletMenuOpen)}
+                      className={`flex items-center gap-1.5 text-left ${
+                        restaurants.length > 1 ? 'cursor-pointer group' : 'cursor-default'
+                      }`}
+                    >
+                      <h2 className="text-xs sm:text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6] truncate max-w-[120px] sm:max-w-[200px] md:max-w-[280px] group-hover:text-[#DE8626] transition-colors">
+                        {activeRestaurant?.restaurantName || 'Select Outlet'}
+                      </h2>
+                      {restaurants.length > 1 && (
+                        <ChevronDown className="h-3 w-3 text-[#667085] group-hover:text-[#DE8626] transition-colors shrink-0" />
+                      )}
+                    </button>
+
+                    {/* Outlet Switcher Popover */}
+                    {outletMenuOpen && (
+                      <div className="absolute left-0 mt-2 w-72 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-2 shadow-2xl z-50 animate-in fade-in zoom-in-95 duration-150">
+                        <div className="flex items-center justify-between px-3 py-1.5 border-b border-[#E7E1DA]/60 dark:border-[#2B3540]/60 mb-1">
+                          <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#667085]">
+                            Switch Outlet ({restaurants.length})
+                          </span>
+                          <span className="text-[10px] text-emerald-600 font-bold flex items-center gap-1">
+                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                            Live
+                          </span>
+                        </div>
+                        <div className="max-h-60 overflow-y-auto space-y-1">
+                          {restaurants.map((r) => {
+                            const isSelected = r.restaurantId === activeRestaurant?.restaurantId;
+                            return (
+                              <button
+                                key={r.restaurantId}
+                                onClick={() => handleSelectRestaurant(r)}
+                                className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs transition-colors text-left ${
+                                  isSelected
+                                    ? 'bg-amber-500/10 font-bold text-[#DE8626]'
+                                    : 'text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5'
+                                }`}
+                              >
+                                <div className="truncate min-w-0 pr-2">
+                                  <p className="truncate font-bold">{r.restaurantName}</p>
+                                  <p className="text-[10px] text-[#667085] truncate">{r.address || r.city || 'Outlet'}</p>
+                                </div>
+                                {isSelected && <Check className="h-4 w-4 shrink-0 text-[#DE8626]" />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                )}
+
+                  {/* Subtitle Row: Operating Status Pill + Contextual Page Info */}
+                  <div className="flex items-center gap-1.5 text-xs">
+                    {/* Operating Status Pill (Clickable) */}
+                    <button
+                      type="button"
+                      onClick={() => setOperatingModalOpen(true)}
+                      className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold transition-all cursor-pointer ${
+                        operatingStatus?.status === 'OPEN' || (!operatingStatus?.status && operatingStatus?.isOpen) || (!operatingStatus && activeRestaurant?.isActive !== false)
+                          ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/20'
+                          : operatingStatus?.status === 'PAUSED'
+                          ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/30 hover:bg-amber-500/20'
+                          : 'bg-red-500/10 text-red-700 dark:text-red-400 border border-red-500/30 hover:bg-red-500/20'
+                      }`}
+                      title="Manage Store Operating Status (Open / Pause / Close)"
+                    >
+                      <span
+                        className={`h-1.5 w-1.5 rounded-full ${
+                          operatingStatus?.status === 'OPEN' || (!operatingStatus?.status && operatingStatus?.isOpen) || (!operatingStatus && activeRestaurant?.isActive !== false)
+                            ? 'bg-emerald-500 animate-pulse'
+                            : operatingStatus?.status === 'PAUSED'
+                            ? 'bg-amber-500 animate-pulse'
+                            : 'bg-red-500'
+                        }`}
+                      />
+                      <span>
+                        {operatingStatus?.status === 'OPEN' || (!operatingStatus?.status && operatingStatus?.isOpen)
+                          ? 'OPEN'
+                          : operatingStatus?.status === 'PAUSED'
+                          ? 'PAUSED'
+                          : 'CLOSED'}
+                      </span>
+                    </button>
+
+                    <span className="text-[#8C7A6B] hidden sm:inline">•</span>
+                    <span className="text-[11px] font-medium text-[#667085] dark:text-[#94A3B8] hidden sm:inline truncate max-w-[130px] md:max-w-[220px]">
+                      {getPageSubtitle()}
+                    </span>
+                  </div>
+                </div>
               </div>
             )}
-
-            {/* Store Operating Shift Indicator Pill */}
-            {operatingStatus && !isSuperAdmin && (
-              <button
-                type="button"
-                onClick={() => setShiftModalOpen(true)}
-                title="Store Operating Status • Click to Open Shift / Edit Timings"
-                className={`hidden sm:inline-flex h-[36px] items-center gap-1.5 rounded-full border px-3 text-[11px] font-extrabold transition-all shadow-xs cursor-pointer ${
-                  operatingStatus.isOpen
-                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/15'
-                    : 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400 hover:bg-red-500/15'
-                }`}
-              >
-                <span
-                  className={`h-2 w-2 rounded-full ${
-                    operatingStatus.isOpen ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'
-                  }`}
-                />
-                <span>{operatingStatus.isOpen ? 'Store Open' : 'Store Closed'}</span>
-              </button>
-            )}
-
-            {/* SignalR Cloud Live Sync Badge (Desktop) */}
-            <div
-              title={isLiveConnected ? 'Connected to Menza Live Real-Time Gateway' : 'Connecting to Live Gateway...'}
-              className="hidden 2xl:flex items-center gap-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 text-[10px] font-extrabold text-emerald-700 dark:text-emerald-400"
-            >
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              <span>Live Cloud</span>
-            </div>
           </div>
 
-          {/* RIGHT: Telemetry + Plans + Wallet + Printer + Bell + Theme + New Sale */}
-          <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+          {/* RIGHT: Online Wifi Pill + Telemetry + Subscription + Wallet + Printer + Bell + Fullscreen + Theme + New Sale + Profile */}
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {/* Online Wifi Status Indicator */}
+            <div
+              className="hidden md:flex items-center gap-1 px-2.5 py-1 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[11px] font-bold"
+              title={isLiveConnected ? 'Connected to Menza Live Real-Time Gateway' : 'Connecting to Live Gateway...'}
+            >
+              <Wifi className="h-3 w-3" />
+              <span>Online</span>
+            </div>
+
             {/* Today's Sales Telemetry Pill */}
             {!isSuperAdmin && (
               <div
                 title={`Today's Revenue: ₹${todaySales.revenue.toLocaleString('en-IN')} across ${todaySales.orderCount} orders`}
-                className="hidden xl:inline-flex h-[36px] items-center gap-2 rounded-full border border-[#E7E0D6] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3.5 text-xs shadow-xs"
+                className="hidden 2xl:inline-flex h-[36px] items-center gap-2 rounded-xl border border-[#E7E0D6] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3 text-xs shadow-xs"
               >
                 <TrendingUp className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
                 <span className="text-[#667085] dark:text-[#94A3B8]">Today:</span>
@@ -531,13 +671,13 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
               </div>
             )}
 
-            {/* 1. Subscription & Licensing Pill (Renew or Explore Other Plans) */}
+            {/* Subscription & Licensing Pill */}
             {!isSuperAdmin && currentRestId > 0 && (
               <button
                 type="button"
                 onClick={() => openRenewalModal(undefined, 'renew')}
                 title="Subscription & Licensing • Click to Renew or Explore Other Plans"
-                className={`group inline-flex h-[36px] items-center gap-2 rounded-full border pl-2.5 pr-1.5 text-xs font-extrabold transition-all cursor-pointer shadow-xs active:scale-[0.98] ${
+                className={`group hidden xl:inline-flex h-[36px] items-center gap-2 rounded-xl border pl-2.5 pr-1.5 text-xs font-extrabold transition-all cursor-pointer shadow-xs active:scale-[0.98] ${
                   isExpired || lifecycleState === 'EXPIRED'
                     ? 'border-red-500/40 bg-red-500/10 text-red-600 ring-1 ring-red-500/30 animate-pulse'
                     : isInGracePeriod || (daysRemaining > 0 && daysRemaining <= 3)
@@ -545,11 +685,11 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                     : 'border-[#E7E0D6] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#1C1917] dark:text-[#F3F4F6] hover:border-[#DE8626] hover:shadow-sm'
                 }`}
               >
-                <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-[#DE8626]">
+                <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-lg bg-amber-500/15 text-[#DE8626]">
                   <Crown className="h-3 w-3" />
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <span className="truncate max-w-[85px] sm:max-w-[130px] font-extrabold">
+                  <span className="truncate max-w-[85px] sm:max-w-[110px] font-extrabold">
                     {subscription?.planName || 'Store Plan'}
                   </span>
                   {daysRemaining > 0 && (
@@ -558,13 +698,13 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                     </span>
                   )}
                 </div>
-                <span className="rounded-full bg-amber-500/15 group-hover:bg-[#DE8626] group-hover:text-white px-2 py-0.5 text-[10px] font-extrabold uppercase text-[#DE8626] transition-colors tracking-tight">
-                  Renew / Plans
+                <span className="rounded-lg bg-amber-500/15 group-hover:bg-[#DE8626] group-hover:text-white px-2 py-0.5 text-[10px] font-extrabold uppercase text-[#DE8626] transition-colors tracking-tight">
+                  Plans
                 </span>
               </button>
             )}
 
-            {/* 2. Prepaid Platform Fee Wallet Pill (Identical UX to F:\Menza) */}
+            {/* Prepaid Platform Fee Wallet Pill (Identical UX to F:\Menza) */}
             {!isSuperAdmin && currentRestId > 0 && (
               <WalletBalanceWidget
                 restaurantId={currentRestId}
@@ -573,30 +713,25 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
               />
             )}
 
-            {/* 3. Quick Bluetooth / Thermal Printer Status Action (parity with F:\Menza) */}
-            {!isSuperAdmin && (
-              <button
-                type="button"
-                onClick={() => router.push('/settings/printer')}
-                title="Printer Setup & ESC/POS Status • Click to Configure"
-                className="inline-flex h-[36px] w-[36px] items-center justify-center rounded-full border border-[#E7E0D6] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#667085] hover:border-[#DE8626] hover:text-[#DE8626] transition-all relative shadow-xs"
-              >
-                <Printer className="h-4 w-4" />
-                <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-[#1B2127]" />
-              </button>
-            )}
-
-            {/* 4. Real-time Order Alerts Notification Bell */}
+            {/* Real-time Order Alerts Notification Bell Button */}
             <div className="relative" ref={notifMenuRef}>
               <button
                 type="button"
                 onClick={() => setNotifDrawerOpen(!notifDrawerOpen)}
-                className="inline-flex h-[36px] w-[36px] items-center justify-center rounded-full border border-[#E7E0D6] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#667085] hover:border-[#DE8626] hover:text-[#DE8626] transition-all relative shadow-xs"
-                title="Live Order Alerts"
+                className={`relative flex items-center justify-center h-8 w-8 sm:h-9 sm:w-9 rounded-xl border transition-all ${
+                  unreadCount > 0
+                    ? 'border-[#DE8626] bg-amber-500/10 text-[#DE8626]'
+                    : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#78716C] hover:border-[#DE8626] hover:text-[#DE8626]'
+                }`}
+                title={`Order Notifications, ${unreadCount} unread`}
               >
-                <Bell className="h-4 w-4" />
+                {unreadCount > 0 ? (
+                  <BellRing className="h-4 w-4 animate-bounce text-[#DE8626]" />
+                ) : (
+                  <Bell className="h-4 w-4" />
+                )}
                 {unreadCount > 0 && (
-                  <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-extrabold text-white shadow-sm animate-pulse">
+                  <span className="absolute -top-1 -right-1 flex h-4 min-w-[16px] px-1 items-center justify-center rounded-full bg-[#DE8626] text-[9px] font-black text-white shadow-xs">
                     {unreadCount > 99 ? '99+' : unreadCount}
                   </span>
                 )}
@@ -678,27 +813,90 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
               )}
             </div>
 
-            {/* 5. Theme Toggle Button */}
+            {/* Quick Bluetooth / Thermal Printer Status Action */}
+            {!isSuperAdmin && (
+              <button
+                type="button"
+                onClick={() => router.push('/settings/printer')}
+                className="relative flex items-center justify-center h-8 w-8 sm:h-9 sm:w-9 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#78716C] hover:border-[#DE8626] hover:text-[#DE8626] transition-colors shadow-xs"
+                title="Thermal Printer Options & Paper Width"
+              >
+                <Printer className="h-4 w-4" />
+                <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-[#151A20]" />
+              </button>
+            )}
+
+            {/* Day / Night Theme Toggle Button */}
             <button
               type="button"
               onClick={toggleTheme}
-              className="inline-flex h-[36px] w-[36px] items-center justify-center rounded-full border border-[#E7E0D6] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#667085] hover:border-[#DE8626] hover:text-[#DE8626] transition-all shadow-xs"
-              title="Toggle Day / Night Mode"
+              className="flex items-center justify-center h-8 w-8 sm:h-9 sm:w-9 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#78716C] hover:border-[#DE8626] hover:text-[#DE8626] transition-colors shadow-xs"
+              title={`Switch to ${isDark ? 'Light' : 'Dark'} Mode`}
             >
               {isDark ? <Sun className="h-4 w-4 text-amber-400" /> : <Moon className="h-4 w-4" />}
             </button>
 
-            {/* 6. Quick POS Terminal Button (when not on POS page) */}
+            {/* Fullscreen Kiosk Mode Toggle */}
+            <button
+              type="button"
+              onClick={toggleFullscreen}
+              title={isFullscreen ? 'Exit Fullscreen' : 'Enter Kiosk Fullscreen Mode'}
+              className="hidden sm:flex items-center justify-center h-8 w-8 sm:h-9 sm:w-9 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#78716C] hover:border-[#DE8626] hover:text-[#DE8626] transition-colors shadow-xs"
+            >
+              {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+            </button>
+
+            {/* Quick POS Terminal Button (when not on POS page) */}
             {!isSuperAdmin && pathname !== '/pos' && (
               <button
                 type="button"
                 onClick={() => router.push('/pos')}
-                className="hidden sm:inline-flex h-[36px] items-center gap-1.5 rounded-full bg-gradient-to-r from-[#DE8626] to-[#CB741B] px-3.5 text-xs font-extrabold text-white shadow-md shadow-[#DE8626]/20 hover:from-[#C4721C] hover:to-[#B66415] transition-all hover:scale-[1.02] active:scale-[0.98]"
+                className="hidden lg:inline-flex h-[36px] items-center gap-1.5 rounded-xl bg-gradient-to-r from-[#DE8626] to-[#CB741B] px-3 text-xs font-black text-white shadow-md shadow-[#DE8626]/20 hover:from-[#C4721C] hover:to-[#B66415] transition-all hover:scale-[1.02] active:scale-[0.98]"
               >
-                <ShoppingBag className="h-3.5 w-3.5" />
-                <span>New Sale</span>
+                <ShoppingBag className="h-3.5 w-3.5 stroke-[2.5]" />
+                <span>POS Terminal</span>
               </button>
             )}
+
+            {/* User Profile Avatar / Dropdown */}
+            <div className="relative" ref={profileMenuRef}>
+              <button
+                type="button"
+                onClick={() => setProfileMenuOpen(!profileMenuOpen)}
+                className="flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-amber-500/10 text-xs font-black text-[#DE8626] hover:border-[#DE8626] transition-all shadow-xs"
+                title="User Profile & Quick Actions"
+              >
+                {user?.name ? user.name.slice(0, 2).toUpperCase() : 'ME'}
+              </button>
+
+              {profileMenuOpen && (
+                <div className="absolute right-0 mt-2 w-60 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-2 shadow-2xl z-50 animate-in fade-in zoom-in-95 duration-150">
+                  <div className="px-3 py-2 border-b border-[#E7E1DA]/60 dark:border-[#2B3540]/60 mb-1">
+                    <p className="text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6] truncate">
+                      {user?.name || user?.mobile || 'Admin'}
+                    </p>
+                    <p className="text-[10px] text-[#DE8626] font-semibold uppercase tracking-wider">
+                      {roleName}
+                    </p>
+                  </div>
+                  <Link
+                    href="/settings"
+                    onClick={() => setProfileMenuOpen(false)}
+                    className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-xs text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                  >
+                    <Settings className="h-3.5 w-3.5 text-[#667085]" />
+                    <span>Store Settings</span>
+                  </Link>
+                  <button
+                    onClick={handleLogout}
+                    className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-xs text-red-600 hover:bg-red-500/10 transition-colors"
+                  >
+                    <LogOut className="h-3.5 w-3.5" />
+                    <span>Sign Out</span>
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </header>
 
@@ -874,6 +1072,18 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
             restaurantId={currentRestId}
             restaurantName={activeRestaurant?.restaurantName || 'Restaurant'}
             currentStatus={operatingStatus}
+            onStatusUpdated={(newStatus) => setOperatingStatus(newStatus)}
+          />
+        )}
+
+        {/* Store Operating Status Modal (Open / Pause 30m / Pause 60m / Close) */}
+        {!isSuperAdmin && currentRestId > 0 && (
+          <StoreOperatingStatusModal
+            isOpen={operatingModalOpen}
+            onClose={() => setOperatingModalOpen(false)}
+            restaurantId={currentRestId}
+            restaurantName={activeRestaurant?.restaurantName || 'Menza Outlet'}
+            status={operatingStatus}
             onStatusUpdated={(newStatus) => setOperatingStatus(newStatus)}
           />
         )}

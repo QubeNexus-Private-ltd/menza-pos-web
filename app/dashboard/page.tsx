@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import {
   ShoppingBag,
   IndianRupee,
@@ -59,6 +60,10 @@ import {
   getNextRecommendedStatus,
   isOrderSettled,
 } from '@/lib/utils/orderStatusEngine';
+import { Crown, Building2, Globe, ShieldCheck } from 'lucide-react';
+import { extractUserRoles } from '@shared/core/auth/rolePermissions';
+import { SubscriptionRemoteDataSource } from '@shared/data/datasources/SubscriptionRemoteDataSource';
+import { RestaurantDetail } from '@shared/domain/models/Restaurant';
 import {
   startPosSignalRConnection,
   onPosOrderCreated,
@@ -73,23 +78,29 @@ export default function DashboardPage() {
   const { user, activeRestaurant, restaurants } = useAuthStore();
   const { unreadCount } = useNotificationStore();
 
-  const roleName = user?.roles?.[0] || 'Owner';
+  const extractedRoles = extractUserRoles(user, activeRestaurant);
   const isSuperAdmin =
+    extractedRoles.some((r) => r.includes('superadmin') || r.includes('super_admin')) ||
     user?.roles?.some((r) =>
+      typeof r === 'string' &&
       ['SUPERADMIN', 'SUPER_ADMIN', 'SUPERADMINONLY'].includes(r.toUpperCase().replace(/[^A-Z]/g, ''))
-    ) || Boolean(roleName && roleName.toLowerCase().includes('superadmin'));
+    ) ||
+    (typeof user?.roles?.[0] === 'string' && user.roles[0].toLowerCase().includes('superadmin'));
+  const roleName = isSuperAdmin ? 'SuperAdmin' : (typeof user?.roles?.[0] === 'string' ? user.roles[0] : extractedRoles[0] || 'Owner');
 
   const orderRemoteDataSource = useMemo(() => new OrderRemoteDataSource(), []);
   const configRemoteDataSource = useMemo(() => new RestaurantConfigRemoteDataSource(), []);
   const tableRemoteDataSource = useMemo(() => new TableRemoteDataSource(), []);
   const superAdminRepo = useMemo(() => new SuperAdminRepositoryImpl(new SuperAdminRemoteDataSource()), []);
+  const subscriptionDs = useMemo(() => new SubscriptionRemoteDataSource(), []);
 
   const [loading, setLoading] = useState(true);
   const [revenueData, setRevenueData] = useState<RestaurantTodayRevenue | null>(null);
   const [recentOrders, setRecentOrders] = useState<OrderMaster[]>([]);
   const [operatingStatus, setOperatingStatus] = useState<StoreOperatingStatus | null>(null);
   const [tableCount, setTableCount] = useState({ total: 0, occupied: 0 });
-  const [superAdminMetrics, setSuperAdminMetrics] = useState({ totalStores: 0, totalRevenue: 0 });
+  const [superAdminMetrics, setSuperAdminMetrics] = useState({ totalStores: 0, mrrAmount: 0 });
+  const [recentStores, setRecentStores] = useState<RestaurantDetail[]>([]);
 
   // Pipeline Filter & Order Selection State
   const [activePipelineStage, setActivePipelineStage] = useState<PipelineStageKey>('ALL');
@@ -103,10 +114,60 @@ export default function DashboardPage() {
     if (isSuperAdmin) {
       try {
         setLoading(true);
-        const stores = await superAdminRepo.getAllRestaurants(undefined, undefined, undefined, undefined, 1, 100);
+        const [storesRes, subList, planList] = await Promise.allSettled([
+          superAdminRepo.getAllRestaurants(undefined, undefined, undefined, undefined, 1, 100),
+          subscriptionDs.getAllRestaurantSubscriptions(),
+          subscriptionDs.getPlans(),
+        ]);
+
+        let totalStores = 0;
+        let storeItems: RestaurantDetail[] = [];
+        if (storesRes.status === 'fulfilled' && storesRes.value) {
+          totalStores = storesRes.value.totalCount || storesRes.value.items?.length || 0;
+          storeItems = storesRes.value.items || [];
+          setRecentStores(storeItems.slice(0, 5));
+        }
+
+        let totalMrr = 0;
+        if (subList.status === 'fulfilled' && Array.isArray(subList.value) && subList.value.length > 0) {
+          subList.value.forEach((sub: any) => {
+            const status = (sub.status || sub.Status || '').toUpperCase();
+            if (status === 'ACTIVE' || status === 'SUCCESS' || status === 'PAID') {
+              const price = Number(sub.finalPrice ?? sub.FinalPrice ?? sub.price ?? sub.Price ?? 0);
+              const duration = Number(sub.durationInDays ?? sub.DurationInDays ?? 30);
+              const cycle = (sub.billingCycle || sub.BillingCycle || '').toUpperCase();
+
+              if (cycle === 'ANNUALLY' || duration >= 300) {
+                totalMrr += price / 12;
+              } else if (cycle === 'HALFYEARLY' || duration >= 150) {
+                totalMrr += price / 6;
+              } else if (cycle === 'QUARTERLY' || duration >= 75) {
+                totalMrr += price / 3;
+              } else {
+                totalMrr += price;
+              }
+            }
+          });
+        }
+
+        if (totalMrr === 0 && totalStores > 0 && planList.status === 'fulfilled' && Array.isArray(planList.value) && planList.value.length > 0) {
+          const activePlans = planList.value.filter((p) => p.isActive);
+          if (activePlans.length > 0) {
+            const avgPlanPrice =
+              activePlans.reduce(
+                (sum, p) =>
+                  sum +
+                  (p.finalPrice || p.price || 0) /
+                    (p.durationInDays === 365 ? 12 : p.durationInDays === 180 ? 6 : p.durationInDays === 90 ? 3 : 1),
+                0
+              ) / activePlans.length;
+            totalMrr = Math.round(avgPlanPrice * totalStores);
+          }
+        }
+
         setSuperAdminMetrics({
-          totalStores: stores.totalCount || stores.items.length,
-          totalRevenue: 0,
+          totalStores,
+          mrrAmount: Math.round(totalMrr),
         });
       } catch (err) {
         console.warn('SuperAdmin fetch failed', err);
@@ -327,8 +388,214 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* KPI Metrics Cards Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {isSuperAdmin ? (
+            <div className="space-y-6">
+              {/* SuperAdmin Hero Metric Banner (Parity with F:\Menza) */}
+              <div className="relative overflow-hidden rounded-3xl border border-amber-900/30 bg-gradient-to-br from-[#2D2319] via-[#3D2F20] to-[#1F1811] p-6 sm:p-8 text-white shadow-xl">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-amber-400/20 pb-5">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#FEA619]/20 text-[#FEA619] ring-1 ring-[#FEA619]/40 shadow-inner">
+                      <Crown className="h-6 w-6" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-black tracking-widest uppercase text-[#FEA619]">
+                          PLATFORM MASTER
+                        </span>
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-[10px] font-bold text-emerald-400 border border-emerald-500/30">
+                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                          System Operational
+                        </span>
+                      </div>
+                      <h2 className="text-xl sm:text-2xl font-black text-white mt-1">
+                        Multi-Store Restaurant Network
+                      </h2>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => router.push('/superadmin/onboard')}
+                    className="inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-[#DE8626] to-[#CB741B] px-5 py-3 text-xs font-extrabold text-white shadow-lg shadow-[#DE8626]/25 hover:from-[#C4721C] hover:to-[#B66415] transition-all hover:scale-[1.02] active:scale-[0.98]"
+                  >
+                    <Store className="h-4 w-4" />
+                    <span>Onboard Outlet Wizard</span>
+                  </button>
+                </div>
+
+                <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  <div className="rounded-2xl bg-black/30 backdrop-blur-md p-5 border border-white/10">
+                    <span className="text-[11px] font-bold tracking-wider text-amber-200/70 uppercase">
+                      Platform Outlets
+                    </span>
+                    <div className="mt-2 flex items-baseline gap-2">
+                      <span className="text-3xl font-black text-white">
+                        {superAdminMetrics.totalStores}
+                      </span>
+                      <span className="text-xs font-bold text-emerald-400">Active tenants</span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl bg-black/30 backdrop-blur-md p-5 border border-white/10">
+                    <span className="text-[11px] font-bold tracking-wider text-amber-200/70 uppercase">
+                      SaaS MRR
+                    </span>
+                    <div className="mt-2 flex items-baseline gap-2">
+                      <span className="text-3xl font-black text-white">
+                        ₹{superAdminMetrics.mrrAmount.toLocaleString('en-IN')}
+                      </span>
+                      <span className="text-xs font-bold text-amber-300">Monthly recurring</span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl bg-black/30 backdrop-blur-md p-5 border border-white/10">
+                    <span className="text-[11px] font-bold tracking-wider text-amber-200/70 uppercase">
+                      SuperAdmin Session
+                    </span>
+                    <div className="mt-2 flex items-baseline gap-2">
+                      <span className="text-base font-bold text-white truncate">
+                        {user?.name || user?.mobile || 'Root Admin'}
+                      </span>
+                      <span className="text-xs font-bold text-amber-400">Root Master</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* PLATFORM MANAGEMENT Quick Modules (Direct parity with F:\Menza) */}
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-xs font-black tracking-wider text-[#667085] dark:text-[#94A3B8] uppercase">
+                    PLATFORM MANAGEMENT
+                  </h2>
+                  <span className="text-xs font-bold text-[#DE8626]">Master Operations</span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {/* Module 1: Onboard Outlet */}
+                  <Link
+                    href="/superadmin/onboard"
+                    className="group cursor-pointer rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-6 shadow-xs hover:border-[#DE8626] hover:shadow-xl transition-all block"
+                  >
+                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500/10 text-[#DE8626] mb-4 group-hover:scale-105 transition-transform">
+                      <Globe className="h-6 w-6" />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-base font-extrabold text-[#1E2930] dark:text-[#F3F4F6] group-hover:text-[#DE8626] transition-colors">
+                        Onboard Outlet
+                      </h3>
+                      <ArrowRight className="h-4 w-4 text-[#667085] group-hover:translate-x-1 group-hover:text-[#DE8626] transition-all" />
+                    </div>
+                    <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-1.5">
+                      3-Stage wizard & store creation with owner credentials, tax config, and ordering channel activation.
+                    </p>
+                    <div className="mt-4 pt-3 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60 flex items-center justify-between text-[11px] font-bold text-[#DE8626]">
+                      <span>Launch Onboarding</span>
+                      <span className="rounded-full bg-amber-500/10 px-2 py-0.5">3-Stage Wizard</span>
+                    </div>
+                  </Link>
+
+                  {/* Module 2: Outlets Directory */}
+                  <Link
+                    href="/superadmin/directory"
+                    className="group cursor-pointer rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-6 shadow-xs hover:border-[#DE8626] hover:shadow-xl transition-all block"
+                  >
+                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-500/10 text-blue-600 mb-4 group-hover:scale-105 transition-transform">
+                      <Building2 className="h-6 w-6" />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-base font-extrabold text-[#1E2930] dark:text-[#F3F4F6] group-hover:text-[#DE8626] transition-colors">
+                        Outlets Directory
+                      </h3>
+                      <ArrowRight className="h-4 w-4 text-[#667085] group-hover:translate-x-1 group-hover:text-[#DE8626] transition-all" />
+                    </div>
+                    <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-1.5">
+                      Manage stores & channel configs, reassign store owners, and toggle tenant active states.
+                    </p>
+                    <div className="mt-4 pt-3 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60 flex items-center justify-between text-[11px] font-bold text-blue-600">
+                      <span>View Outlets</span>
+                      <span className="rounded-full bg-blue-500/10 px-2 py-0.5">{superAdminMetrics.totalStores} Active Stores</span>
+                    </div>
+                  </Link>
+
+                  {/* Module 3: Subscription Plans */}
+                  <Link
+                    href="/superadmin/plans"
+                    className="group cursor-pointer rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-6 shadow-xs hover:border-[#DE8626] hover:shadow-xl transition-all block"
+                  >
+                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-purple-500/10 text-purple-600 mb-4 group-hover:scale-105 transition-transform">
+                      <Sparkles className="h-6 w-6" />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-base font-extrabold text-[#1E2930] dark:text-[#F3F4F6] group-hover:text-[#DE8626] transition-colors">
+                        Subscription Plans
+                      </h3>
+                      <ArrowRight className="h-4 w-4 text-[#667085] group-hover:translate-x-1 group-hover:text-[#DE8626] transition-all" />
+                    </div>
+                    <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-1.5">
+                      Create SaaS tiers & pricing, configure entitlement gates (KDS, SMS, POS), and active plan rules.
+                    </p>
+                    <div className="mt-4 pt-3 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60 flex items-center justify-between text-[11px] font-bold text-purple-600">
+                      <span>Manage SaaS Plans</span>
+                      <span className="rounded-full bg-purple-500/10 px-2 py-0.5">SaaS Pricing</span>
+                    </div>
+                  </Link>
+                </div>
+              </div>
+
+              {/* Recent Stores Table */}
+              {recentStores.length > 0 && (
+                <div className="rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-6 shadow-xs">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h3 className="text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                        Registered Outlets Directory
+                      </h3>
+                      <p className="text-xs text-[#667085] dark:text-[#94A3B8]">
+                        Quick overview of recent store locations
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => router.push('/superadmin/directory')}
+                      className="text-xs font-bold text-[#DE8626] hover:underline flex items-center gap-1"
+                    >
+                      <span>Open Full Directory</span>
+                      <ArrowRight className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+
+                  <div className="divide-y divide-[#E7E1DA]/60 dark:divide-[#2B3540]/60">
+                    {recentStores.map((store) => (
+                      <div key={store.restaurantId} className="py-3 flex items-center justify-between text-xs">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-500/10 text-[#DE8626] font-bold">
+                            <Store className="h-5 w-5" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="font-bold text-[#1E2930] dark:text-[#F3F4F6] truncate">{store.restaurantName}</p>
+                            <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] truncate">{store.address || 'Address'}, {store.city || store.state || 'India'}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600">
+                            ID #{store.restaurantId}
+                          </span>
+                          <button
+                            onClick={() => router.push('/superadmin/directory')}
+                            className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] px-3 py-1 text-xs font-semibold text-[#667085] hover:text-[#DE8626] hover:border-[#DE8626]"
+                          >
+                            Manage
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              {/* KPI Metrics Cards Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* KPI 1: Today's Net Revenue */}
             <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-5 shadow-sm">
               <div className="flex items-center justify-between">
@@ -724,6 +991,8 @@ export default function DashboardPage() {
               </div>
             )}
           </div>
+            </>
+          )}
         </div>
       </AppShell>
       <TermsConsentCard />

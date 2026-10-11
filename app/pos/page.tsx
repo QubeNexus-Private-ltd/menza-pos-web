@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import Image from 'next/image';
 import {
   Search,
   Plus,
@@ -24,7 +25,6 @@ import {
   Receipt,
   User,
   Phone,
-  Table as TableIcon,
   Sparkles,
   MessageCircle,
   Store,
@@ -33,10 +33,12 @@ import {
   PauseCircle,
   Play,
   Calculator,
-  Building2,
-  Split,
   SlidersHorizontal,
   Keyboard,
+  Lock,
+  Truck,
+  CheckCircle2,
+  Smartphone,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
@@ -61,12 +63,39 @@ const ParkedCartsModal = dynamic(
   () => import('@/components/pos/ParkedCartsModal').then((mod) => mod.ParkedCartsModal),
   { ssr: false }
 );
+const OrderNotificationDrawer = dynamic(
+  () => import('@/components/pos/OrderNotificationDrawer').then((mod) => mod.OrderNotificationDrawer),
+  { ssr: false }
+);
+const OrderAlertBanner = dynamic(
+  () => import('@/components/pos/OrderAlertBanner').then((mod) => mod.OrderAlertBanner),
+  { ssr: false }
+);
+const WebPrinterModal = dynamic(
+  () => import('@/components/pos/WebPrinterModal').then((mod) => mod.WebPrinterModal),
+  { ssr: false }
+);
+const WalletRechargeModal = dynamic(
+  () => import('@/components/common/WalletRechargeModal').then((mod) => mod.WalletRechargeModal),
+  { ssr: false }
+);
+const SubscriptionGraceBanner = dynamic(
+  () => import('@/components/subscription/SubscriptionGraceBanner').then((mod) => mod.SubscriptionGraceBanner),
+  { ssr: false }
+);
+const SubscriptionBlockerModal = dynamic(
+  () => import('@/components/subscription/SubscriptionBlockerModal').then((mod) => mod.SubscriptionBlockerModal),
+  { ssr: false }
+);
+import { GildedAlertModal, GildedAlertConfig } from '@/components/common/GildedAlertModal';
+
 import { WebPrinterService } from '@/services/webPrinterService';
 import { WebWhatsAppService } from '@/services/whatsAppService';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { usePrinterStore } from '@shared/presentation/state/usePrinterStore';
 import { useNotificationStore } from '@shared/presentation/state/useNotificationStore';
 import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
+import { useKitchenStationStore } from '@shared/presentation/state/useKitchenStationStore';
 import { apiClient } from '@shared/core/network/apiClient';
 import { CatalogRemoteDataSource } from '@shared/data/datasources/CatalogRemoteDataSource';
 import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
@@ -77,13 +106,22 @@ import { MenuItem } from '@shared/domain/models/Item';
 import { Category } from '@shared/domain/models/Category';
 import { TableMaster } from '@shared/domain/models/Table';
 import { RestaurantConfig, StoreOperatingStatus } from '@shared/domain/models/RestaurantConfig';
-import { BillingModes, PosCheckoutModes, OrderMaster } from '@shared/domain/models/Order';
+import {
+  BillingModes,
+  PosCheckoutModes,
+  PosOrderSources,
+  OrderMaster,
+  ActiveOrderType,
+} from '@shared/domain/models/Order';
 import { ReceiptData } from '@shared/core/printer/EscPosBuilder';
+import { WalletEvents } from '@shared/core/utils/walletEvents';
 import {
   startPosSignalRConnection,
   onStoreOperatingStatusChanged,
   onWalletBalanceChanged,
   onPosTableStatusChanged,
+  onPosOrderCreated,
+  onSignalRReconnected,
 } from '@/lib/signalr/signalrService';
 
 const catalogDataSource = new CatalogRemoteDataSource();
@@ -96,47 +134,69 @@ export interface CartItem {
   cartKey: string;
   itemId: number;
   itemName: string;
+  description?: string;
   price: number;
   basePrice: number;
   quantity: number;
   isVeg: boolean;
+  portionLabel?: string;
+  imageUrl?: string;
   variantId?: number;
   variantName?: string;
   modifiers?: Array<{ id: number; modifierName: string; extraPrice: number }>;
   notes?: string;
+  stationName?: string;
+  stationCode?: string;
 }
 
 export default function PosPage() {
   const router = useRouter();
   const { activeRestaurant, restaurants } = useAuthStore();
-  const { markOrderAsKnown } = useNotificationStore();
+  const { processIncomingOrders, markOrderAsKnown } = useNotificationStore();
   const { paperWidth, customFooter, autoPrintReceipt, autoPrintKot } = usePrinterStore();
-  const { canTakeOrders, hasEntitlement, openRenewalModal } = useSubscriptionStore();
+  const {
+    canTakeOrders,
+    hasEntitlement,
+    isExpired: isSubscriptionExpired,
+    lifecycleState: subscriptionLifecycleState,
+    openRenewalModal,
+    fetchSubscriptionStatus,
+  } = useSubscriptionStore();
+  const { stations, fetchStations } = useKitchenStationStore();
 
-  const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
+  const currentRestId =
+    activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
+  // Core Data
   const [categories, setCategories] = useState<Category[]>([]);
   const [items, setItems] = useState<MenuItem[]>([]);
   const [tables, setTables] = useState<TableMaster[]>([]);
   const [restaurantConfig, setRestaurantConfig] = useState<RestaurantConfig | null>(null);
   const [operatingStatus, setOperatingStatus] = useState<StoreOperatingStatus | null>(null);
-  const [operatingModalOpen, setOperatingModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // Active Dining Table State
+  // Dynamic Active Order Types
+  const [orderTypes, setOrderTypes] = useState<ActiveOrderType[]>([
+    { id: 4, code: 'COUNTER', typeName: 'Counter', configKey: 'IsCounterOrderingEnabled', isAllowedByPlan: true, isEnabledByStore: true, isActive: true, displayOrder: 1 },
+    { id: 1, code: 'DINE_IN', typeName: 'Dine-in', configKey: 'IsTableOrderingEnabled', isAllowedByPlan: true, isEnabledByStore: true, isActive: true, displayOrder: 2 },
+    { id: 2, code: 'TAKEAWAY', typeName: 'Takeaway', configKey: 'IsSelfPickupEnabled', isAllowedByPlan: true, isEnabledByStore: true, isActive: true, displayOrder: 3 },
+    { id: 3, code: 'DELIVERY', typeName: 'Delivery', configKey: 'IsDeliveryEnabled', isAllowedByPlan: false, isEnabledByStore: false, isActive: false, displayOrder: 4 },
+  ]);
+  const [selectedOrderType, setSelectedOrderType] = useState<number>(4);
+
+  // Dine-in Flow & Table Selection
+  const [selectedTable, setSelectedTable] = useState<TableMaster | null>(null);
   const [activeTableOrder, setActiveTableOrder] = useState<OrderMaster | null>(null);
   const [loadingActiveTable, setLoadingActiveTable] = useState(false);
   const [showRunningTableDetails, setShowRunningTableDetails] = useState(false);
+  const [dineInPaymentFlow, setDineInPaymentFlow] = useState<'pay_later' | 'pay_now'>('pay_now');
 
-  // Filters & State
+  // Filters & Search
   const [selectedCategory, setSelectedCategory] = useState<number | null>(null); // null = all
   const [searchQuery, setSearchQuery] = useState('');
   const [vegFilter, setVegFilter] = useState<'ALL' | 'VEG' | 'NON_VEG'>('ALL');
-  const [orderType, setOrderType] = useState<'COUNTER' | 'DINE_IN' | 'TAKEAWAY' | 'DELIVERY'>('COUNTER');
-  const [selectedTable, setSelectedTable] = useState<TableMaster | null>(null);
-  const [tableModalOpen, setTableModalOpen] = useState(false);
 
-  // Cart
+  // Cart & Customer Details
   const [cart, setCart] = useState<CartItem[]>([]);
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
@@ -144,34 +204,104 @@ export default function PosPage() {
   const [isLookingUpCustomer, setIsLookingUpCustomer] = useState(false);
   const [discountAmount, setDiscountAmount] = useState(0);
 
-  // Modals: Customization & Numpad
+  // Settlement & Payment Mode State
+  const [selectedPaymentMode, setSelectedPaymentMode] = useState<string>('CASH');
+  const [posTenderedText, setPosTenderedText] = useState<string>('');
+  // Modals & Drawers State
+  const [operatingModalOpen, setOperatingModalOpen] = useState(false);
+  const [walletModalOpen, setWalletModalOpen] = useState(false);
+  const [printerModalOpen, setPrinterModalOpen] = useState(false);
+  const [notificationDrawerOpen, setNotificationDrawerOpen] = useState(false);
+  const [subscriptionModalOpen, setSubscriptionModalOpen] = useState(false);
   const [customizingItem, setCustomizingItem] = useState<MenuItem | null>(null);
-  const [numpadCartItem, setNumpadCartItem] = useState<CartItem | null>(null);
-
-  // Parked Carts (Hold Orders)
+  const [numpadItem, setNumpadItem] = useState<{
+    cartKey: string;
+    itemId: number;
+    itemName: string;
+    currentQuantity: number;
+    unitPrice: number;
+    description?: string;
+  } | null>(null);
   const [parkedCarts, setParkedCarts] = useState<ParkedCart[]>([]);
   const [parkedModalOpen, setParkedModalOpen] = useState(false);
-
-  // Settlement Modal State
-  const [settleModalOpen, setSettleModalOpen] = useState(false);
-  const [paymentMode, setPaymentMode] = useState<'CASH' | 'UPI' | 'CARD' | 'DUE' | 'SPLIT'>('CASH');
-  const [tenderedAmount, setTenderedAmount] = useState('');
-  const [splitCash, setSplitCash] = useState<string>('');
-  const [splitDigital, setSplitDigital] = useState<string>('');
-  const [splitDigitalMode, setSplitDigitalMode] = useState<'UPI' | 'CARD'>('UPI');
-  const [showB2bFields, setShowB2bFields] = useState(false);
-  const [companyName, setCompanyName] = useState('');
-  const [customerGstin, setCustomerGstin] = useState('');
-  const [isPlacingOrder, setIsPlacingOrder] = useState(false);
+  const [cartDrawerOpen, setCartDrawerOpen] = useState(false); // Mobile / Tablet drawer
   const [orderSuccessData, setOrderSuccessData] = useState<any | null>(null);
 
-  // Load menu items, categories, tables, config, and operating status
+  // Loading States
+  const [isPlacingOrder, setIsPlacingOrder] = useState(false);
+  const [isKotLoading, setIsKotLoading] = useState(false);
+  const [isSettling, setIsSettling] = useState(false);
+
+  // Gilded Alert Modal State
+  const [alertConfig, setAlertConfig] = useState<GildedAlertConfig>({
+    visible: false,
+    title: '',
+    message: '',
+  });
+
+  const showAlert = (
+    title: string,
+    message: string,
+    type: 'success' | 'danger' | 'warning' | 'info' = 'success',
+    confirmText = 'OK',
+    cancelText?: string,
+    onConfirm?: () => void
+  ) => {
+    setAlertConfig({
+      visible: true,
+      type,
+      title,
+      message,
+      confirmText,
+      cancelText,
+      onConfirm,
+    });
+  };
+
+  // 1. Initial Load of POS Data & Real-time SignalR Listeners
+  const loadOperatingStatus = useCallback(async () => {
+    if (!currentRestId) return;
+    try {
+      const status = await configDataSource.getOperatingStatus(currentRestId);
+      if (status) setOperatingStatus(status);
+    } catch (err) {
+      console.warn('Failed to load operating status for POS:', err);
+    }
+  }, [currentRestId]);
+
+  const loadRestaurantConfig = useCallback(async () => {
+    if (!currentRestId) return;
+    try {
+      const cfg = await configDataSource.getConfig(currentRestId);
+      if (cfg) setRestaurantConfig(cfg);
+    } catch (err) {
+      console.warn('Failed to load store config for POS:', err);
+    }
+  }, [currentRestId]);
+
+  const loadOrderTypes = useCallback(async () => {
+    if (!currentRestId) return;
+    try {
+      const types = await orderRemoteDataSource.getActiveOrderTypes(currentRestId);
+      if (Array.isArray(types) && types.length > 0) {
+        setOrderTypes(types);
+        if (!selectedTable) {
+          const firstActive = types.find((t) => t.isActive);
+          if (firstActive) {
+            setSelectedOrderType(firstActive.id);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to load active order types:', err);
+    }
+  }, [currentRestId, selectedTable]);
+
   useEffect(() => {
     if (!currentRestId) return;
-
     let isMounted = true;
 
-    const loadData = async () => {
+    const loadAll = async () => {
       try {
         setLoading(true);
         const [catsRes, itemsRes, tablesRes, cfgRes, opRes] = await Promise.allSettled([
@@ -197,8 +327,9 @@ export default function PosPage() {
             if (qTableId) {
               const matched = tablesRes.value.find((t) => t.id === Number(qTableId));
               if (matched) {
-                setOrderType('DINE_IN');
+                setSelectedOrderType(1); // DINE_IN
                 setSelectedTable(matched);
+                setDineInPaymentFlow('pay_later');
               }
             }
           }
@@ -209,8 +340,20 @@ export default function PosPage() {
         if (opRes.status === 'fulfilled' && opRes.value) {
           setOperatingStatus(opRes.value);
         }
-        // Load subscription status in background
-        useSubscriptionStore.getState().fetchSubscriptionStatus(currentRestId).catch(() => {});
+
+        loadOrderTypes();
+        fetchStations(currentRestId);
+        fetchSubscriptionStatus(currentRestId).catch(() => {});
+
+        // Fetch initial orders for notifications
+        orderRemoteDataSource
+          .getTodayOrders(currentRestId, 'ALL', 1, 20)
+          .then((res) => {
+            if (res?.items && res.items.length > 0) {
+              processIncomingOrders(res.items);
+            }
+          })
+          .catch(() => {});
       } catch (err) {
         console.warn('POS data load failed', err);
       } finally {
@@ -218,14 +361,18 @@ export default function PosPage() {
       }
     };
 
-    loadData();
+    loadAll();
 
-    // Start Real-Time SignalR Connection for Live Store & Order Sync
+    // SignalR Real-Time Listeners
     startPosSignalRConnection(currentRestId).catch(() => {});
 
     const unsubStatus = onStoreOperatingStatusChanged((status) => {
-      if (status && isMounted) {
-        setOperatingStatus(status);
+      if (status && isMounted) setOperatingStatus(status);
+    });
+
+    const unsubCreated = onPosOrderCreated((data) => {
+      if (data && isMounted) {
+        useNotificationStore.getState().handleOrderStatusChanged(data);
       }
     });
 
@@ -248,15 +395,40 @@ export default function PosPage() {
       }
     });
 
+    const unsubReconnect = onSignalRReconnected(() => {
+      if (isMounted) {
+        loadOperatingStatus();
+        loadRestaurantConfig();
+      }
+    });
+
+    const unsubWalletEvents = WalletEvents.subscribe(() => {
+      if (isMounted) {
+        loadOperatingStatus();
+        loadRestaurantConfig();
+      }
+    });
+
     return () => {
       isMounted = false;
       unsubStatus();
+      unsubCreated();
       unsubWallet();
       unsubTable();
+      unsubReconnect();
+      unsubWalletEvents();
     };
-  }, [currentRestId]);
+  }, [
+    currentRestId,
+    loadOrderTypes,
+    fetchStations,
+    fetchSubscriptionStatus,
+    processIncomingOrders,
+    loadOperatingStatus,
+    loadRestaurantConfig,
+  ]);
 
-  // Load active dining table order whenever a table is selected
+  // 2. Active Dining Table Order Loader
   const loadActiveTableOrder = useCallback(
     async (tableId: number) => {
       if (!currentRestId || !tableId) {
@@ -284,33 +456,18 @@ export default function PosPage() {
   );
 
   useEffect(() => {
-    if (orderType === 'DINE_IN' && selectedTable?.id) {
+    if (selectedOrderType === 1 && selectedTable?.id) {
       loadActiveTableOrder(selectedTable.id);
+      setDineInPaymentFlow('pay_later');
     } else {
       setActiveTableOrder(null);
+      if (selectedOrderType !== 1) {
+        setDineInPaymentFlow('pay_now');
+      }
     }
-  }, [orderType, selectedTable, loadActiveTableOrder]);
+  }, [selectedOrderType, selectedTable, loadActiveTableOrder]);
 
-  // Filtered Menu Items
-  const filteredItems = useMemo(() => {
-    return items.filter((item) => {
-      // 1. Category Filter
-      if (selectedCategory !== null && item.categoryId !== selectedCategory) {
-        return false;
-      }
-      // 2. Veg / Non-Veg Filter
-      if (vegFilter === 'VEG' && !item.isVeg) return false;
-      if (vegFilter === 'NON_VEG' && item.isVeg) return false;
-      // 3. Search query
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
-        return item.itemName.toLowerCase().includes(q) || Boolean((item as any).itemCode && (item as any).itemCode.toLowerCase().includes(q));
-      }
-      return true;
-    });
-  }, [items, selectedCategory, vegFilter, searchQuery]);
-
-  // Phone Lookup
+  // 3. Customer Mobile Lookup (10 Digits)
   const handlePhoneChange = (val: string) => {
     const clean = val.replace(/[^0-9]/g, '').slice(0, 10);
     setCustomerPhone(clean);
@@ -334,8 +491,44 @@ export default function PosPage() {
     }
   };
 
-  // Cart Operations
+  // 4. Item Availability Check
+  const isItemAvailable = (dish: any): boolean => {
+    if (dish?.isAvailable !== undefined) return Boolean(dish.isAvailable);
+    if (dish?.IsAvailable !== undefined) return Boolean(dish.IsAvailable);
+    if (dish?.isActive !== undefined) return Boolean(dish.isActive);
+    if (dish?.IsActive !== undefined) return Boolean(dish.IsActive);
+    return true;
+  };
+
+  // 5. Filtered Menu Items
+  const filteredItems = useMemo(() => {
+    return items.filter((item) => {
+      // 1. Category Filter
+      if (selectedCategory !== null && item.categoryId !== selectedCategory) {
+        return false;
+      }
+      // 2. Veg / Non-Veg Filter
+      if (vegFilter === 'VEG' && !item.isVeg) return false;
+      if (vegFilter === 'NON_VEG' && item.isVeg) return false;
+      // 3. Search query
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const nameMatch = (item.itemName || '').toLowerCase().includes(q);
+        const descMatch = (item.description || (item as any).itemDescription || '').toLowerCase().includes(q);
+        const codeMatch = Boolean((item as any).itemCode && String((item as any).itemCode).toLowerCase().includes(q));
+        return nameMatch || descMatch || codeMatch;
+      }
+      return true;
+    });
+  }, [items, selectedCategory, vegFilter, searchQuery]);
+
+  // 6. Cart Management
   const addToCartQuick = (item: MenuItem) => {
+    if (!isItemAvailable(item)) {
+      showAlert('Out of Stock', `"${item.itemName || 'This item'}" is currently out of stock.`, 'warning');
+      return;
+    }
+
     const cartKey = `${item.id}_v0_`;
     setCart((prev) => {
       const existing = prev.find((ci) => ci.cartKey === cartKey);
@@ -350,10 +543,14 @@ export default function PosPage() {
           cartKey,
           itemId: item.id,
           itemName: item.itemName,
+          description: item.description,
           price: item.price,
           basePrice: item.price,
           quantity: 1,
           isVeg: Boolean(item.isVeg),
+          portionLabel: item.portionDisplay,
+          imageUrl: item.imageUrl,
+          stationName: item.kitchenStationName,
         },
       ];
     });
@@ -377,10 +574,13 @@ export default function PosPage() {
           cartKey: res.cartKey,
           itemId: res.item.id,
           itemName: displayName,
+          description: res.item.description,
           price: res.effectiveUnitPrice,
           basePrice: res.item.price,
           quantity: res.quantity,
           isVeg: Boolean(res.item.isVeg),
+          portionLabel: res.item.portionDisplay,
+          imageUrl: res.item.imageUrl,
           variantId: res.selectedVariant?.id,
           variantName: res.selectedVariant?.variantName,
           modifiers: res.selectedModifiers.map((m) => ({
@@ -389,6 +589,7 @@ export default function PosPage() {
             extraPrice: m.extraPrice,
           })),
           notes: res.cookingInstructions,
+          stationName: res.item.kitchenStationName,
         },
       ];
     });
@@ -421,62 +622,48 @@ export default function PosPage() {
     });
   };
 
-  const removeFromCart = (cartKey: string) => {
-    setCart((prev) => prev.filter((ci) => ci.cartKey !== cartKey));
-  };
-
-  const clearCartOnly = () => {
-    setCart([]);
-    setDiscountAmount(0);
-    setTenderedAmount('');
-  };
-
   const clearCart = () => {
     setCart([]);
+    setPosTenderedText('');
+  };
+
+  const clearFullSale = () => {
+    clearCart();
     setSelectedTable(null);
     setCustomerName('');
     setCustomerPhone('');
     setIsCustomerLookupVerified(false);
     setDiscountAmount(0);
-    setTenderedAmount('');
     setActiveTableOrder(null);
-  };
-
-  const clearFullSale = () => {
-    clearCart();
     setOrderSuccessData(null);
   };
 
-  // Park / Hold Cart Handlers
+  // 7. Park / Hold Cart Handlers
   const handleParkCurrentCart = () => {
     if (cart.length === 0) {
-      alert('Cart is empty. Nothing to park.');
+      showAlert('Cart is Empty', 'Nothing to park. Please add dishes to cart.', 'warning');
       return;
     }
     const newParked: ParkedCart = {
       id: `park_${Date.now()}`,
       parkedAt: new Date(),
       cart: [...cart],
-      orderType,
+      orderType: selectedOrderType === 1 ? 'DINE_IN' : selectedOrderType === 2 ? 'TAKEAWAY' : selectedOrderType === 3 ? 'DELIVERY' : 'COUNTER',
       table: selectedTable,
       customerName,
       customerPhone,
       discountAmount,
-      subtotal: grandTotal,
+      subtotal: payableGrandTotal,
     };
     setParkedCarts((prev) => [newParked, ...prev]);
     clearCart();
+    showAlert('Order Held ⏸️', 'Active cart saved to Held Orders. You can resume it anytime.', 'info');
   };
 
   const handleResumeParkedCart = (p: ParkedCart) => {
-    if (cart.length > 0) {
-      const confirmResume = window.confirm(
-        'Your current cart items will be replaced by the resumed order. Continue?'
-      );
-      if (!confirmResume) return;
-    }
     setCart(p.cart);
-    setOrderType(p.orderType as any);
+    const matchedType = orderTypes.find((ot) => ot.code === p.orderType);
+    if (matchedType) setSelectedOrderType(matchedType.id);
     setSelectedTable(p.table);
     setCustomerName(p.customerName);
     setCustomerPhone(p.customerPhone);
@@ -489,7 +676,7 @@ export default function PosPage() {
     setParkedCarts((prev) => prev.filter((item) => item.id !== id));
   };
 
-  // GST & Tax Calculations
+  // 8. Tax & Bill Calculation Engine Matching Menza
   const hasGstNumber = Boolean(
     restaurantConfig?.gstNumber && restaurantConfig.gstNumber.trim().length > 0
   );
@@ -498,44 +685,33 @@ export default function PosPage() {
   const totalGstRate = sgstRate + cgstRate;
 
   const subtotal = useMemo(() => {
-    return cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+    return cart.reduce((acc, curr) => acc + curr.quantity * curr.price, 0);
   }, [cart]);
 
-  const sgstAmount = hasGstNumber ? Math.round(((subtotal * sgstRate) / 100) * 100) / 100 : 0;
-  const cgstAmount = hasGstNumber ? Math.round(((subtotal * cgstRate) / 100) * 100) / 100 : 0;
-  const totalTax = hasGstNumber ? Math.round((sgstAmount + cgstAmount) * 100) / 100 : 0;
+  const cartTotalItems = useMemo(
+    () => cart.reduce((acc, curr) => acc + curr.quantity, 0),
+    [cart]
+  );
 
-  // Grand Total for currently staged cart items
+  const sgstAmount = hasGstNumber ? Number(((subtotal * sgstRate) / 100).toFixed(2)) : 0;
+  const cgstAmount = hasGstNumber ? Number(((subtotal * cgstRate) / 100).toFixed(2)) : 0;
+  const totalTaxAmount = hasGstNumber ? Number((sgstAmount + cgstAmount).toFixed(2)) : 0;
+
+  // Grand Total for currently staged items
   const grandTotal = hasGstNumber
-    ? Math.max(0, Math.round((subtotal + totalTax - discountAmount) * 100) / 100)
-    : Math.max(0, Math.round((subtotal - discountAmount) * 100) / 100);
+    ? Math.max(0, Number((subtotal + totalTaxAmount - discountAmount).toFixed(2)))
+    : Math.max(0, Number((subtotal - discountAmount).toFixed(2)));
 
-  // Consolidated dining total (Existing running table items + new cart items)
+  // Consolidated Dining Total
   const existingTableTotal = activeTableOrder ? Number(activeTableOrder.totalAmount || 0) : 0;
   const consolidatedGrandTotal = Math.round((existingTableTotal + grandTotal) * 100) / 100;
-  const payableGrandTotal = activeTableOrder ? consolidatedGrandTotal : grandTotal;
+  const payableGrandTotal = activeTableOrder && cart.length === 0 ? existingTableTotal : (activeTableOrder ? consolidatedGrandTotal : grandTotal);
 
-  // Cash change calculation
-  const numericTendered = parseFloat(tenderedAmount) || payableGrandTotal;
-  const changeToReturn = paymentMode === 'CASH' ? Math.max(0, Math.round((numericTendered - payableGrandTotal) * 100) / 100) : 0;
+  // Cash Tendered & Change Return
+  const posNumericTendered = parseFloat(posTenderedText) || 0;
+  const posChangeToReturn = Math.max(0, posNumericTendered - payableGrandTotal);
 
-  // Split calculation
-  const numSplitCash = parseFloat(splitCash) || 0;
-  const numSplitDigital = parseFloat(splitDigital) || 0;
-  const splitTotal = numSplitCash + numSplitDigital;
-  const isSplitBalanced = Math.abs(splitTotal - payableGrandTotal) < 0.01;
-
-  // Open Settle Modal Helper
-  const handleOpenSettleModal = () => {
-    setPaymentMode('CASH');
-    setTenderedAmount(String(payableGrandTotal));
-    setSplitCash(String(Math.floor(payableGrandTotal / 2)));
-    setSplitDigital(String(Math.ceil(payableGrandTotal / 2)));
-    setShowB2bFields(false);
-    setSettleModalOpen(true);
-  };
-
-  // Keyboard Hotkeys Listener (F1: Search, F2: Pay, F3: KOT, F4: Clear, Esc: Close)
+  // 9. Keyboard Shortcuts Listener (F1: Search, F2: Settle, F3: KOT, F4: Clear, Esc: Close)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'F1' || (e.altKey && e.key.toLowerCase() === 's')) {
@@ -545,24 +721,30 @@ export default function PosPage() {
       } else if (e.key === 'F2') {
         e.preventDefault();
         if (cart.length > 0 || activeTableOrder) {
-          handleOpenSettleModal();
+          handleCheckout(PosCheckoutModes.PAY_AND_SETTLE);
         }
       } else if (e.key === 'F3') {
         e.preventDefault();
         if (cart.length > 0) {
-          executeOrder(true);
+          handleCheckout(PosCheckoutModes.KOT_PAY_LATER);
         }
       } else if (e.key === 'F4') {
         e.preventDefault();
-        if (cart.length > 0 && window.confirm('Clear active cart?')) {
-          clearCart();
+        if (cart.length > 0) {
+          showAlert(
+            'Clear Cart?',
+            'Are you sure you want to discard all items in the active cart?',
+            'warning',
+            'Clear',
+            'Cancel',
+            clearCart
+          );
         }
       } else if (e.key === 'Escape') {
         setCustomizingItem(null);
-        setNumpadCartItem(null);
+        setNumpadItem(null);
         setParkedModalOpen(false);
-        setTableModalOpen(false);
-        setSettleModalOpen(false);
+        setCartDrawerOpen(false);
       }
     };
 
@@ -570,170 +752,177 @@ export default function PosPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [cart, activeTableOrder, payableGrandTotal]);
 
-  // Place Order Execution (Send KOT vs Pay & Settle)
-  const executeOrder = async (isPostPaidKOT: boolean) => {
-    if (isPlacingOrder) return;
-
-    // Direct settlement of an existing active table when cart is empty
-    if (cart.length === 0) {
-      if (activeTableOrder && !isPostPaidKOT) {
-        try {
-          setIsPlacingOrder(true);
-
-          if (paymentMode === 'SPLIT' && !isSplitBalanced) {
-            alert(`Split amounts (₹${splitTotal}) do not match payable total (₹${payableGrandTotal})`);
-            return;
-          }
-
-          const effectivePaymentMode =
-            paymentMode === 'SPLIT'
-              ? `SPLIT (Cash ₹${numSplitCash} + ${splitDigitalMode} ₹${numSplitDigital})`
-              : paymentMode;
-
-          await orderRemoteDataSource.settleOrder(activeTableOrder.id, {
-            orderId: activeTableOrder.id,
-            paymentMode: effectivePaymentMode,
-            discountAmount,
-            tenderedAmount: paymentMode === 'CASH' && numericTendered > 0 ? numericTendered : undefined,
-            changeAmount: paymentMode === 'CASH' && changeToReturn > 0 ? changeToReturn : undefined,
-            billingMode: BillingModes.PRE_PAID,
-            remarks: showB2bFields && customerGstin.trim() ? `B2B: ${companyName.trim()} | GSTIN: ${customerGstin.trim()}` : undefined,
-            orderStatus: 'Settled',
-          });
-
-          // Print settled invoice
-          const receiptData: ReceiptData = {
-            orderId: activeTableOrder.id,
-            orderNumber: String(activeTableOrder.orderNumber || activeTableOrder.id),
-            pickupToken: String(activeTableOrder.pickupToken || activeTableOrder.id),
-            restaurantName: restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant',
-            address: restaurantConfig?.address || activeRestaurant?.address || '',
-            city: restaurantConfig?.city || activeRestaurant?.city || '',
-            state: restaurantConfig?.state || activeRestaurant?.state || '',
-            contactPhone: restaurantConfig?.contactNumber || (activeRestaurant as any)?.contactNumber || activeRestaurant?.ownerMobile || '',
-            gstNumber: hasGstNumber ? (restaurantConfig?.gstNumber || '') : undefined,
-            customerName: companyName.trim() || activeTableOrder.customerName || 'Dine-In Guest',
-            customerPhone: activeTableOrder.mobileNumber || undefined,
-            orderType: 'DINE_IN',
-            tableName: selectedTable ? `Table ${selectedTable.tableNumber}` : activeTableOrder.tableName,
-            sectionName: selectedTable?.sectionName || (activeTableOrder as any)?.sectionName,
-            items: (activeTableOrder.items || []).map((c: any) => ({
-              itemName: c.itemName || 'Dish',
-              quantity: c.quantity || 1,
-              unitPrice: c.unitPrice || c.amount || 0,
-              totalPrice: c.totalPrice || c.totalAmount || (c.quantity * c.unitPrice) || 0,
-            })),
-            subtotal: activeTableOrder.subtotal || existingTableTotal,
-            discountAmount: discountAmount || activeTableOrder.discountAmount || 0,
-            cgstPercentage: hasGstNumber ? cgstRate : undefined,
-            cgstAmount: hasGstNumber ? (activeTableOrder.cgst || 0) : undefined,
-            sgstPercentage: hasGstNumber ? sgstRate : undefined,
-            sgstAmount: hasGstNumber ? (activeTableOrder.sgst || 0) : undefined,
-            taxAmount: hasGstNumber ? ((activeTableOrder.cgst || 0) + (activeTableOrder.sgst || 0)) : 0,
-            grandTotal: payableGrandTotal,
-            paymentMode: effectivePaymentMode,
-            tenderedAmount: numericTendered,
-            changeAmount: changeToReturn,
-            date: new Date().toLocaleString('en-IN'),
-            footerMessage: customFooter || 'Thank you! Please visit again.',
-          };
-
-          if (autoPrintReceipt) {
-            WebPrinterService.printReceipt(receiptData, paperWidth).catch(() => {});
-          }
-
-          setOrderSuccessData({
-            orderId: activeTableOrder.id,
-            orderType: 'DINE_IN',
-            table: selectedTable?.tableNumber,
-            customerName: companyName.trim() || activeTableOrder.customerName,
-            customerPhone: activeTableOrder.mobileNumber,
-            items: activeTableOrder.items || [],
-            subtotal: activeTableOrder.subtotal || existingTableTotal,
-            totalTax: hasGstNumber ? ((activeTableOrder.cgst || 0) + (activeTableOrder.sgst || 0)) : 0,
-            grandTotal: payableGrandTotal,
-            paymentMode: effectivePaymentMode,
-            tendered: numericTendered,
-            change: changeToReturn,
-            date: new Date().toLocaleTimeString(),
-            receiptData,
-          });
-
-          setActiveTableOrder(null);
-          clearCart();
-          setSettleModalOpen(false);
-          return;
-        } catch (err: any) {
-          alert(err?.message || 'Failed to settle table order.');
-          return;
-        } finally {
-          setIsPlacingOrder(false);
-        }
-      }
-
-      alert('Please add dishes to the cart before placing an order.');
+  // 10. Order Placement & Checkout Execution
+  const handleCheckout = async (mode: (typeof PosCheckoutModes)[keyof typeof PosCheckoutModes]) => {
+    if (cart.length === 0 && !activeTableOrder) {
+      showAlert('Cart is Empty', 'Please add items to cart before placing an order.', 'warning');
       return;
     }
 
-    // 1. Subscription Safeguard
-    if (!canTakeOrders()) {
-      openRenewalModal();
-      return;
-    }
-
-    // 2. Inactive Restaurant Safeguard
-    if (activeRestaurant?.isActive === false || restaurantConfig?.isActive === false) {
-      alert('This store is currently marked as inactive in Menza Admin. You cannot take or place orders while inactive.');
-      return;
-    }
-
-    // 3. Store Operating Status Safeguard (Closed / Paused)
-    if (operatingStatus && !operatingStatus.canPlaceOrder) {
-      alert(
-        operatingStatus.statusMessage ||
-          'This restaurant outlet is currently marked as closed or paused for taking orders. Please resume or open the store in Store Controls before taking orders.'
-      );
-      setOperatingModalOpen(true);
-      return;
-    }
-
-    // 4. Prepaid Wallet Zero / Negative Safeguard
-    const walletBal = operatingStatus?.walletBalance ?? restaurantConfig?.walletBalance;
-    if (operatingStatus?.status === 'WALLET_EXHAUSTED' || (walletBal !== undefined && walletBal <= 0)) {
-      alert(
-        `Prepaid Wallet Exhausted 💳\n\nYour restaurant's prepaid wallet balance is ₹${(walletBal ?? 0).toFixed(2)}. Orders and billing cannot be processed while the wallet balance is zero or negative.\n\nPlease recharge your wallet to continue taking orders.`
-      );
-      router.push('/wallet');
-      return;
-    }
-
-    // 5. Customer Phone Validation
     const cleanPhone = customerPhone.replace(/[^0-9]/g, '').trim();
     if (cleanPhone.length > 0 && cleanPhone.length !== 10) {
-      alert('Customer mobile number must be exactly 10 digits.');
+      showAlert('Invalid Phone Number 📱', 'Phone number must be exactly 10 digits.', 'warning');
       return;
     }
 
-    // 6. Dine-In Plan Entitlement & Table Selection
-    if (orderType === 'DINE_IN' && !hasEntitlement('IsTableOrderingEnabled')) {
-      alert('Table / Dine-in ordering is not included in your active subscription plan. Please upgrade your plan to unlock.');
-      openRenewalModal();
+    const cleanName = (customerName || '').slice(0, 50).trim();
+    const effectiveCustomerName =
+      cleanName || (selectedTable ? `Table ${selectedTable.tableNumber}` : 'Walk-in Customer');
+
+    // Wallet Safeguard
+    const isWalletExhausted =
+      operatingStatus?.status === 'WALLET_EXHAUSTED' ||
+      (restaurantConfig?.walletBalance !== undefined && restaurantConfig.walletBalance <= 0);
+
+    if (isWalletExhausted) {
+      showAlert(
+        'Prepaid Wallet Exhausted 💳',
+        `Your restaurant's prepaid wallet balance is ₹${(restaurantConfig?.walletBalance ?? 0).toFixed(2)}. Orders and billing cannot be processed while wallet balance is zero or negative.\n\nPlease recharge your wallet to continue.`,
+        'warning',
+        'Recharge Wallet',
+        'Cancel',
+        () => setWalletModalOpen(true)
+      );
       return;
     }
 
-    if (orderType === 'DINE_IN' && !selectedTable) {
-      alert('Please select a dining table for Dine-in orders.');
-      setTableModalOpen(true);
+    // Subscription Safeguard
+    if (isSubscriptionExpired || subscriptionLifecycleState === 'EXPIRED') {
+      showAlert(
+        'Subscription Expired 🔒',
+        'Your restaurant subscription has expired beyond the grace period. Order taking and billing are locked until your plan is renewed.\n\nPlease renew your plan to resume operations.',
+        'danger',
+        'Renew Subscription',
+        'Cancel',
+        () => setSubscriptionModalOpen(true)
+      );
       return;
     }
 
-    if (!isPostPaidKOT && paymentMode === 'SPLIT' && !isSplitBalanced) {
-      alert(`Split amounts (₹${splitTotal}) do not match payable total (₹${payableGrandTotal})`);
+    // Inactive Store / Operating Status Safeguard
+    const isInactive = activeRestaurant?.isActive === false || restaurantConfig?.isActive === false;
+    const isClosedOrPaused = operatingStatus && !operatingStatus.canPlaceOrder;
+
+    if (isInactive || isClosedOrPaused) {
+      const title = isInactive ? 'Store is Inactive 🔴' : 'Store is Closed / Paused ⚠️';
+      const msg = isInactive
+        ? 'This restaurant is currently inactive and offline in Menza Admin. You cannot take or place orders while inactive.'
+        : operatingStatus?.statusMessage || 'This outlet is currently marked as closed or paused for taking orders. Please resume or reopen the store before taking orders.';
+
+      showAlert(
+        title,
+        msg,
+        'warning',
+        isInactive ? 'OK' : 'Open Store Controls',
+        undefined,
+        isInactive ? undefined : () => setOperatingModalOpen(true)
+      );
+      return;
+    }
+
+    // Dine-In Plan Allowance Safeguard
+    if (selectedOrderType === 1 && !hasEntitlement('IsTableOrderingEnabled')) {
+      showAlert(
+        'Feature Locked 🔒',
+        'Dine-in / Table ordering is not included in your active subscription plan. Please upgrade to unlock this channel.',
+        'warning',
+        'Upgrade Plan',
+        'Cancel',
+        openRenewalModal
+      );
       return;
     }
 
     try {
-      setIsPlacingOrder(true);
+      if (mode === PosCheckoutModes.KOT_PAY_LATER) {
+        setIsKotLoading(true);
+      } else {
+        setIsSettling(true);
+      }
+
+      // Check if settling existing table order directly with no new cart items
+      if (cart.length === 0 && activeTableOrder && mode === PosCheckoutModes.PAY_AND_SETTLE) {
+        const effectivePaymentMode = selectedPaymentMode;
+
+        await orderRemoteDataSource.settleOrder(activeTableOrder.id, {
+          orderId: activeTableOrder.id,
+          paymentMode: effectivePaymentMode,
+          discountAmount,
+          tenderedAmount: selectedPaymentMode === 'CASH' && posNumericTendered > 0 ? posNumericTendered : undefined,
+          changeAmount: selectedPaymentMode === 'CASH' && posChangeToReturn > 0 ? posChangeToReturn : undefined,
+          billingMode: BillingModes.PRE_PAID,
+          orderStatus: 'Settled',
+        });
+        WalletEvents.emit();
+
+        const receiptData: ReceiptData = {
+          orderId: activeTableOrder.id,
+          orderNumber: String(activeTableOrder.orderNumber || activeTableOrder.id),
+          pickupToken: String(activeTableOrder.pickupToken || activeTableOrder.id),
+          restaurantName: restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant',
+          address: restaurantConfig?.address || activeRestaurant?.address || '',
+          city: restaurantConfig?.city || activeRestaurant?.city || '',
+          state: restaurantConfig?.state || activeRestaurant?.state || '',
+          contactPhone: restaurantConfig?.contactNumber || (activeRestaurant as any)?.contactNumber || activeRestaurant?.ownerMobile || '',
+          gstNumber: hasGstNumber ? (restaurantConfig?.gstNumber || '') : undefined,
+          customerName: activeTableOrder.customerName || 'Dine-In Guest',
+          customerPhone: activeTableOrder.mobileNumber || undefined,
+          orderType: 'DINE_IN',
+          tableName: selectedTable ? `Table ${selectedTable.tableNumber}` : activeTableOrder.tableName,
+          sectionName: selectedTable?.sectionName || (activeTableOrder as any)?.sectionName,
+          items: (activeTableOrder.items || []).map((c: any) => ({
+            itemName: c.itemName || 'Dish',
+            quantity: c.quantity || 1,
+            unitPrice: c.unitPrice || c.amount || 0,
+            totalPrice: c.totalPrice || c.totalAmount || (c.quantity * c.unitPrice) || 0,
+          })),
+          subtotal: activeTableOrder.subtotal || existingTableTotal,
+          discountAmount: discountAmount || activeTableOrder.discountAmount || 0,
+          cgstPercentage: hasGstNumber ? cgstRate : undefined,
+          cgstAmount: hasGstNumber ? (activeTableOrder.cgst || 0) : undefined,
+          sgstPercentage: hasGstNumber ? sgstRate : undefined,
+          sgstAmount: hasGstNumber ? (activeTableOrder.sgst || 0) : undefined,
+          taxAmount: hasGstNumber ? ((activeTableOrder.cgst || 0) + (activeTableOrder.sgst || 0)) : 0,
+          grandTotal: payableGrandTotal,
+          paymentMode: effectivePaymentMode,
+          tenderedAmount: posNumericTendered,
+          changeAmount: posChangeToReturn,
+          date: new Date().toLocaleString('en-IN'),
+          footerMessage: customFooter || 'Thank you! Please visit again.',
+        };
+
+        if (autoPrintReceipt) {
+          WebPrinterService.printReceipt(receiptData, paperWidth).catch(() => {});
+        }
+
+        setOrderSuccessData({
+          orderId: activeTableOrder.id,
+          orderType: 'Dine-in',
+          table: selectedTable?.tableNumber,
+          customerName: activeTableOrder.customerName,
+          customerPhone: activeTableOrder.mobileNumber,
+          items: activeTableOrder.items || [],
+          subtotal: activeTableOrder.subtotal || existingTableTotal,
+          totalTax: hasGstNumber ? ((activeTableOrder.cgst || 0) + (activeTableOrder.sgst || 0)) : 0,
+          grandTotal: payableGrandTotal,
+          paymentMode: effectivePaymentMode,
+          tendered: posNumericTendered,
+          change: posChangeToReturn,
+          date: new Date().toLocaleTimeString(),
+          receiptData,
+        });
+
+        setActiveTableOrder(null);
+        clearCart();
+        setCartDrawerOpen(false);
+        return;
+      }
+
+      // Normal order placement with staged cart items
+      const isPostPaid = mode === PosCheckoutModes.KOT_PAY_LATER;
+      const orderTendered = (!isPostPaid && selectedPaymentMode === 'CASH' && posNumericTendered > 0) ? posNumericTendered : undefined;
+      const orderChange = (!isPostPaid && selectedPaymentMode === 'CASH' && posChangeToReturn > 0) ? posChangeToReturn : undefined;
+
       const itemsPayload = cart.map((item) => ({
         itemId: item.itemId,
         itemName: item.itemName,
@@ -743,15 +932,7 @@ export default function PosPage() {
         totalAmount: item.price * item.quantity,
       }));
 
-      const orderTypeId =
-        orderType === 'DINE_IN' ? 1 : orderType === 'TAKEAWAY' ? 2 : orderType === 'DELIVERY' ? 3 : 4;
-
-      const effectiveCustomerName = companyName.trim() || customerName.trim() || (selectedTable ? `Table ${selectedTable.tableNumber}` : 'Walk-in Customer');
-
-      const effectivePaymentMode =
-        paymentMode === 'SPLIT'
-          ? `SPLIT (Cash ₹${numSplitCash} + ${splitDigitalMode} ₹${numSplitDigital})`
-          : paymentMode;
+      const effectivePaymentMode = selectedPaymentMode;
 
       const orderPayload: any = {
         restaurantId: currentRestId,
@@ -760,15 +941,14 @@ export default function PosPage() {
         tableId: selectedTable?.id,
         tableNumber: selectedTable?.tableNumber,
         sectionName: selectedTable?.sectionName,
-        orderTypeId,
+        orderTypeId: selectedTable ? 1 : selectedOrderType,
         orderStatus: 'Confirmed',
-        paymentStatus: isPostPaidKOT ? 'Pending' : 'Paid',
-        billingMode: isPostPaidKOT ? BillingModes.POST_PAID : BillingModes.PRE_PAID,
-        paymentMode: isPostPaidKOT ? undefined : effectivePaymentMode,
-        tenderedAmount: !isPostPaidKOT && paymentMode === 'CASH' && numericTendered > 0 ? numericTendered : undefined,
-        changeAmount: !isPostPaidKOT && paymentMode === 'CASH' && changeToReturn > 0 ? changeToReturn : undefined,
-        source: selectedTable ? `Table ${selectedTable.tableNumber}` : 'POS_ADMIN',
-        remarks: showB2bFields && customerGstin.trim() ? `B2B: ${companyName.trim()} | GSTIN: ${customerGstin.trim()}` : undefined,
+        paymentStatus: isPostPaid ? 'Pending' : 'Paid',
+        billingMode: isPostPaid ? BillingModes.POST_PAID : BillingModes.PRE_PAID,
+        paymentMode: isPostPaid ? undefined : effectivePaymentMode,
+        tenderedAmount: orderTendered,
+        changeAmount: orderChange,
+        source: selectedTable ? `Table ${selectedTable.tableNumber}` : PosOrderSources.POS_ADMIN,
         cgst: cgstAmount,
         sgst: sgstAmount,
         totalAmount: grandTotal,
@@ -777,31 +957,45 @@ export default function PosPage() {
 
       const orderId = await orderRepository.placeOrder(orderPayload);
 
-      if (orderId && orderId > 0) {
-        markOrderAsKnown(orderId, isPostPaidKOT ? 'Pending' : 'Confirmed');
+      let fetchedOrder: OrderMaster | null = null;
+      let pickupToken: string | undefined = undefined;
 
-        // If this was an instant settle order, mark it as settled
-        if (!isPostPaidKOT) {
+      if (orderId && orderId > 0) {
+        markOrderAsKnown(orderId, isPostPaid ? 'Pending' : 'Confirmed');
+
+        try {
+          fetchedOrder = await orderRepository.getOrder(orderId);
+          if (fetchedOrder && fetchedOrder.pickupToken) {
+            pickupToken = fetchedOrder.pickupToken;
+          }
+        } catch {}
+
+        if (!isPostPaid) {
           try {
             await orderRemoteDataSource.settleOrder(orderId, {
               orderId,
               paymentMode: effectivePaymentMode,
               discountAmount,
-              tenderedAmount: paymentMode === 'CASH' && numericTendered > 0 ? numericTendered : undefined,
-              changeAmount: paymentMode === 'CASH' && changeToReturn > 0 ? changeToReturn : undefined,
+              tenderedAmount: orderTendered,
+              changeAmount: orderChange,
               billingMode: BillingModes.PRE_PAID,
-              remarks: orderPayload.remarks,
               orderStatus: 'Settled',
             });
+            WalletEvents.emit();
           } catch (settleErr) {
-            console.warn('Instant settle warning:', settleErr);
+            console.warn('Instant settle call warning:', settleErr);
           }
         }
 
+        const selectedTypeObj = orderTypes.find((t) => t.id === selectedOrderType);
+        const effectiveOrderType = selectedTable
+          ? 'Dine-in'
+          : fetchedOrder?.orderTypeName || selectedTypeObj?.typeName || 'Counter';
+
         const receiptData: ReceiptData = {
           orderId,
-          orderNumber: String(orderId),
-          pickupToken: String(orderId),
+          orderNumber: String(fetchedOrder?.orderNumber || orderId),
+          pickupToken: pickupToken || String(fetchedOrder?.orderNumber || orderId),
           restaurantName: restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant',
           address: restaurantConfig?.address || activeRestaurant?.address || '',
           city: restaurantConfig?.city || activeRestaurant?.city || '',
@@ -810,7 +1004,7 @@ export default function PosPage() {
           gstNumber: hasGstNumber ? (restaurantConfig?.gstNumber || '') : undefined,
           customerName: effectiveCustomerName,
           customerPhone: cleanPhone || undefined,
-          orderType,
+          orderType: effectiveOrderType,
           tableName: selectedTable ? `Table ${selectedTable.tableNumber}` : undefined,
           sectionName: selectedTable?.sectionName || undefined,
           items: cart.map((c) => ({
@@ -819,6 +1013,8 @@ export default function PosPage() {
             unitPrice: c.price,
             totalPrice: c.price * c.quantity,
             cookingInstruction: c.notes,
+            stationName: c.stationName,
+            stationCode: c.stationCode,
           })),
           subtotal,
           discountAmount,
@@ -826,71 +1022,71 @@ export default function PosPage() {
           cgstAmount: hasGstNumber ? cgstAmount : undefined,
           sgstPercentage: hasGstNumber ? sgstRate : undefined,
           sgstAmount: hasGstNumber ? sgstAmount : undefined,
-          taxAmount: totalTax,
-          grandTotal,
-          paymentMode: isPostPaidKOT ? 'KOT (Pay Later)' : effectivePaymentMode,
-          tenderedAmount: numericTendered,
-          changeAmount: changeToReturn,
+          taxAmount: totalTaxAmount,
+          grandTotal: fetchedOrder?.totalAmount && fetchedOrder.totalAmount > 0 ? fetchedOrder.totalAmount : grandTotal,
+          paymentMode: isPostPaid ? 'KOT (Pay Later)' : effectivePaymentMode,
+          tenderedAmount: orderTendered,
+          changeAmount: orderChange,
           date: new Date().toLocaleString('en-IN'),
           footerMessage: customFooter || 'Thank you! Please visit again.',
         };
 
-        // Automatic Thermal Printing if enabled in Settings
-        if (!isPostPaidKOT) {
+        // Automatic Thermal Printing
+        if (!isPostPaid) {
           if (autoPrintReceipt && autoPrintKot) {
-            WebPrinterService.printBifurcatedOrder(receiptData, paperWidth, true, true).catch((err) =>
-              console.warn('Auto print bifurcated error:', err)
-            );
+            WebPrinterService.printBifurcatedOrder(receiptData, paperWidth, true, true).catch(() => {});
           } else if (autoPrintReceipt) {
-            WebPrinterService.printReceipt(receiptData, paperWidth).catch((err) =>
-              console.warn('Auto print receipt error:', err)
-            );
+            WebPrinterService.printReceipt(receiptData, paperWidth).catch(() => {});
           } else if (autoPrintKot) {
-            WebPrinterService.printStationKots(receiptData, paperWidth).catch((err) =>
-              console.warn('Auto print KOT error:', err)
-            );
+            WebPrinterService.printStationKots(receiptData, paperWidth).catch(() => {});
           }
         } else {
-          // KOT only
-          if (autoPrintKot || isPostPaidKOT) {
-            WebPrinterService.printStationKots(receiptData, paperWidth).catch((err) =>
-              console.warn('Auto print KOT error:', err)
-            );
+          if (autoPrintKot || isPostPaid) {
+            WebPrinterService.printStationKots(receiptData, paperWidth).catch(() => {});
           }
         }
 
-        setOrderSuccessData({
-          orderId,
-          orderType,
-          table: selectedTable?.tableNumber,
-          customerName: orderPayload.name,
-          customerPhone: cleanPhone,
-          items: cart,
-          subtotal,
-          totalTax,
-          grandTotal,
-          paymentMode: isPostPaidKOT ? 'KOT (Pay Later)' : effectivePaymentMode,
-          tendered: numericTendered,
-          change: changeToReturn,
-          date: new Date().toLocaleTimeString(),
-          receiptData,
-        });
-
-        if (isPostPaidKOT) {
-          clearCartOnly();
-          setSettleModalOpen(false);
-          if (selectedTable?.id) {
-            loadActiveTableOrder(selectedTable.id);
-          }
+        if (isPostPaid) {
+          showAlert(
+            'Sent to Kitchen (Pay Later) 🍳',
+            `Order #${orderId}${pickupToken ? ` (Token #${pickupToken})` : ''} placed for ${effectiveCustomerName}.\nStatus: Active Unsettled Order.`,
+            'success',
+            'OK',
+            undefined,
+            () => {
+              clearCart();
+              setCartDrawerOpen(false);
+              if (selectedTable?.id) {
+                loadActiveTableOrder(selectedTable.id);
+              }
+            }
+          );
         } else {
+          setOrderSuccessData({
+            orderId,
+            orderType: effectiveOrderType,
+            table: selectedTable?.tableNumber,
+            customerName: effectiveCustomerName,
+            customerPhone: cleanPhone,
+            items: cart,
+            subtotal,
+            totalTax: totalTaxAmount,
+            grandTotal,
+            paymentMode: effectivePaymentMode,
+            tendered: orderTendered,
+            change: orderChange,
+            date: new Date().toLocaleTimeString(),
+            receiptData,
+          });
           clearCart();
-          setSettleModalOpen(false);
+          setCartDrawerOpen(false);
         }
       }
     } catch (err: any) {
-      alert(err?.message || 'Failed to place order. Please try again.');
+      showAlert('Checkout Error', err?.message || 'Failed to process order. Please try again.', 'danger');
     } finally {
-      setIsPlacingOrder(false);
+      setIsKotLoading(false);
+      setIsSettling(false);
     }
   };
 
@@ -913,12 +1109,12 @@ export default function PosPage() {
       phone = entered.replace(/[^0-9]/g, '').slice(-10);
     }
     if (!phone || phone.length < 10) {
-      alert('Please enter a valid 10-digit mobile number');
+      showAlert('Invalid Mobile', 'Please enter a valid 10-digit mobile number', 'warning');
       return;
     }
 
     const url = WebWhatsAppService.getWhatsAppReceiptUrl(phone, {
-      restaurantName: activeRestaurant?.restaurantName || 'Menza Restaurant',
+      restaurantName: restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant',
       orderId: orderSuccessData.orderId,
       customerName: orderSuccessData.customerName,
       items: orderSuccessData.items,
@@ -928,778 +1124,408 @@ export default function PosPage() {
     window.open(url, '_blank');
   };
 
-  return (
-    <AuthGuard>
-      <AppShell>
-        <div className="flex h-full flex-col lg:flex-row overflow-hidden bg-[#FAF7F2] dark:bg-[#111418]">
-          {/* LEFT 65%: Menu Catalog & Category Filters */}
-          <div className="flex-1 flex flex-col overflow-hidden border-r border-[#E7E1DA] dark:border-[#2B3540]">
-            {/* Top POS Action Toolbar */}
-            <div className="border-b border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-3 sm:p-4 space-y-3">
-              {/* Row 1: Order Type Selector, Table Picker & Store Status */}
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  {/* Service Type Switcher */}
-                  <div className="flex items-center gap-1.5 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-1">
-                    {(['COUNTER', 'DINE_IN', 'TAKEAWAY', 'DELIVERY'] as const).map((type) => (
-                      <button
-                        key={type}
-                        onClick={() => {
-                          setOrderType(type);
-                          if (type === 'DINE_IN' && !selectedTable) {
-                            setTableModalOpen(true);
-                          }
-                        }}
-                        className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-all ${
-                          orderType === type
-                            ? 'bg-[#DE8626] text-white shadow-sm shadow-[#DE8626]/30'
-                            : 'text-[#667085] dark:text-[#94A3B8] hover:text-[#1E2930] dark:hover:text-[#F3F4F6]'
-                        }`}
-                      >
-                        {type === 'DINE_IN' ? 'Dine-In' : type === 'TAKEAWAY' ? 'Takeaway' : type === 'DELIVERY' ? 'Delivery' : 'Counter'}
-                      </button>
-                    ))}
-                  </div>
+  const storeDisplayName =
+    restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant';
 
-                  {/* Table Picker Button (If Dine-In) */}
-                  {orderType === 'DINE_IN' && (
-                    <button
-                      onClick={() => setTableModalOpen(true)}
-                      className="flex items-center gap-2 rounded-xl border border-[#DE8626] bg-amber-500/10 px-3 py-1.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-colors"
-                    >
-                      <TableIcon className="h-4 w-4" />
-                      <span>{selectedTable ? `Table #${selectedTable.tableNumber}` : 'Assign Table'}</span>
-                    </button>
-                  )}
-
-                  {/* Store Operating Status Indicator Pill */}
-                  <button
-                    onClick={() => setOperatingModalOpen(true)}
-                    className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-bold transition-all ${
-                      operatingStatus?.status === 'OPEN' || (!operatingStatus && restaurantConfig?.isActive !== false)
-                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/20'
-                        : operatingStatus?.status === 'PAUSED'
-                        ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400 hover:bg-amber-500/20'
-                        : 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-400 hover:bg-red-500/20'
-                    }`}
-                    title="Manage Store Operating Status (Open / Pause / Close)"
-                  >
-                    <span
-                      className={`h-2 w-2 rounded-full ${
-                        operatingStatus?.status === 'OPEN' || (!operatingStatus && restaurantConfig?.isActive !== false)
-                          ? 'bg-emerald-500 animate-pulse'
-                          : operatingStatus?.status === 'PAUSED'
-                          ? 'bg-amber-500 animate-pulse'
-                          : 'bg-red-500'
-                      }`}
-                    />
-                    <Store className="h-3.5 w-3.5" />
-                    <span>
-                      {operatingStatus?.status === 'PAUSED'
-                        ? 'Store Paused'
-                        : operatingStatus?.status === 'CLOSED'
-                        ? 'Store Closed'
-                        : operatingStatus?.status === 'WALLET_EXHAUSTED'
-                        ? 'Wallet Empty'
-                        : 'Store Open'}
-                    </span>
-                  </button>
-                </div>
-
-                {/* Right: Veg / Non-Veg Toggle & Keyboard Hints */}
-                <div className="flex items-center gap-2">
-                  <div className="hidden xl:flex items-center gap-1.5 text-[10px] text-[#667085] bg-[#FAF7F2] dark:bg-[#151A20] px-2.5 py-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540]">
-                    <Keyboard className="h-3.5 w-3.5 text-[#DE8626]" />
-                    <span>F1: Search • F2: Settle • F3: KOT</span>
-                  </div>
-
-                  <div className="flex items-center gap-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-1 text-xs">
-                    <button
-                      onClick={() => setVegFilter('ALL')}
-                      className={`rounded-lg px-2.5 py-1 font-semibold ${
-                        vegFilter === 'ALL'
-                          ? 'bg-white dark:bg-[#1B2127] text-[#1E2930] dark:text-[#F3F4F6] shadow-sm'
-                          : 'text-[#667085]'
-                      }`}
-                    >
-                      All
-                    </button>
-                    <button
-                      onClick={() => setVegFilter('VEG')}
-                      className={`flex items-center gap-1 rounded-lg px-2.5 py-1 font-semibold ${
-                        vegFilter === 'VEG' ? 'bg-emerald-500 text-white shadow-sm' : 'text-[#667085]'
-                      }`}
-                    >
-                      <span className="h-2 w-2 rounded-full bg-emerald-300" />
-                      Veg
-                    </button>
-                    <button
-                      onClick={() => setVegFilter('NON_VEG')}
-                      className={`flex items-center gap-1 rounded-lg px-2.5 py-1 font-semibold ${
-                        vegFilter === 'NON_VEG' ? 'bg-red-500 text-white shadow-sm' : 'text-[#667085]'
-                      }`}
-                    >
-                      <span className="h-2 w-2 rounded-full bg-red-300" />
-                      Non-Veg
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Row 2: Search Bar */}
-              <div className="relative">
-                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-[#667085]" />
-                <input
-                  id="pos-menu-search-input"
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search dishes or item codes (e.g. Biryani, Naan, 101) [Press F1]..."
-                  className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] pl-10 pr-4 py-2 text-xs font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626] transition-colors"
-                />
-                {searchQuery && (
-                  <button
-                    onClick={() => setSearchQuery('')}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#667085] hover:text-[#1E2930]"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                )}
-              </div>
+  // Renders the rich payment controls for both desktop panel and mobile/tablet drawer
+  const renderCheckoutControls = () => (
+    <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+      {/* 1. SINGLE UNIFIED SCROLLABLE CONTAINER */}
+      <div className="flex-1 overflow-y-auto min-h-0 divide-y divide-[#E7E1DA]/60 dark:divide-[#2B3540]/60">
+        {/* Customer Details Inputs */}
+        <div className="p-3 sm:p-3.5 space-y-2 bg-[#FFFFFF] dark:bg-[#1B2127]">
+          <div className="flex gap-2">
+            <div className="flex-1 relative">
+              <User className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#DE8626]" />
+              <input
+                type="text"
+                maxLength={50}
+                value={customerName}
+                onChange={(e) => setCustomerName(e.target.value.slice(0, 50))}
+                placeholder="Guest Name (Max 50)"
+                className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] pl-8 pr-2 py-1.5 text-xs text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
+              />
+              {isCustomerLookupVerified && (
+                <span className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 text-[9px] font-bold text-emerald-600">
+                  <Check className="h-3 w-3" />
+                  Verified
+                </span>
+              )}
             </div>
 
-            {/* Category Horizontal Scrolling Tabs */}
-            <div className="flex items-center gap-2 overflow-x-auto border-b border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] px-4 py-2.5">
-              <button
-                onClick={() => setSelectedCategory(null)}
-                className={`shrink-0 rounded-xl px-3.5 py-1.5 text-xs font-bold transition-all ${
-                  selectedCategory === null
-                    ? 'bg-[#DE8626] text-white shadow-sm shadow-[#DE8626]/20'
-                    : 'border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#667085] dark:text-[#94A3B8] hover:border-[#DE8626]'
-                }`}
-              >
-                All Menu ({items.length})
-              </button>
-              {categories.map((cat) => (
-                <button
-                  key={cat.id}
-                  onClick={() => setSelectedCategory(cat.id)}
-                  className={`shrink-0 rounded-xl px-3.5 py-1.5 text-xs font-bold transition-all ${
-                    selectedCategory === cat.id
-                      ? 'bg-[#DE8626] text-white shadow-sm shadow-[#DE8626]/20'
-                      : 'border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#667085] dark:text-[#94A3B8] hover:border-[#DE8626]'
-                  }`}
-                >
-                  {cat.categoryName}
-                </button>
-              ))}
-            </div>
-
-            {/* Dishes / Menu Items Grid */}
-            <div className="flex-1 overflow-y-auto p-4">
-              {loading ? (
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                  {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
-                    <div
-                      key={n}
-                      className="h-32 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] animate-pulse"
-                    />
-                  ))}
-                </div>
-              ) : filteredItems.length === 0 ? (
-                <div className="py-20 text-center text-xs text-[#667085] dark:text-[#94A3B8]">
-                  No dishes found matching your search or filters.
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
-                  {filteredItems.map((item) => {
-                    const inCartCount = cart
-                      .filter((ci) => ci.itemId === item.id)
-                      .reduce((s, ci) => s + ci.quantity, 0);
-
-                    return (
-                      <div
-                        key={item.id}
-                        onClick={() => setCustomizingItem(item)}
-                        className={`group relative flex flex-col justify-between rounded-2xl border overflow-hidden shadow-sm transition-all cursor-pointer select-none ${
-                          inCartCount > 0
-                            ? 'border-[#DE8626] bg-amber-500/5 ring-1 ring-[#DE8626]'
-                            : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] hover:border-[#DE8626] hover:shadow-md'
-                        }`}
-                      >
-                        {/* Dish Image Banner */}
-                        <div className="relative h-24 sm:h-28 w-full overflow-hidden bg-amber-500/5 dark:bg-amber-500/5">
-                          <DishImage
-                            src={item.imageUrl}
-                            alt={item.itemName}
-                            isVeg={item.isVeg}
-                            showDietBadge
-                            fallbackIconSize={22}
-                          />
-                          {inCartCount > 0 && (
-                            <span className="absolute top-1.5 right-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-[#DE8626] text-[11px] font-extrabold text-white shadow-sm">
-                              {inCartCount}
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Card Details */}
-                        <div className="p-3 flex-1 flex flex-col justify-between">
-                          <div>
-                            <h4 className="text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6] line-clamp-2 leading-snug">
-                              {item.itemName}
-                            </h4>
-                            {item.portionDisplay && (
-                              <p className="text-[10px] text-[#667085] dark:text-[#94A3B8] mt-0.5">{item.portionDisplay}</p>
-                            )}
-                          </div>
-
-                          <div className="mt-2.5 flex items-center justify-between pt-2 border-t border-[#E7E1DA]/40 dark:border-[#2B3540]/40">
-                            <div>
-                              <span className="text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
-                                ₹{item.price}
-                              </span>
-                            </div>
-
-                            <div className="flex items-center gap-1.5">
-                              {/* Quick 1-tap Add Button */}
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  addToCartQuick(item);
-                                }}
-                                title="Quick Add 1 Qty"
-                                className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#FAF7F2] dark:bg-[#151A20] text-[#DE8626] hover:bg-[#DE8626] hover:text-white transition-colors"
-                              >
-                                <Plus className="h-4 w-4" />
-                              </button>
-
-                              {/* Customize Button */}
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setCustomizingItem(item);
-                                }}
-                                title="Customize Portions & Addons"
-                                className="flex h-7 w-7 items-center justify-center rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] text-[#667085] hover:text-[#DE8626] hover:border-[#DE8626] transition-colors"
-                              >
-                                <SlidersHorizontal className="h-3.5 w-3.5" />
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+            <div className="w-32 relative">
+              <Phone className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#DE8626]" />
+              <input
+                type="tel"
+                maxLength={10}
+                value={customerPhone}
+                onChange={(e) => handlePhoneChange(e.target.value)}
+                placeholder="Phone (10d)"
+                className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] pl-8 pr-2 py-1.5 text-xs text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
+              />
+              {isLookingUpCustomer && (
+                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[9px] text-[#DE8626] animate-pulse">
+                  ...
+                </span>
               )}
             </div>
           </div>
 
-          {/* RIGHT 35%: Sticky Checkout & Cart Panel */}
-          <div className="w-full lg:w-96 flex flex-col border-t lg:border-t-0 border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127]">
-            {/* Cart Header */}
-            <div className="flex items-center justify-between border-b border-[#E7E1DA] dark:border-[#2B3540] p-4 bg-[#FAF7F2] dark:bg-[#151A20]">
-              <div className="flex items-center gap-2">
-                <ShoppingBag className="h-5 w-5 text-[#DE8626]" />
-                <h3 className="text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6]">
-                  Order Cart ({cart.reduce((s, i) => s + i.quantity, 0)})
-                </h3>
-              </div>
-
-              <div className="flex items-center gap-2">
-                {/* Parked Carts Trigger Pill */}
+          {/* Running Table Order Banner */}
+          {activeTableOrder && (
+            <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-2.5 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <Utensils className="h-4 w-4 text-[#DE8626] shrink-0" />
+                  <div>
+                    <span className="text-xs font-bold text-[#DE8626] block">
+                      Table #{selectedTable?.tableNumber} • Running Tab #{activeTableOrder.orderNumber || activeTableOrder.id}
+                    </span>
+                    <span className="text-[10px] text-[#667085] dark:text-[#94A3B8]">
+                      {activeTableOrder.items?.length || 0} active item{(activeTableOrder.items?.length || 0) !== 1 ? 's' : ''} in kitchen
+                    </span>
+                  </div>
+                </div>
                 <button
                   type="button"
-                  onClick={() => setParkedModalOpen(true)}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-extrabold transition-all ${
-                    parkedCarts.length > 0
-                      ? 'bg-amber-500/10 text-[#DE8626] border border-[#DE8626]/40 hover:bg-amber-500/20'
-                      : 'bg-black/5 dark:bg-white/5 text-[#667085] hover:text-[#1E2930]'
-                  }`}
-                  title="View Held / Parked Carts"
+                  onClick={() => setShowRunningTableDetails(!showRunningTableDetails)}
+                  className="flex items-center gap-1 text-[11px] font-bold text-[#DE8626] hover:underline"
                 >
-                  <Clock className="h-3.5 w-3.5" />
-                  <span>Held ({parkedCarts.length})</span>
-                </button>
-
-                {cart.length > 0 && (
-                  <button
-                    onClick={clearCart}
-                    className="flex items-center gap-1 text-[11px] font-semibold text-red-500 hover:underline"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    <span>Clear</span>
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Customer & Table Meta */}
-            <div className="p-3 border-b border-[#E7E1DA]/60 dark:border-[#2B3540]/60 space-y-2">
-              <div className="flex gap-2">
-                <div className="flex-1 relative">
-                  <input
-                    type="text"
-                    value={customerName}
-                    onChange={(e) => setCustomerName(e.target.value)}
-                    placeholder="Customer Name (Optional)"
-                    className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3 py-1.5 text-xs text-[#1E2930] dark:text-[#F3F4F6] outline-none"
-                  />
-                  {isCustomerLookupVerified && (
-                    <span className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 text-[9px] font-bold text-emerald-600">
-                      <Check className="h-3 w-3" />
-                      Verified
-                    </span>
-                  )}
-                </div>
-
-                <div className="w-32 relative">
-                  <input
-                    type="tel"
-                    value={customerPhone}
-                    onChange={(e) => handlePhoneChange(e.target.value)}
-                    placeholder="Phone (10d)"
-                    maxLength={10}
-                    className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3 py-1.5 text-xs text-[#1E2930] dark:text-[#F3F4F6] outline-none"
-                  />
-                  {isLookingUpCustomer && (
-                    <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[9px] text-[#DE8626] animate-pulse">
-                      ...
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {orderType === 'DINE_IN' && (
-                <div className="flex items-center justify-between rounded-xl bg-amber-500/10 px-3 py-2 text-xs font-semibold text-[#DE8626]">
-                  <span className="flex items-center gap-1.5">
-                    <TableIcon className="h-3.5 w-3.5" />
-                    {selectedTable ? `Table ${selectedTable.tableNumber}` : 'No table assigned'}
-                  </span>
-                  <button onClick={() => setTableModalOpen(true)} className="underline text-[11px]">
-                    {selectedTable ? 'Change' : 'Select'}
-                  </button>
-                </div>
-              )}
-
-              {/* Customer Pre-Bill Request Bar */}
-              {activeTableOrder &&
-                ((activeTableOrder.status || '').toUpperCase() === 'BILL_REQUESTED' ||
-                  (activeTableOrder as any).isBillRequest) && (
-                  <div className="flex items-center justify-between rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs font-bold text-rose-600 dark:text-rose-400 animate-pulse">
-                    <div className="flex items-center gap-1.5">
-                      <Receipt className="h-4 w-4" />
-                      <span>Guest requested Bill for this table!</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={handleOpenSettleModal}
-                      className="rounded-lg bg-rose-600 text-white px-2.5 py-1 text-[11px] font-extrabold hover:bg-rose-700 shadow-sm"
-                    >
-                      Settle Bill
-                    </button>
-                  </div>
-                )}
-
-              {/* Running Table Order Banner (If Table has an Active Tab) */}
-              {activeTableOrder && (
-                <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-2.5 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5">
-                      <Utensils className="h-4 w-4 text-[#DE8626] shrink-0" />
-                      <div>
-                        <span className="text-xs font-bold text-[#DE8626] block">
-                          Table #{selectedTable?.tableNumber} • Running Tab #{activeTableOrder.orderNumber || activeTableOrder.id}
-                        </span>
-                        <span className="text-[10px] text-[#667085] dark:text-[#94A3B8]">
-                          {activeTableOrder.items?.length || 0} active item{(activeTableOrder.items?.length || 0) !== 1 ? 's' : ''} in kitchen
-                        </span>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setShowRunningTableDetails(!showRunningTableDetails)}
-                      className="flex items-center gap-1 text-[11px] font-bold text-[#DE8626] hover:underline"
-                    >
-                      <span>{showRunningTableDetails ? 'Hide' : 'View'}</span>
-                      {showRunningTableDetails ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                    </button>
-                  </div>
-
-                  {/* Running Table Items Accordion */}
-                  {showRunningTableDetails && (
-                    <div className="mt-1 pt-1.5 border-t border-amber-500/20 max-h-36 overflow-y-auto space-y-1 text-xs">
-                      {(activeTableOrder.items || []).map((it: any, idx: number) => (
-                        <div key={idx} className="flex justify-between items-center text-[11px] text-[#1E2930] dark:text-[#F3F4F6]">
-                          <span>{it.quantity}x {it.itemName}</span>
-                          <span className="font-semibold">₹{(it.unitPrice || it.amount || 0) * (it.quantity || 1)}</span>
-                        </div>
-                      ))}
-                      <div className="flex justify-between font-bold pt-1 border-t border-amber-500/20 text-[#DE8626]">
-                        <span>Previous Tab Total:</span>
-                        <span>₹{existingTableTotal}</span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Cart Items List */}
-            <div className="flex-1 overflow-y-auto p-3 space-y-2">
-              {cart.length === 0 ? (
-                <div className="flex h-48 flex-col items-center justify-center text-center text-xs text-[#667085] dark:text-[#94A3B8]">
-                  <ShoppingBag className="h-8 w-8 text-[#DE8626]/40 mb-2" />
-                  <p className="font-semibold">Cart is empty</p>
-                  <p className="text-[11px] mt-0.5">Tap on any dish to add to this order</p>
-                </div>
-              ) : (
-                cart.map((item) => (
-                  <div
-                    key={item.cartKey}
-                    className="flex items-center justify-between rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] p-2.5 bg-[#FAF7F2]/40 dark:bg-[#151A20]/40 text-xs"
-                  >
-                    <div className="flex-1 min-w-0 pr-2">
-                      <div className="flex items-center gap-1.5">
-                        <span
-                          className={`h-2 w-2 rounded-full shrink-0 ${
-                            item.isVeg ? 'bg-emerald-500' : 'bg-red-500'
-                          }`}
-                        />
-                        <p className="font-bold text-[#1E2930] dark:text-[#F3F4F6] truncate">{item.itemName}</p>
-                      </div>
-
-                      {/* Modifiers & Notes Badges */}
-                      {item.modifiers && item.modifiers.length > 0 && (
-                        <p className="text-[10px] text-[#DE8626] truncate mt-0.5">
-                          + {item.modifiers.map((m) => m.modifierName).join(', ')}
-                        </p>
-                      )}
-                      {item.notes && (
-                        <p className="text-[10px] text-gray-500 italic truncate mt-0.5">
-                          "{item.notes}"
-                        </p>
-                      )}
-
-                      <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] mt-0.5">
-                        ₹{item.price} × {item.quantity} = ₹{item.price * item.quantity}
-                      </p>
-                    </div>
-
-                    {/* Stepper with Numpad Trigger on Quantity Badge */}
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        onClick={() => updateQuantity(item.cartKey, -1)}
-                        className="flex h-6 w-6 items-center justify-center rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5"
-                      >
-                        <Minus className="h-3 w-3" />
-                      </button>
-
-                      {/* Clickable Quantity Badge (Opens Fast Numpad) */}
-                      <button
-                        type="button"
-                        onClick={() => setNumpadCartItem(item)}
-                        className="w-7 py-0.5 text-center font-bold text-xs bg-white dark:bg-[#1B2127] border rounded-lg hover:border-[#DE8626] transition-colors"
-                        title="Click to enter exact quantity via numpad"
-                      >
-                        {item.quantity}
-                      </button>
-
-                      <button
-                        onClick={() => updateQuantity(item.cartKey, 1)}
-                        className="flex h-6 w-6 items-center justify-center rounded-lg bg-[#DE8626] text-white hover:bg-[#C4721C]"
-                      >
-                        <Plus className="h-3 w-3" />
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-
-            {/* Bill Summary & Sticky Checkout Buttons */}
-            <div className="border-t border-[#E7E1DA] dark:border-[#2B3540] p-4 bg-[#FAF7F2] dark:bg-[#151A20] space-y-3">
-              <div className="space-y-1.5 text-xs">
-                {activeTableOrder && (
-                  <div className="flex justify-between text-amber-600 dark:text-amber-400 font-semibold">
-                    <span>Running Tab Total</span>
-                    <span>₹{existingTableTotal}</span>
-                  </div>
-                )}
-                {cart.length > 0 && (
-                  <>
-                    <div className="flex justify-between text-[#667085] dark:text-[#94A3B8]">
-                      <span>{activeTableOrder ? 'New Items Subtotal' : 'Subtotal'}</span>
-                      <span className="font-semibold text-[#1E2930] dark:text-[#F3F4F6]">₹{subtotal}</span>
-                    </div>
-                    {hasGstNumber && (
-                      <div className="flex justify-between text-[#667085] dark:text-[#94A3B8]">
-                        <span>Taxes (CGST + SGST)</span>
-                        <span className="font-semibold text-[#1E2930] dark:text-[#F3F4F6]">₹{totalTax}</span>
-                      </div>
-                    )}
-                  </>
-                )}
-                <div className="flex justify-between text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6] pt-1.5 border-t border-[#E7E1DA] dark:border-[#2B3540]">
-                  <span>Total Payable</span>
-                  <span className="text-[#DE8626]">₹{payableGrandTotal}</span>
-                </div>
-              </div>
-
-              {/* Action Buttons: Hold Order / Send KOT / Settle */}
-              <div className="space-y-2 pt-1">
-                <div className="grid grid-cols-2 gap-2">
-                  {/* Send KOT Button (F3) */}
-                  <button
-                    disabled={cart.length === 0 || isPlacingOrder}
-                    onClick={() => executeOrder(true)}
-                    className="flex items-center justify-center gap-1.5 rounded-xl border border-[#DE8626] bg-transparent py-2.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/10 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-                  >
-                    <Utensils className="h-4 w-4" />
-                    <span>Send KOT [F3]</span>
-                  </button>
-
-                  {/* Hold / Park Order Button */}
-                  <button
-                    disabled={cart.length === 0}
-                    onClick={handleParkCurrentCart}
-                    className="flex items-center justify-center gap-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] py-2.5 text-xs font-bold text-[#667085] hover:text-[#DE8626] hover:border-[#DE8626] disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-                  >
-                    <PauseCircle className="h-4 w-4" />
-                    <span>Hold Order</span>
-                  </button>
-                </div>
-
-                {/* Pay & Settle Button (F2) */}
-                <button
-                  disabled={(cart.length === 0 && !activeTableOrder) || isPlacingOrder}
-                  onClick={handleOpenSettleModal}
-                  className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-[#DE8626] py-3 text-xs font-bold text-white shadow-md shadow-[#DE8626]/20 hover:bg-[#C4721C] disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-                >
-                  <IndianRupee className="h-4 w-4" />
-                  <span>
-                    {cart.length === 0 && activeTableOrder
-                      ? `Settle Tab ₹${payableGrandTotal} [F2]`
-                      : `Pay & Settle ₹${payableGrandTotal} [F2]`}
-                  </span>
+                  <span>{showRunningTableDetails ? 'Hide' : 'View'}</span>
+                  {showRunningTableDetails ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                 </button>
               </div>
+
+              {showRunningTableDetails && (
+                <div className="mt-1 pt-1.5 border-t border-amber-500/20 max-h-36 overflow-y-auto space-y-1 text-xs">
+                  {(activeTableOrder.items || []).map((it: any, idx: number) => (
+                    <div key={idx} className="flex justify-between items-center text-[11px] text-[#1E2930] dark:text-[#F3F4F6]">
+                      <span>{it.quantity}x {it.itemName}</span>
+                      <span className="font-semibold">₹{((it.unitPrice || it.amount || 0) * (it.quantity || 1)).toFixed(2)}</span>
+                    </div>
+                  ))}
+                  <div className="flex justify-between font-bold pt-1 border-t border-amber-500/20 text-[#DE8626]">
+                    <span>Previous Tab Total:</span>
+                    <span>₹{existingTableTotal.toFixed(2)}</span>
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
+          )}
         </div>
 
-        {/* 1. Dining Table Selection Modal */}
-        {tableModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <div className="w-full max-w-lg rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-6 shadow-2xl">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2">
-                  <TableIcon className="h-5 w-5 text-[#DE8626]" />
-                  <h3 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">Select Dining Table</h3>
-                </div>
-                <button onClick={() => setTableModalOpen(false)} className="rounded-lg p-1 text-[#667085]">
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-
-              <div className="grid grid-cols-3 sm:grid-cols-4 gap-3 max-h-80 overflow-y-auto p-1">
-                {tables.map((tbl) => {
-                  const isOccupied = tbl.status?.toUpperCase() === 'OCCUPIED' || Boolean(tbl.activeOrderId);
-                  const isSelected = selectedTable?.id === tbl.id;
-                  return (
-                    <button
-                      key={tbl.id}
-                      onClick={() => {
-                        setSelectedTable(tbl);
-                        setTableModalOpen(false);
-                      }}
-                      className={`flex flex-col items-center justify-center rounded-2xl border p-4 text-center transition-all ${
-                        isSelected
-                          ? 'border-[#DE8626] bg-[#DE8626] text-white shadow-md'
-                          : isOccupied
-                          ? 'border-amber-400 bg-amber-500/10 text-[#1E2930] dark:text-[#F3F4F6]'
-                          : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#1E2930] dark:text-[#F3F4F6] hover:border-[#DE8626]'
-                      }`}
-                    >
-                      <span className="text-lg font-extrabold">T-{tbl.tableNumber}</span>
-                      <span className="text-[10px] opacity-75">{tbl.seatingCapacity || 4} Seats</span>
-                      <span className="mt-1 text-[9px] font-bold uppercase">
-                        {isOccupied ? 'Occupied' : 'Available'}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+        {/* Cart Items List */}
+        <div className="p-3 sm:p-3.5 space-y-2.5 bg-[#FAF7F2]/40 dark:bg-[#111418]/40">
+          <div className="flex items-center justify-between text-xs font-bold text-[#667085] dark:text-[#94A3B8] px-0.5">
+            <span>ITEMS IN ORDER ({cartTotalItems})</span>
+            {cart.length > 0 && (
+              <button
+                type="button"
+                onClick={clearCart}
+                className="text-red-500 hover:text-red-700 text-[11px] font-semibold hover:underline"
+              >
+                Clear Cart
+              </button>
+            )}
           </div>
-        )}
 
-        {/* 2. Settlement & Payment Modal */}
-        {settleModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <div className="w-full max-w-md rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-6 shadow-2xl max-h-[92vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-150">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">Collect Payment & Settle</h3>
-                <button onClick={() => setSettleModalOpen(false)} className="rounded-lg p-1 text-[#667085]">
-                  <X className="h-4 w-4" />
-                </button>
+          {cart.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-8 px-4 text-center rounded-2xl border border-dashed border-[#E7E1DA] dark:border-[#2B3540] bg-white/60 dark:bg-[#1B2127]/60">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-500/10 text-[#DE8626] mb-2 shadow-2xs">
+                <ShoppingBag className="h-5 w-5" />
               </div>
+              <p className="font-extrabold text-xs text-[#1E2930] dark:text-[#F3F4F6]">Your cart is empty</p>
+              <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] mt-0.5 max-w-xs">
+                Tap on any dish from the catalog to add items
+              </p>
+            </div>
+          ) : (
+            cart.map((item) => (
+              <div
+                key={item.cartKey}
+                className="group relative flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-2.5 sm:p-3 shadow-2xs hover:border-[#DE8626]/40 hover:shadow-xs transition-all"
+              >
+                {/* Left: Thumbnail + Dish Details */}
+                <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                  {/* Thumbnail Image / Fallback */}
+                  <div className="h-10 w-10 sm:h-11 sm:w-11 relative rounded-xl overflow-hidden bg-amber-500/10 dark:bg-amber-500/5 border border-[#DE8626]/20 shrink-0 flex items-center justify-center">
+                    {item.imageUrl ? (
+                      <Image
+                        src={item.imageUrl}
+                        alt={item.itemName}
+                        fill
+                        className="object-cover"
+                        onError={(e) => {
+                          (e.target as any).style.display = 'none';
+                        }}
+                      />
+                    ) : (
+                      <Utensils className="h-4 w-4 text-[#DE8626]" />
+                    )}
+                  </div>
 
-              {/* Amount Display */}
-              <div className="rounded-2xl bg-amber-500/10 p-4 text-center mb-4">
-                <span className="text-xs font-semibold text-[#DE8626] uppercase">Payable Bill Amount</span>
-                <h2 className="text-3xl font-extrabold text-[#DE8626]">₹{payableGrandTotal}</h2>
-                {activeTableOrder && (
-                  <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] mt-1">
-                    Consolidated: Tab ₹{existingTableTotal} + Current ₹{grandTotal}
-                  </p>
+                  {/* Details */}
+                  <div className="min-w-0 flex-1 space-y-0.5">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span
+                        className={`h-2 w-2 rounded-full shrink-0 ${
+                          item.isVeg ? 'bg-[#17845A]' : 'bg-[#DC2626]'
+                        }`}
+                        title={item.isVeg ? 'Vegetarian' : 'Non-Vegetarian'}
+                      />
+                      <h4 className="font-bold text-xs sm:text-sm text-[#1E2930] dark:text-[#F3F4F6] truncate max-w-[190px] sm:max-w-none">
+                        {item.itemName}
+                      </h4>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 text-[11px] text-[#78716C] dark:text-[#94A3B8] flex-wrap">
+                      <span className="font-bold text-[#DE8626]">₹{item.price.toFixed(2)}</span>
+                      {item.portionLabel && (
+                        <>
+                          <span>•</span>
+                          <span className="truncate">{item.portionLabel}</span>
+                        </>
+                      )}
+                      {item.stationName && (
+                        <>
+                          <span>•</span>
+                          <span className="text-[10px] bg-black/5 dark:bg-white/5 px-1.5 py-0.2 rounded-md font-medium text-[#667085] truncate">
+                            {item.stationName}
+                          </span>
+                        </>
+                      )}
+                    </div>
+
+                    {item.modifiers && item.modifiers.length > 0 && (
+                      <div className="flex flex-wrap gap-1 pt-0.5">
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-500/10 border border-[#DE8626]/30 text-[10px] font-bold text-[#DE8626]">
+                          + {item.modifiers.map((m) => m.modifierName).join(', ')}
+                        </span>
+                      </div>
+                    )}
+
+                    {item.notes && (
+                      <p className="text-[10px] text-[#8C7A6B] dark:text-[#94A3B8] italic truncate">
+                        "{item.notes}"
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Right: Stepper + Line Total + Trash */}
+                <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0 pt-1.5 sm:pt-0 border-t sm:border-t-0 border-[#E7E1DA]/50 dark:border-[#2B3540]/50">
+                  {/* Stepper with Numpad Modal trigger */}
+                  <div className="flex items-center rounded-xl bg-amber-500/10 dark:bg-amber-500/5 border border-[#DE8626]/30 p-0.5 shadow-2xs">
+                    <button
+                      type="button"
+                      onClick={() => updateQuantity(item.cartKey, -1)}
+                      className="h-7 w-7 flex items-center justify-center rounded-lg text-[#DE8626] hover:bg-[#DE8626] hover:text-white active:scale-95 transition-all"
+                      title="Decrease quantity"
+                    >
+                      <Minus className="h-3 w-3 stroke-[3]" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setNumpadItem({
+                          cartKey: item.cartKey,
+                          itemId: item.itemId,
+                          itemName: item.itemName,
+                          currentQuantity: item.quantity,
+                          unitPrice: item.price,
+                          description: item.description,
+                        })
+                      }
+                      className="min-w-[28px] sm:min-w-[32px] h-6 px-1.5 flex items-center justify-center rounded-md bg-white dark:bg-[#1B2127] text-xs font-black text-[#1E2930] dark:text-[#F3F4F6] shadow-2xs border border-[#DE8626]/25 hover:border-[#DE8626] transition-colors"
+                      title="Click to enter exact quantity via numpad"
+                    >
+                      {item.quantity}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => updateQuantity(item.cartKey, 1)}
+                      className="h-7 w-7 flex items-center justify-center rounded-lg text-[#DE8626] hover:bg-[#DE8626] hover:text-white active:scale-95 transition-all"
+                      title="Increase quantity"
+                    >
+                      <Plus className="h-3 w-3 stroke-[3]" />
+                    </button>
+                  </div>
+
+                  {/* Line Total */}
+                  <div className="text-right min-w-[55px]">
+                    <span className="text-xs sm:text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6] block">
+                      ₹{(item.price * item.quantity).toFixed(2)}
+                    </span>
+                  </div>
+
+                  {/* Delete Button */}
+                  <button
+                    type="button"
+                    onClick={() => updateQuantity(item.cartKey, -item.quantity)}
+                    className="h-7 w-7 flex items-center justify-center rounded-lg text-red-500 hover:text-red-700 hover:bg-red-500/10 active:scale-95 transition-all"
+                    title="Remove item"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Bill Breakdown & Settlement Section */}
+        <div className="p-3 sm:p-4 bg-[#FFFFFF] dark:bg-[#1B2127] space-y-3">
+          {/* GSTIN badge */}
+          {hasGstNumber && Boolean(restaurantConfig?.gstNumber) && (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[#DE8626] text-[10px] font-bold">
+              <Receipt className="h-3 w-3" />
+              <span>GSTIN: {restaurantConfig!.gstNumber!.trim()}</span>
+            </div>
+          )}
+
+          {/* Subtotal & Taxes Summary */}
+          <div className="space-y-1 text-xs">
+            {activeTableOrder && (
+              <div className="flex justify-between text-amber-600 dark:text-amber-400 font-semibold">
+                <span>Running Tab Total</span>
+                <span>₹{existingTableTotal.toFixed(2)}</span>
+              </div>
+            )}
+            {cart.length > 0 && (
+              <>
+                <div className="flex justify-between text-[#667085] dark:text-[#94A3B8]">
+                  <span>Subtotal (Item Total)</span>
+                  <span className="font-semibold text-[#1E2930] dark:text-[#F3F4F6]">₹{subtotal.toFixed(2)}</span>
+                </div>
+                {hasGstNumber ? (
+                  <>
+                    <div className="flex justify-between text-[#667085] dark:text-[#94A3B8]">
+                      <span>CGST ({cgstRate.toFixed(2)}%)</span>
+                      <span className="font-semibold text-[#1E2930] dark:text-[#F3F4F6]">+₹{cgstAmount.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between text-[#667085] dark:text-[#94A3B8]">
+                      <span>SGST ({sgstRate.toFixed(2)}%)</span>
+                      <span className="font-semibold text-[#1E2930] dark:text-[#F3F4F6]">+₹{sgstAmount.toFixed(2)}</span>
+                    </div>
+                  </>
+                ) : null}
+              </>
+            )}
+            <div className="flex justify-between text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6] pt-1.5 border-t border-[#E7E1DA] dark:border-[#2B3540]">
+              <div>
+                <span>Grand Total</span>
+                {!hasGstNumber && (
+                  <span className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-normal block">(incl. of all taxes)</span>
                 )}
               </div>
+              <span className="text-[#DE8626]">₹{payableGrandTotal.toFixed(2)}</span>
+            </div>
+          </div>
 
-              {/* Payment Mode Options */}
-              <div className="mb-4">
-                <label className="block text-xs font-semibold text-[#667085] dark:text-[#94A3B8] uppercase mb-2">
-                  Payment Method
-                </label>
-                <div className="grid grid-cols-5 gap-1.5">
-                  {(['CASH', 'UPI', 'CARD', 'DUE', 'SPLIT'] as const).map((mode) => (
+          {/* Dynamic Flow: Dine-In Pay Later vs Pay Now */}
+          {selectedOrderType === 1 && selectedTable && dineInPaymentFlow === 'pay_later' ? (
+            <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <Utensils className="h-4 w-4 text-[#DE8626] shrink-0" />
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-[#DE8626]">DINE-IN ORDER • PAY LATER</p>
+                  <p className="text-[10px] text-[#667085] dark:text-[#94A3B8] leading-tight">
+                    Dishes will be sent to Kitchen (KOT). Payment mode will be selected at table checkout.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDineInPaymentFlow('pay_now')}
+                className="text-[11px] font-bold text-[#DE8626] hover:underline block"
+              >
+                Guest paying upfront? Switch to Pay & Settle Now →
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-2.5 pt-1 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60">
+              {/* Payment Mode Selector */}
+              <div>
+                <span className="text-[10px] font-extrabold text-[#667085] dark:text-[#94A3B8] uppercase block mb-1">
+                  PAYMENT METHOD FOR SETTLEMENT
+                </span>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {[
+                    { key: 'CASH', label: 'Cash' },
+                    { key: 'UPI', label: 'UPI / QR' },
+                    { key: 'CARD', label: 'Card' },
+                  ].map((m) => (
                     <button
-                      key={mode}
-                      onClick={() => setPaymentMode(mode)}
-                      className={`rounded-xl border py-2 text-xs font-bold transition-all ${
-                        paymentMode === mode
-                          ? 'border-[#DE8626] bg-[#DE8626] text-white shadow-md'
-                          : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#1E2930] dark:text-[#F3F4F6]'
+                      key={m.key}
+                      type="button"
+                      onClick={() => setSelectedPaymentMode(m.key)}
+                      className={`py-2 text-xs font-bold rounded-xl border transition-all ${
+                        selectedPaymentMode === m.key
+                          ? 'border-[#DE8626] bg-[#DE8626] text-white shadow-xs'
+                          : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#1E2930] dark:text-[#F3F4F6] hover:border-[#DE8626]/50'
                       }`}
                     >
-                      {mode === 'SPLIT' ? 'SPLIT ⚡' : mode}
+                      {m.label}
                     </button>
                   ))}
                 </div>
               </div>
 
-              {/* SPLIT Mode Inputs */}
-              {paymentMode === 'SPLIT' && (
-                <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-3.5 space-y-2.5 mb-4">
-                  <div className="flex items-center justify-between text-xs font-bold text-[#DE8626]">
-                    <span>Split Portions</span>
-                    <span className={isSplitBalanced ? 'text-emerald-600' : 'text-red-500'}>
-                      {isSplitBalanced ? 'Balanced' : `Diff: ₹${(payableGrandTotal - splitTotal).toFixed(2)}`}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-[10px] text-[#667085] font-semibold mb-0.5">Cash (₹)</label>
-                      <input
-                        type="number"
-                        value={splitCash}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          setSplitCash(v);
-                          setSplitDigital(String(Math.max(0, payableGrandTotal - (parseFloat(v) || 0))));
-                        }}
-                        className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-2.5 py-1.5 text-xs font-bold"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] text-[#667085] font-semibold mb-0.5">Digital ({splitDigitalMode}) (₹)</label>
-                      <input
-                        type="number"
-                        value={splitDigital}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          setSplitDigital(v);
-                          setSplitCash(String(Math.max(0, payableGrandTotal - (parseFloat(v) || 0))));
-                        }}
-                        className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-2.5 py-1.5 text-xs font-bold"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex gap-2 pt-0.5">
-                    <button
-                      type="button"
-                      onClick={() => setSplitDigitalMode('UPI')}
-                      className={`flex-1 py-1 text-[10px] font-bold rounded-lg border ${
-                        splitDigitalMode === 'UPI' ? 'border-[#DE8626] bg-[#DE8626]/10 text-[#DE8626]' : 'border-gray-300 text-gray-500'
-                      }`}
-                    >
-                      Digital as UPI
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSplitDigitalMode('CARD')}
-                      className={`flex-1 py-1 text-[10px] font-bold rounded-lg border ${
-                        splitDigitalMode === 'CARD' ? 'border-[#DE8626] bg-[#DE8626]/10 text-[#DE8626]' : 'border-gray-300 text-gray-500'
-                      }`}
-                    >
-                      Digital as Card
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Cash Tendered & Change Return (If Cash) */}
-              {paymentMode === 'CASH' && (
-                <div className="space-y-3 mb-4 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] p-3.5 bg-[#FAF7F2] dark:bg-[#151A20]">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-semibold text-[#667085] dark:text-[#94A3B8]">
-                      Cash Tendered
-                    </label>
-                    {numericTendered > 0 && (
+              {/* Cash Tendered & Change Return */}
+              {selectedPaymentMode === 'CASH' && (
+                <div className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-2.5 space-y-2">
+                  <div className="flex items-center justify-between text-xs font-semibold">
+                    <span className="text-[#667085]">Cash Tendered</span>
+                    {posNumericTendered > 0 && (
                       <span
-                        className={`text-xs font-bold px-2.5 py-0.5 rounded-full ${
-                          numericTendered >= payableGrandTotal
-                            ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                            : 'bg-red-500/10 text-red-600 dark:text-red-400'
+                        className={`text-[11px] font-extrabold px-2 py-0.5 rounded-full ${
+                          posNumericTendered >= payableGrandTotal
+                            ? 'bg-emerald-500/10 text-emerald-600'
+                            : 'bg-red-500/10 text-red-600'
                         }`}
                       >
-                        {numericTendered >= payableGrandTotal
-                          ? `Change: ₹${changeToReturn.toFixed(2)}`
-                          : `Short: ₹${(payableGrandTotal - numericTendered).toFixed(2)}`}
+                        {posNumericTendered >= payableGrandTotal
+                          ? `Change: ₹${posChangeToReturn.toFixed(2)}`
+                          : `Short: ₹${(payableGrandTotal - posNumericTendered).toFixed(2)}`}
                       </span>
                     )}
                   </div>
 
                   <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-xs text-[#DE8626]">₹</span>
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 font-bold text-xs text-[#DE8626]">₹</span>
                     <input
                       type="number"
-                      value={tenderedAmount}
-                      onChange={(e) => setTenderedAmount(e.target.value)}
-                      placeholder={String(payableGrandTotal)}
-                      className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] pl-8 pr-3 py-2 text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
+                      value={posTenderedText}
+                      onChange={(e) => setPosTenderedText(e.target.value)}
+                      placeholder={payableGrandTotal.toFixed(0)}
+                      className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] pl-7 pr-3 py-1.5 text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6] outline-none"
                     />
                   </div>
 
-                  {/* Quick Cash Preset Chips */}
-                  <div className="flex flex-wrap gap-1.5 pt-1">
+                  {/* Preset Chips */}
+                  <div className="flex flex-wrap gap-1">
                     <button
                       type="button"
-                      onClick={() => setTenderedAmount(payableGrandTotal.toFixed(0))}
-                      className="rounded-lg border border-[#DE8626] bg-amber-500/10 px-2.5 py-1 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20"
+                      onClick={() => setPosTenderedText(payableGrandTotal.toFixed(0))}
+                      className="rounded-lg border border-[#DE8626] bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-[#DE8626]"
                     >
-                      Exact (₹{payableGrandTotal})
+                      Exact
                     </button>
                     {[
                       Math.ceil((payableGrandTotal + 1) / 50) * 50,
                       Math.ceil((payableGrandTotal + 1) / 100) * 100,
                       500,
-                      1000,
-                      2000,
                     ]
                       .filter((val, idx, arr) => val > payableGrandTotal && arr.indexOf(val) === idx)
-                      .slice(0, 3)
+                      .slice(0, 2)
                       .map((val) => (
                         <button
-                          key={`cash-chip-${val}`}
+                          key={`pill-${val}`}
                           type="button"
-                          onClick={() => setTenderedAmount(val.toString())}
-                          className="rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-2.5 py-1 text-xs font-semibold text-[#1E2930] dark:text-[#F3F4F6] hover:border-[#DE8626]"
+                          onClick={() => setPosTenderedText(val.toString())}
+                          className="rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-2 py-0.5 text-[10px] font-semibold"
                         >
                           ₹{val}
                         </button>
@@ -1708,179 +1534,906 @@ export default function PosPage() {
                 </div>
               )}
 
-              {/* B2B GSTIN Corporate Toggle */}
-              <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-3 mb-4">
+              {/* Switch back link for Dine-in */}
+              {selectedOrderType === 1 && selectedTable && (
                 <button
                   type="button"
-                  onClick={() => setShowB2bFields(!showB2bFields)}
-                  className="flex items-center justify-between w-full text-xs font-bold text-[#667085]"
+                  onClick={() => setDineInPaymentFlow('pay_later')}
+                  className="text-[11px] font-bold text-[#DE8626] hover:underline block"
                 >
-                  <span className="flex items-center gap-1.5">
-                    <Building2 className="h-3.5 w-3.5 text-[#DE8626]" />
-                    <span>B2B Tax Invoice (Customer GSTIN)</span>
-                  </span>
-                  {showB2bFields ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                  ← Switch back to Pay Later (Send KOT)
                 </button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
 
-                {showB2bFields && (
-                  <div className="grid grid-cols-2 gap-2 pt-2.5 mt-2 border-t border-[#E7E1DA] dark:border-[#2B3540]">
+      {/* 2. STICKY ACTION BUTTONS PINNED AT BOTTOM */}
+      <div className="shrink-0 p-3 sm:p-3.5 border-t border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] shadow-lg space-y-2">
+        {selectedOrderType === 1 && selectedTable && dineInPaymentFlow === 'pay_later' ? (
+          /* Dine-In Primary Full-Width Action: Send to Kitchen */
+          <button
+            type="button"
+            disabled={cart.length === 0 || isKotLoading || isSettling}
+            onClick={() => handleCheckout(PosCheckoutModes.KOT_PAY_LATER)}
+            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-amber-500 via-[#DE8626] to-[#CB741B] py-3.5 text-xs font-bold text-white shadow-md shadow-[#DE8626]/20 hover:brightness-105 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+          >
+            {isKotLoading ? (
+              <span>Sending to Kitchen...</span>
+            ) : (
+              <>
+                <Printer className="h-4 w-4" />
+                <span>Send to Kitchen (KOT) 🍳 [F3]</span>
+              </>
+            )}
+          </button>
+        ) : (
+          /* Standard Counter / Upfront Settle Actions */
+          <>
+            <div className="grid grid-cols-2 gap-2">
+              {/* Send KOT (Pay Later) */}
+              <button
+                type="button"
+                disabled={cart.length === 0 || isKotLoading || isSettling}
+                onClick={() => handleCheckout(PosCheckoutModes.KOT_PAY_LATER)}
+                className="flex items-center justify-center gap-1.5 rounded-xl border border-[#DE8626] bg-transparent py-2.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/10 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              >
+                <Utensils className="h-4 w-4" />
+                <span>Send KOT [F3]</span>
+              </button>
+
+              {/* Hold Order */}
+              <button
+                type="button"
+                disabled={cart.length === 0}
+                onClick={handleParkCurrentCart}
+                className="flex items-center justify-center gap-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] py-2.5 text-xs font-bold text-[#667085] hover:text-[#DE8626] hover:border-[#DE8626] disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              >
+                <PauseCircle className="h-4 w-4" />
+                <span>Hold Order</span>
+              </button>
+            </div>
+
+            {/* Pay & Settle (Instant Pre-Paid Settle) */}
+            <button
+              type="button"
+              disabled={(cart.length === 0 && !activeTableOrder) || isKotLoading || isSettling}
+              onClick={() => handleCheckout(PosCheckoutModes.PAY_AND_SETTLE)}
+              className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-600 via-emerald-700 to-emerald-800 py-3.5 text-xs font-bold text-white shadow-md shadow-emerald-600/20 hover:brightness-105 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+            >
+              {isSettling ? (
+                <span>Settling Bill...</span>
+              ) : (
+                <>
+                  <IndianRupee className="h-4 w-4" />
+                  <span>
+                    {cart.length === 0 && activeTableOrder
+                      ? `Settle Tab ₹${payableGrandTotal.toFixed(2)} [F2]`
+                      : `Pay & Settle ₹${payableGrandTotal.toFixed(2)} [F2]`}
+                  </span>
+                </>
+              )}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <AuthGuard>
+      <AppShell>
+        <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden bg-[#FAF7F2] dark:bg-[#111418]">
+          {/* ======================================================== */}
+          {/* 1. WARNING BANNERS (GRACE, EXHAUSTED WALLET, INACTIVE)   */}
+          {/* ======================================================== */}
+          <div className="shrink-0 px-3 pt-1.5 space-y-1">
+            {/* Subscription Grace Banner */}
+            <SubscriptionGraceBanner onRenewPress={() => setSubscriptionModalOpen(true)} />
+
+            {/* Prepaid Wallet Exhausted Banner */}
+            {((restaurantConfig?.walletBalance !== undefined && restaurantConfig.walletBalance <= 0) ||
+              operatingStatus?.status === 'WALLET_EXHAUSTED') && (
+              <div
+                onClick={() => setWalletModalOpen(true)}
+                className="flex items-center justify-between rounded-2xl border border-red-500/40 bg-red-500/10 px-3.5 py-2 text-xs cursor-pointer hover:bg-red-500/15 transition-all shadow-xs"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-xl bg-red-500 text-white shrink-0">
+                    <CreditCard className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-extrabold text-red-700 dark:text-red-400 truncate">
+                      PREPAID WALLET EXHAUSTED (₹{(restaurantConfig?.walletBalance ?? 0).toFixed(2)})
+                    </p>
+                    <p className="text-[10px] text-red-600/80 dark:text-red-400/80 truncate">
+                      Orders and billing locked. Click to recharge wallet and resume operations.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setWalletModalOpen(true);
+                  }}
+                  className="rounded-xl bg-red-600 px-3 py-1 text-xs font-bold text-white hover:bg-red-700 transition-colors shadow-xs shrink-0"
+                >
+                  Recharge
+                </button>
+              </div>
+            )}
+
+            {/* Inactive or Closed Warning Banner */}
+            {(activeRestaurant?.isActive === false ||
+              restaurantConfig?.isActive === false ||
+              (operatingStatus && !operatingStatus.canPlaceOrder && operatingStatus.status !== 'WALLET_EXHAUSTED')) && (
+              <div
+                onClick={() => setOperatingModalOpen(true)}
+                className="flex items-center justify-between rounded-2xl border border-amber-500/40 bg-amber-500/10 px-3.5 py-2 text-xs cursor-pointer hover:bg-amber-500/15 transition-all shadow-xs"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span className="h-2.5 w-2.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
+                  <div className="min-w-0">
+                    <p className="font-extrabold text-amber-800 dark:text-amber-300 truncate">
+                      {activeRestaurant?.isActive === false || restaurantConfig?.isActive === false
+                        ? 'STORE IS INACTIVE (ORDERS DISABLED)'
+                        : operatingStatus?.status === 'PAUSED'
+                        ? `KITCHEN PAUSED (${operatingStatus.remainingPauseMinutes || 0}m left)`
+                        : 'STORE CLOSED FOR TAKING ORDERS'}
+                    </p>
+                    <p className="text-[10px] text-amber-700/80 dark:text-amber-400/80 truncate">
+                      {operatingStatus?.statusMessage || 'Cannot take or place orders while inactive/closed. Click to reopen.'}
+                    </p>
+                  </div>
+                </div>
+                <span className="text-xs font-extrabold text-[#DE8626] shrink-0 hover:underline">
+                  Reopen ⚙️
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* ======================================================== */}
+          {/* 3. MAIN WORKSPACE (LEFT CATALOG + RIGHT CHECKOUT PANEL)  */}
+          {/* ======================================================== */}
+          <div className="flex-1 flex flex-col lg:flex-row overflow-hidden pt-1.5">
+            {/* LEFT SIDE: Order Types, Category Tabs, Search, Dishes */}
+            <div className="flex-1 flex flex-col overflow-hidden border-r border-[#E7E1DA] dark:border-[#2B3540]">
+              {/* Dynamic Order Types / Locked Dine-In Table Banner */}
+              <div className="px-3 sm:px-4 py-2 bg-[#FFFFFF] dark:bg-[#1B2127] border-b border-[#E7E1DA] dark:border-[#2B3540] space-y-2">
+                {selectedTable ? (
+                  <div className="flex items-center justify-between rounded-2xl border border-amber-500/40 bg-gradient-to-r from-amber-500/15 to-[#DE8626]/10 p-2.5 shadow-xs">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-[#DE8626] text-white shadow-xs shrink-0">
+                        <Utensils className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-black text-[#DE8626] uppercase">DINE-IN ORDER</span>
+                          <span className="rounded-md bg-[#DE8626] px-1.5 py-0.5 text-[10px] font-extrabold text-white">
+                            Table {selectedTable.tableNumber}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] truncate">
+                          Section: <strong className="text-[#1E2930] dark:text-[#F3F4F6]">{selectedTable.sectionName || 'Main Hall'}</strong> • Printed on Bill & KOT
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedTable(null);
+                        setActiveTableOrder(null);
+                        if (typeof window !== 'undefined') {
+                          const url = new URL(window.location.href);
+                          url.searchParams.delete('tableId');
+                          window.history.replaceState({}, '', url.toString());
+                        }
+                        const firstActive = orderTypes.find((t) => t.isActive)?.id || 4;
+                        setSelectedOrderType(firstActive);
+                      }}
+                      className="rounded-xl border border-[#DE8626] bg-white dark:bg-[#1B2127] px-3 py-1 text-xs font-bold text-[#DE8626] hover:bg-amber-500/10 transition-colors shadow-xs shrink-0"
+                      title="Clear table lock and return to standard POS"
+                    >
+                      Change
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    {/* Dynamic Order Type Selector Chips */}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {orderTypes.map((ot) => {
+                        const isSelected = selectedOrderType === ot.id;
+                        const isAllowed = ot.isAllowedByPlan;
+                        const isStoreEnabled = ot.isEnabledByStore;
+                        const isAvailable = ot.isActive;
+
+                        const renderIcon = () => {
+                          switch (ot.code) {
+                            case 'COUNTER':
+                              return <Store className="h-3.5 w-3.5" />;
+                            case 'DINE_IN':
+                              return <Utensils className="h-3.5 w-3.5" />;
+                            case 'TAKEAWAY':
+                              return <ShoppingBag className="h-3.5 w-3.5" />;
+                            case 'DELIVERY':
+                              return <Truck className="h-3.5 w-3.5" />;
+                            default:
+                              return <Store className="h-3.5 w-3.5" />;
+                          }
+                        };
+
+                        return (
+                          <button
+                            key={`order-type-${ot.id}`}
+                            type="button"
+                            onClick={() => {
+                              if (!isAllowed) {
+                                showAlert(
+                                  'Feature Locked 🔒',
+                                  `${ot.typeName} ordering is not included in your active subscription plan. Please upgrade to unlock this channel.`,
+                                  'warning',
+                                  'Upgrade Plan',
+                                  'Cancel',
+                                  openRenewalModal
+                                );
+                                return;
+                              }
+                              if (!isStoreEnabled) {
+                                showAlert(
+                                  'Channel Disabled ⚙️',
+                                  `${ot.typeName} ordering is currently disabled in your Store Settings. Enable it under Order Configuration.`,
+                                  'warning'
+                                );
+                                return;
+                              }
+                              setSelectedOrderType(ot.id);
+                            }}
+                            className={`flex items-center gap-1.5 rounded-xl px-2.5 sm:px-3 py-1.5 text-xs font-bold transition-all ${
+                              isSelected
+                                ? 'bg-gradient-to-r from-amber-500 to-[#DE8626] text-white shadow-xs shadow-[#DE8626]/20'
+                                : 'border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#667085] dark:text-[#94A3B8] hover:border-[#DE8626]'
+                            } ${!isAvailable ? 'opacity-60' : ''}`}
+                          >
+                            {renderIcon()}
+                            <span>{ot.typeName}</span>
+                            {!isAllowed && <Lock className="h-2.5 w-2.5 text-red-500" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Keyboard Shortcuts Hint */}
+                    <div className="hidden xl:flex items-center gap-1.5 text-[10px] text-[#667085] bg-[#FAF7F2] dark:bg-[#151A20] px-2.5 py-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540]">
+                      <Keyboard className="h-3.5 w-3.5 text-[#DE8626]" />
+                      <span>F1: Search • F2: Settle • F3: KOT • F4: Clear</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Search Bar & Veg/Non-Veg Filter Controls Row */}
+                <div className="flex items-center gap-2 pt-0.5">
+                  {/* Search Input */}
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#DE8626]" />
                     <input
+                      id="pos-menu-search-input"
                       type="text"
-                      value={companyName}
-                      onChange={(e) => setCompanyName(e.target.value)}
-                      placeholder="Company Name"
-                      className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-2.5 py-1.5 text-xs font-medium"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Search dishes or item codes [Press F1]..."
+                      className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] pl-9 pr-8 py-1.5 text-xs font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626] transition-colors"
                     />
-                    <input
-                      type="text"
-                      maxLength={15}
-                      value={customerGstin}
-                      onChange={(e) => setCustomerGstin(e.target.value.toUpperCase())}
-                      placeholder="GSTIN (15 Digits)"
-                      className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-2.5 py-1.5 text-xs font-mono font-medium"
-                    />
+                    {searchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setSearchQuery('')}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#8C7A6B] hover:text-[#1E2930]"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Veg / Non-Veg Toggle Chips */}
+                  <div className="flex items-center gap-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-1 text-xs shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setVegFilter('ALL')}
+                      className={`rounded-lg px-2 sm:px-2.5 py-1 font-semibold ${
+                        vegFilter === 'ALL'
+                          ? 'bg-white dark:bg-[#1B2127] text-[#1E2930] dark:text-[#F3F4F6] shadow-xs'
+                          : 'text-[#667085]'
+                      }`}
+                    >
+                      All
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setVegFilter('VEG')}
+                      className={`flex items-center gap-1 rounded-lg px-2 sm:px-2.5 py-1 font-semibold ${
+                        vegFilter === 'VEG'
+                          ? 'bg-[#17845A] text-white shadow-xs'
+                          : 'text-[#667085]'
+                      }`}
+                    >
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
+                      Veg
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setVegFilter('NON_VEG')}
+                      className={`flex items-center gap-1 rounded-lg px-2 sm:px-2.5 py-1 font-semibold ${
+                        vegFilter === 'NON_VEG'
+                          ? 'bg-[#DC2626] text-white shadow-xs'
+                          : 'text-[#667085]'
+                      }`}
+                    >
+                      <span className="h-1.5 w-1.5 rounded-full bg-red-300" />
+                      Non-Veg
+                    </button>
+                  </div>
+
+                  {/* Tablet & Mobile Cart Drawer Trigger Button */}
+                  <button
+                    type="button"
+                    onClick={() => setCartDrawerOpen(true)}
+                    className={`lg:hidden relative flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-extrabold transition-all shrink-0 ${
+                      cartTotalItems > 0
+                        ? 'border-[#DE8626] bg-gradient-to-r from-amber-500 to-[#DE8626] text-white shadow-xs'
+                        : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#667085]'
+                    }`}
+                    title="Open Order Cart"
+                  >
+                    <ShoppingBag className="h-3.5 w-3.5" />
+                    <span>{cartTotalItems}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Category Horizontal Scrolling Tabs */}
+              <div className="flex items-center gap-2 overflow-x-auto border-b border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] px-3 sm:px-4 py-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setSelectedCategory(null)}
+                  className={`shrink-0 rounded-xl px-3 py-1.5 text-xs font-bold transition-all ${
+                    selectedCategory === null
+                      ? 'bg-[#DE8626] text-white shadow-xs shadow-[#DE8626]/20'
+                      : 'border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#667085] dark:text-[#94A3B8] hover:border-[#DE8626]'
+                  }`}
+                >
+                  All Dishes ({items.length})
+                </button>
+                {categories.map((cat) => (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => setSelectedCategory(cat.id)}
+                    className={`shrink-0 rounded-xl px-3 py-1.5 text-xs font-bold transition-all ${
+                      selectedCategory === cat.id
+                        ? 'bg-[#DE8626] text-white shadow-xs shadow-[#DE8626]/20'
+                        : 'border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#667085] dark:text-[#94A3B8] hover:border-[#DE8626]'
+                    }`}
+                  >
+                    {cat.categoryName}
+                  </button>
+                ))}
+              </div>
+
+              {/* Product Menu Dishes Responsive Grid */}
+              <div className="flex-1 overflow-y-auto p-3 sm:p-4 pb-28 lg:pb-4">
+                {loading ? (
+                  <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-4 gap-2.5 sm:gap-3">
+                    {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
+                      <div
+                        key={n}
+                        className="h-44 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] animate-pulse"
+                      />
+                    ))}
+                  </div>
+                ) : filteredItems.length === 0 ? (
+                  <div className="py-24 text-center text-xs text-[#667085] dark:text-[#94A3B8]">
+                    No dishes found matching your search keywords or filters.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-4 gap-2.5 sm:gap-3">
+                    {filteredItems.map((dish) => {
+                      const dishId = dish.id;
+                      const isAvailable = isItemAvailable(dish);
+                      const inCartMatches = cart.filter((ci) => ci.itemId === dishId);
+                      const inCartQty = inCartMatches.reduce((s, ci) => s + ci.quantity, 0);
+
+                      const portionTag =
+                        dish.portionDisplay ||
+                        (dish.unitName ? `${dish.quantity && dish.quantity > 0 ? dish.quantity : 1} ${dish.unitName}` : '') ||
+                        (dish.categoryName ? dish.categoryName : dish.isVeg ? 'Veg' : 'Non-Veg');
+
+                      // Station warning check
+                      const stationId = dish.kitchenStationId;
+                      const stationObj = stationId ? stations.find((s) => s.id === stationId) : null;
+                      const isStationPaused = stationObj?.isPaused && (stationObj.remainingPauseMinutes || 0) > 0;
+                      const isStationInactive = stationObj && !stationObj.isActive;
+
+                      return (
+                        <div
+                          key={`dish-${dishId}`}
+                          onClick={() => {
+                            if (!isAvailable) return;
+                            addToCartQuick(dish);
+                          }}
+                          className={`group relative flex flex-col justify-between rounded-2xl border overflow-hidden shadow-xs transition-all cursor-pointer select-none ${
+                            inCartQty > 0
+                              ? 'border-[#DE8626] bg-amber-500/5 ring-1 ring-[#DE8626]'
+                              : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] hover:border-[#DE8626] hover:shadow-md'
+                          } ${!isAvailable ? 'opacity-60 cursor-not-allowed' : ''}`}
+                        >
+                          {/* Dish Image Banner */}
+                          <div className="relative h-28 sm:h-32 w-full overflow-hidden bg-amber-500/5 dark:bg-amber-500/5">
+                            <DishImage
+                              src={dish.imageUrl}
+                              alt={dish.itemName}
+                              isVeg={dish.isVeg}
+                              showDietBadge={false}
+                              fallbackIconSize={26}
+                            />
+
+                            {/* Veg / Non-Veg Dot Badge Overlay */}
+                            <div className="absolute top-2 left-2 flex h-4 w-4 items-center justify-center rounded-sm bg-white/95 dark:bg-[#1B2127]/95 shadow-xs border border-gray-200">
+                              <span
+                                className={`h-2 w-2 rounded-full ${
+                                  dish.isVeg ? 'bg-[#17845A]' : 'bg-[#DC2626]'
+                                }`}
+                              />
+                            </div>
+
+                            {/* In-Cart Total Badge Overlay */}
+                            {inCartQty > 0 && (
+                              <div className="absolute top-2 right-2 flex h-5 min-w-[20px] px-1 items-center justify-center rounded-full bg-[#DE8626] text-[10px] font-black text-white shadow-xs">
+                                {inCartQty}
+                              </div>
+                            )}
+
+                            {/* Station Warning Badge Overlay */}
+                            {(isStationPaused || isStationInactive) && (
+                              <div
+                                className={`absolute top-2 right-2 px-1.5 py-0.5 rounded-md text-[9px] font-black text-white ${
+                                  isStationInactive ? 'bg-red-600' : 'bg-amber-600'
+                                }`}
+                              >
+                                {isStationInactive ? `${stationObj?.stationCode} OFF` : `PAUSED ${stationObj?.remainingPauseMinutes}m`}
+                              </div>
+                            )}
+
+                            {/* Out of Stock Overlay */}
+                            {!isAvailable && (
+                              <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-2xs">
+                                <span className="rounded-md bg-red-600 px-2 py-0.5 text-[10px] font-extrabold text-white">
+                                  Out of Stock
+                                </span>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Card Details */}
+                          <div className="p-2.5 sm:p-3 flex-1 flex flex-col justify-between">
+                            <div>
+                              <h4 className="text-xs sm:text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6] line-clamp-1 leading-snug">
+                                {dish.itemName}
+                              </h4>
+                              {Boolean(dish.description) && (
+                                <p className="text-[10px] text-[#667085] dark:text-[#94A3B8] line-clamp-1 mt-0.5">
+                                  {dish.description}
+                                </p>
+                              )}
+                              <p className="text-[10px] font-bold text-[#DE8626] mt-0.5">
+                                {portionTag}
+                              </p>
+                            </div>
+
+                            {/* Bottom Row: Price & Menza Stepper or + ADD button */}
+                            <div className="mt-2 flex items-center justify-between pt-2 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60">
+                              <span className="text-xs sm:text-sm font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                                ₹{dish.price}
+                              </span>
+
+                              {isAvailable && (
+                                inCartQty > 0 ? (
+                                  /* Inline Stepper matching Menza */
+                                  <div
+                                    className="flex items-center gap-1 rounded-xl border border-amber-500/40 bg-amber-500/10 p-0.5"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const firstCartItem = inCartMatches[0];
+                                        if (firstCartItem) updateQuantity(firstCartItem.cartKey, -1);
+                                      }}
+                                      className="flex h-6 w-6 items-center justify-center rounded-lg bg-white dark:bg-[#1B2127] text-[#D96B14] hover:bg-amber-500 hover:text-white transition-colors"
+                                    >
+                                      <Minus className="h-3 w-3 stroke-[3]" />
+                                    </button>
+
+                                    {/* Clickable quantity badge opening numpad */}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const firstCartItem = inCartMatches[0];
+                                        if (firstCartItem) {
+                                          setNumpadItem({
+                                            cartKey: firstCartItem.cartKey,
+                                            itemId: dishId,
+                                            itemName: dish.itemName,
+                                            currentQuantity: inCartQty,
+                                            unitPrice: dish.price,
+                                            description: dish.description,
+                                          });
+                                        }
+                                      }}
+                                      className="min-w-[22px] px-1 text-center font-extrabold text-xs text-[#D96B14] hover:underline"
+                                      title="Enter exact quantity via numpad"
+                                    >
+                                      {inCartQty}
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => addToCartQuick(dish)}
+                                      className="flex h-6 w-6 items-center justify-center rounded-lg bg-white dark:bg-[#1B2127] text-[#D96B14] hover:bg-amber-500 hover:text-white transition-colors"
+                                    >
+                                      <Plus className="h-3 w-3 stroke-[3]" />
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        addToCartQuick(dish);
+                                      }}
+                                      className="flex items-center gap-1 rounded-xl bg-gradient-to-r from-amber-500/15 to-[#DE8626]/20 border border-[#DE8626] px-2.5 py-1 text-xs font-black text-[#DE8626] hover:bg-[#DE8626] hover:text-white transition-all shadow-xs"
+                                    >
+                                      <Plus className="h-3 w-3 stroke-[3]" />
+                                      <span>ADD</span>
+                                    </button>
+
+                                    {/* Customization Icon */}
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setCustomizingItem(dish);
+                                      }}
+                                      title="Customize Portions & Notes"
+                                      className="flex h-6 w-6 sm:h-7 sm:w-7 items-center justify-center rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] text-[#667085] hover:text-[#DE8626] hover:border-[#DE8626] transition-colors"
+                                    >
+                                      <SlidersHorizontal className="h-3 w-3" />
+                                    </button>
+                                  </div>
+                                )
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
+            </div>
 
-              {/* Action Button */}
+            {/* RIGHT SIDE: Pinned Desktop Checkout Drawer Panel (>= 1024px) */}
+            <div className="hidden lg:flex w-[360px] xl:w-[410px] 2xl:w-[440px] flex-col border-l border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] h-full overflow-hidden shrink-0">
+              {/* Drawer Header */}
+              <div className="flex items-center justify-between border-b border-[#E7E1DA] dark:border-[#2B3540] px-3.5 py-2.5 sm:px-4 sm:py-3 bg-[#FAF7F2] dark:bg-[#151A20] shrink-0">
+                <div className="flex items-center gap-2">
+                  <ShoppingBag className="h-4 w-4 text-[#DE8626]" />
+                  <h3 className="text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                    Order Cart ({cartTotalItems} items)
+                  </h3>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setParkedModalOpen(true)}
+                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-extrabold transition-all ${
+                      parkedCarts.length > 0
+                        ? 'bg-amber-500/10 text-[#DE8626] border border-[#DE8626]/40 hover:bg-amber-500/20'
+                        : 'bg-black/5 dark:bg-white/5 text-[#667085] hover:text-[#1E2930]'
+                    }`}
+                    title="View Held / Parked Carts"
+                  >
+                    <Clock className="h-3.5 w-3.5" />
+                    <span>Held ({parkedCarts.length})</span>
+                  </button>
+
+                  {cart.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={clearCart}
+                      className="flex items-center gap-1 text-[11px] font-semibold text-red-500 hover:underline"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span>Clear</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Shared Checkout Controls */}
+              {renderCheckoutControls()}
+            </div>
+          </div>
+
+          {/* ======================================================== */}
+          {/* 4. RESPONSIVE FLOATING CART STICKY BANNER (MOBILE/TABLET)*/}
+          {/* ======================================================== */}
+          {cart.length > 0 && (
+            <div className="lg:hidden fixed bottom-[74px] left-3 right-3 z-40">
               <button
-                disabled={isPlacingOrder}
-                onClick={() => executeOrder(false)}
-                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-[#DE8626] py-3.5 text-sm font-bold text-white shadow-md shadow-[#DE8626]/20 hover:bg-[#C4721C] disabled:opacity-50 transition-all"
+                type="button"
+                onClick={() => setCartDrawerOpen(true)}
+                className="w-full flex items-center justify-between rounded-2xl bg-gradient-to-r from-amber-500 via-[#DE8626] to-[#CB741B] px-4 py-3 text-white shadow-xl shadow-[#DE8626]/30 active:scale-[0.99] transition-all"
               >
-                <span>{isPlacingOrder ? 'Processing Bill...' : `Confirm & Collect ₹${payableGrandTotal}`}</span>
-                <ArrowRight className="h-4 w-4" />
+                <div className="flex items-center gap-3">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-[#DE8626] font-black text-xs shadow-xs">
+                    {cartTotalItems}
+                  </div>
+                  <div className="text-left">
+                    <p className="text-xs font-extrabold leading-tight">Items Added</p>
+                    <p className="text-[10px] text-white/90">
+                      {selectedTable ? `Table ${selectedTable.tableNumber}` : 'Counter Order'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-black">₹{payableGrandTotal.toFixed(2)}</span>
+                  <ChevronUp className="h-5 w-5" />
+                </div>
               </button>
             </div>
-          </div>
-        )}
+          )}
 
-        {/* 3. Order Success & Thermal Print Receipt Modal */}
-        {orderSuccessData && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-            <div className="w-full max-w-md rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-6 shadow-2xl">
-              <div className="flex flex-col items-center text-center mb-5">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-600 mb-2">
-                  <Check className="h-6 w-6" />
-                </div>
-                <h3 className="text-lg font-bold text-[#1E2930] dark:text-[#F3F4F6]">
-                  Order #{orderSuccessData.orderId} Placed!
-                </h3>
-                <p className="text-xs text-[#667085] dark:text-[#94A3B8]">
-                  {orderSuccessData.paymentMode} • Total ₹{orderSuccessData.grandTotal}
-                </p>
-              </div>
-
-              {/* Printable Receipt Preview Area */}
+          {/* ======================================================== */}
+          {/* 5. RESPONSIVE CART DRAWER BOTTOM SHEET (MOBILE/TABLET)   */}
+          {/* ======================================================== */}
+          {cartDrawerOpen && (
+            <div
+              className="lg:hidden fixed inset-0 z-50 flex flex-col justify-end bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
+              onClick={() => setCartDrawerOpen(false)}
+            >
               <div
-                id="thermal-print-area"
-                className="rounded-2xl border border-dashed border-[#E7E1DA] dark:border-[#2B3540] p-4 text-xs font-mono bg-[#FAF7F2] dark:bg-[#151A20] mb-5 max-h-60 overflow-y-auto"
+                className="w-full max-h-[90vh] rounded-t-3xl border-t border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] shadow-2xl flex flex-col overflow-hidden animate-in slide-in-from-bottom duration-200"
+                onClick={(e) => e.stopPropagation()}
               >
-                <div className="text-center font-bold pb-2 border-b border-dashed border-gray-400">
-                  {activeRestaurant?.restaurantName || 'Menza Restaurant'}
+                {/* Top Handle */}
+                <div className="flex justify-center pt-3 pb-1 shrink-0">
+                  <div className="h-1.5 w-12 rounded-full bg-gray-300 dark:bg-gray-600" />
                 </div>
-                <div className="flex justify-between py-1 text-[11px]">
-                  <span>Order: #{orderSuccessData.orderId}</span>
-                  <span>{orderSuccessData.date}</span>
-                </div>
-                <div className="py-1 text-[11px]">
-                  <span>Customer: {orderSuccessData.customerName}</span>
-                </div>
-                <div className="border-t border-b border-dashed border-gray-400 my-2 py-1 space-y-1">
-                  {orderSuccessData.items.map((i: any, idx: number) => (
-                    <div key={idx} className="flex justify-between text-[11px]">
-                      <span>{i.quantity}x {i.itemName}</span>
-                      <span>₹{(i.price || i.unitPrice) * i.quantity}</span>
-                    </div>
-                  ))}
-                </div>
-                <div className="flex justify-between font-bold pt-1">
-                  <span>Grand Total:</span>
-                  <span>₹{orderSuccessData.grandTotal}</span>
-                </div>
-              </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                <button
-                  onClick={handlePrintReceipt}
-                  className="flex items-center justify-center gap-1.5 rounded-xl border border-[#DE8626] bg-amber-500/10 py-2.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-colors"
-                >
-                  <Printer className="h-4 w-4" />
-                  <span>Receipt</span>
-                </button>
-                <button
-                  onClick={handlePrintKot}
-                  className="flex items-center justify-center gap-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] py-2.5 text-xs font-bold text-[#667085] hover:border-[#DE8626] hover:text-[#DE8626] transition-colors"
-                >
-                  <Utensils className="h-4 w-4" />
-                  <span>KOT</span>
-                </button>
-                <button
-                  onClick={handleShareWhatsApp}
-                  className="flex items-center justify-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 py-2.5 text-xs font-bold text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 transition-colors"
-                >
-                  <MessageCircle className="h-4 w-4" />
-                  <span>WhatsApp</span>
-                </button>
-                {orderSuccessData.paymentMode?.includes('KOT') ? (
-                  <button
-                    onClick={() => setOrderSuccessData(null)}
-                    className="flex items-center justify-center rounded-xl bg-emerald-600 py-2.5 text-xs font-bold text-white shadow-md hover:bg-emerald-700 transition-colors"
-                  >
-                    <span>Continue Tab</span>
-                  </button>
-                ) : null}
-                <button
-                  onClick={clearFullSale}
-                  className="flex items-center justify-center rounded-xl bg-[#DE8626] py-2.5 text-xs font-bold text-white shadow-md hover:bg-[#C4721C] transition-colors"
-                >
-                  <span>New Sale</span>
-                </button>
+                {/* Header */}
+                <div className="flex items-center justify-between px-4 py-2 border-b border-[#E7E1DA] dark:border-[#2B3540] shrink-0">
+                  <div className="flex items-center gap-2">
+                    <ShoppingBag className="h-4 w-4 text-[#DE8626]" />
+                    <h3 className="text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                      Order Cart ({cartTotalItems} items)
+                    </h3>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setParkedModalOpen(true)}
+                      className="text-[11px] font-bold text-[#DE8626] bg-amber-500/10 px-2.5 py-0.5 rounded-full"
+                    >
+                      Held ({parkedCarts.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={clearCart}
+                      className="text-xs font-bold text-red-500 hover:underline"
+                    >
+                      Clear
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCartDrawerOpen(false)}
+                      className="rounded-lg p-1 text-[#8C7A6B]"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Full rich checkout controls matching desktop */}
+                <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+                  {renderCheckoutControls()}
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {/* 4. Dish Customization Modal (Portions, Variants, Modifiers & Notes) */}
-        <DishCustomizationModal
-          isOpen={Boolean(customizingItem)}
-          item={customizingItem}
-          onClose={() => setCustomizingItem(null)}
-          onConfirm={handleCustomizationConfirm}
-        />
+          {/* ======================================================== */}
+          {/* 6. MODALS & POPUPS                                       */}
+          {/* ======================================================== */}
 
-        {/* 5. Fast Quantity Numpad Modal */}
-        <QuickNumpadModal
-          isOpen={Boolean(numpadCartItem)}
-          itemName={numpadCartItem?.itemName || ''}
-          currentQuantity={numpadCartItem?.quantity || 1}
-          onClose={() => setNumpadCartItem(null)}
-          onApply={(qty) => {
-            if (numpadCartItem) {
-              updateExactQuantity(numpadCartItem.cartKey, qty);
-            }
-          }}
-        />
+          {/* Order Success & Thermal Slip Modal */}
+          {orderSuccessData && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+              <div className="w-full max-w-md rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-5 sm:p-6 shadow-2xl">
+                <div className="flex flex-col items-center text-center mb-4 sm:mb-5">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-600 mb-2">
+                    <Check className="h-6 w-6" />
+                  </div>
+                  <h3 className="text-lg font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                    Order #{orderSuccessData.orderId} Placed!
+                  </h3>
+                  <p className="text-xs text-[#667085] dark:text-[#94A3B8]">
+                    {orderSuccessData.paymentMode} • Total ₹{orderSuccessData.grandTotal}
+                  </p>
+                </div>
 
-        {/* 6. Parked Carts (Hold Orders) Modal */}
-        <ParkedCartsModal
-          isOpen={parkedModalOpen}
-          parkedCarts={parkedCarts}
-          onClose={() => setParkedModalOpen(false)}
-          onResume={handleResumeParkedCart}
-          onDiscard={handleDiscardParkedCart}
-        />
+                {/* Printable Receipt Preview Area */}
+                <div
+                  id="thermal-print-area"
+                  className="rounded-2xl border border-dashed border-[#E7E1DA] dark:border-[#2B3540] p-3.5 sm:p-4 text-xs font-mono bg-[#FAF7F2] dark:bg-[#151A20] mb-4 sm:mb-5 max-h-56 overflow-y-auto"
+                >
+                  <div className="text-center font-bold pb-2 border-b border-dashed border-gray-400">
+                    {storeDisplayName}
+                  </div>
+                  <div className="flex justify-between py-1 text-[11px]">
+                    <span>Order: #{orderSuccessData.orderId}</span>
+                    <span>{orderSuccessData.date}</span>
+                  </div>
+                  <div className="py-1 text-[11px]">
+                    <span>Customer: {orderSuccessData.customerName}</span>
+                  </div>
+                  <div className="border-t border-b border-dashed border-gray-400 my-2 py-1 space-y-1">
+                    {orderSuccessData.items.map((i: any, idx: number) => (
+                      <div key={idx} className="flex justify-between text-[11px]">
+                        <span>{i.quantity}x {i.itemName}</span>
+                        <span>₹{((i.price || i.unitPrice) * i.quantity).toFixed(2)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex justify-between font-bold pt-1">
+                    <span>Grand Total:</span>
+                    <span>₹{orderSuccessData.grandTotal}</span>
+                  </div>
+                </div>
 
-        {/* 7. Store Operating Status Controls Modal */}
-        <StoreOperatingStatusModal
-          isOpen={operatingModalOpen}
-          onClose={() => setOperatingModalOpen(false)}
-          restaurantId={currentRestId}
-          restaurantName={restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant'}
-          status={operatingStatus}
-          onStatusUpdated={(updated) => setOperatingStatus(updated)}
-        />
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <button
+                    onClick={handlePrintReceipt}
+                    className="flex items-center justify-center gap-1.5 rounded-xl border border-[#DE8626] bg-amber-500/10 py-2.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-colors"
+                  >
+                    <Printer className="h-4 w-4" />
+                    <span>Receipt</span>
+                  </button>
+                  <button
+                    onClick={handlePrintKot}
+                    className="flex items-center justify-center gap-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] py-2.5 text-xs font-bold text-[#667085] hover:border-[#DE8626] hover:text-[#DE8626] transition-colors"
+                  >
+                    <Utensils className="h-4 w-4" />
+                    <span>KOT</span>
+                  </button>
+                  <button
+                    onClick={handleShareWhatsApp}
+                    className="flex items-center justify-center gap-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 py-2.5 text-xs font-bold text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+                  >
+                    <MessageCircle className="h-4 w-4" />
+                    <span>WhatsApp</span>
+                  </button>
+                  <button
+                    onClick={clearFullSale}
+                    className="flex items-center justify-center rounded-xl bg-[#DE8626] py-2.5 text-xs font-bold text-white shadow-md hover:bg-[#C4721C] transition-colors"
+                  >
+                    <span>New Sale</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Dish Customization Modal */}
+          <DishCustomizationModal
+            isOpen={Boolean(customizingItem)}
+            item={customizingItem}
+            onClose={() => setCustomizingItem(null)}
+            onConfirm={handleCustomizationConfirm}
+          />
+
+          {/* Fast Numeric Keypad Modal */}
+          <QuickNumpadModal
+            isOpen={Boolean(numpadItem)}
+            itemName={numpadItem?.itemName || ''}
+            currentQuantity={numpadItem?.currentQuantity || 1}
+            unitPrice={numpadItem?.unitPrice || 0}
+            description={numpadItem?.description}
+            onClose={() => setNumpadItem(null)}
+            onApply={(qty) => {
+              if (numpadItem) {
+                updateExactQuantity(numpadItem.cartKey, qty);
+              }
+            }}
+          />
+
+          {/* Parked Carts Modal */}
+          <ParkedCartsModal
+            isOpen={parkedModalOpen}
+            parkedCarts={parkedCarts}
+            onClose={() => setParkedModalOpen(false)}
+            onResume={handleResumeParkedCart}
+            onDiscard={handleDiscardParkedCart}
+          />
+
+          {/* Store Operating Status Controls Modal */}
+          <StoreOperatingStatusModal
+            isOpen={operatingModalOpen}
+            onClose={() => setOperatingModalOpen(false)}
+            restaurantId={currentRestId}
+            restaurantName={storeDisplayName}
+            status={operatingStatus}
+            onStatusUpdated={(updated) => setOperatingStatus(updated)}
+          />
+
+          {/* Wallet Recharge Modal */}
+          <WalletRechargeModal
+            isOpen={walletModalOpen}
+            onClose={() => {
+              setWalletModalOpen(false);
+              loadRestaurantConfig();
+              loadOperatingStatus();
+            }}
+            restaurantId={currentRestId}
+            onRechargeSuccess={() => {
+              loadRestaurantConfig();
+              loadOperatingStatus();
+            }}
+          />
+
+          {/* Subscription Blocker / Renewal Modal */}
+          <SubscriptionBlockerModal />
+
+          {/* Order Notification Drawer */}
+          <OrderNotificationDrawer
+            isOpen={notificationDrawerOpen}
+            onClose={() => setNotificationDrawerOpen(false)}
+            onSelectOrder={(orderId, tableId) => {
+              if (tableId) {
+                const matched = tables.find((t) => t.id === tableId);
+                if (matched) {
+                  setSelectedTable(matched);
+                  setSelectedOrderType(1);
+                }
+              }
+              setNotificationDrawerOpen(false);
+            }}
+          />
+
+          {/* Order Alert Banner (Floating Toast) */}
+          <OrderAlertBanner
+            onPress={() => setNotificationDrawerOpen(true)}
+          />
+
+          {/* Web Printer Settings Modal */}
+          <WebPrinterModal
+            isOpen={printerModalOpen}
+            onClose={() => setPrinterModalOpen(false)}
+            restaurantName={storeDisplayName}
+          />
+
+          {/* Gilded Alert Modal */}
+          <GildedAlertModal
+            {...alertConfig}
+            onClose={() => setAlertConfig((prev) => ({ ...prev, visible: false }))}
+          />
+        </div>
       </AppShell>
     </AuthGuard>
   );

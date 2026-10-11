@@ -41,8 +41,25 @@ export class AuthRemoteDataSource {
     const token = raw.token || raw.Token || raw.accessToken || raw.AccessToken || '';
     const tokenClaims = decodeJwtClaims(token);
 
-    const rawRoles = raw.roles || raw.Roles || (raw.role ? [raw.role] : raw.Role ? [raw.Role] : (raw.roleName ? [raw.roleName] : []));
-    const rolesList = Array.isArray(rawRoles) ? rawRoles : typeof rawRoles === 'string' ? [rawRoles] : [];
+    const claimRoles =
+      tokenClaims['http://schemas.microsoft.com/ws/2008/06/identity/claims/role'] ||
+      tokenClaims.role ||
+      tokenClaims.roles ||
+      [];
+    const claimRolesList = Array.isArray(claimRoles)
+      ? claimRoles
+      : typeof claimRoles === 'string' && claimRoles.trim()
+      ? [claimRoles]
+      : [];
+
+    const rawRoles =
+      raw.roles ||
+      raw.Roles ||
+      (raw.role ? [raw.role] : raw.Role ? [raw.Role] : (raw.roleName ? [raw.roleName] : (raw.roleId ? [raw.roleId] : (claimRolesList.length > 0 ? claimRolesList : []))));
+    let rolesList = Array.isArray(rawRoles) ? rawRoles : typeof rawRoles === 'string' ? [rawRoles] : [];
+    if (rolesList.length === 0 && claimRolesList.length > 0) {
+      rolesList = claimRolesList;
+    }
 
     const topLogo = raw.logoUrl || raw.LogoUrl || raw.logo || raw.Logo || tokenClaims.logoUrl || tokenClaims.storeLogoUrl || tokenClaims.logo || '';
     const topImage = raw.imageUrl || raw.ImageUrl || raw.bannerUrl || raw.BannerUrl || raw.image || raw.Image || raw.banner || raw.Banner || tokenClaims.imageUrl || tokenClaims.bannerUrl || tokenClaims.bannerImageUrl || tokenClaims.storeImageUrl || '';

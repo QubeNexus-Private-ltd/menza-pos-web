@@ -19,6 +19,7 @@ import { AppShell } from '@/components/layout/AppShell';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { SubscriptionRemoteDataSource } from '@shared/data/datasources/SubscriptionRemoteDataSource';
 import { SubscriptionPlan, UserSubscriptionStatus } from '@shared/domain/models/Subscription';
+import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
 
 const subscriptionDataSource = new SubscriptionRemoteDataSource();
 
@@ -104,11 +105,27 @@ export default function SubscriptionBillingPage() {
                 </div>
               </div>
 
-              <div className="rounded-2xl bg-[#FAF7F2] dark:bg-[#151A20] p-3 text-right">
-                <span className="text-[11px] font-medium text-[#667085]">Days Remaining</span>
-                <p className="text-xl font-extrabold text-[#DE8626]">
-                  {activeSub?.daysRemaining !== undefined ? activeSub.daysRemaining : 365} Days
-                </p>
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => useSubscriptionStore.getState().openRenewalModal(undefined, 'renew')}
+                  className="rounded-2xl bg-[#DE8626] px-4 py-2.5 text-xs font-bold text-white shadow-md shadow-[#DE8626]/20 hover:bg-[#C4721C] transition-all hover:scale-[1.02] active:scale-[0.98]"
+                >
+                  Renew Current Plan
+                </button>
+                <button
+                  type="button"
+                  onClick={() => useSubscriptionStore.getState().openRenewalModal(undefined, 'explore')}
+                  className="rounded-2xl border border-[#DE8626] bg-amber-500/10 px-4 py-2.5 text-xs font-bold text-[#DE8626] hover:bg-[#DE8626] hover:text-white transition-all hover:scale-[1.02] active:scale-[0.98]"
+                >
+                  Explore Other Plans
+                </button>
+                <div className="rounded-2xl bg-[#FAF7F2] dark:bg-[#151A20] p-3 text-right min-w-[100px]">
+                  <span className="text-[11px] font-medium text-[#667085]">Days Remaining</span>
+                  <p className="text-xl font-extrabold text-[#DE8626]">
+                    {activeSub?.daysRemaining !== undefined ? activeSub.daysRemaining : 365} Days
+                  </p>
+                </div>
               </div>
             </div>
           </div>
@@ -173,10 +190,10 @@ export default function SubscriptionBillingPage() {
                   </div>
 
                   <button
-                    onClick={() => alert('To upgrade or renew your plan, please contact your store account administrator.')}
-                    className="mt-6 w-full rounded-2xl border border-[#DE8626] bg-amber-500/10 py-3 text-xs font-bold text-[#DE8626] hover:bg-[#DE8626] hover:text-white transition-all"
+                    onClick={() => useSubscriptionStore.getState().openRenewalModal(plan as any)}
+                    className="mt-6 w-full rounded-2xl border border-[#DE8626] bg-amber-500/10 py-3 text-xs font-bold text-[#DE8626] hover:bg-[#DE8626] hover:text-white transition-all shadow-sm"
                   >
-                    Select Plan
+                    Select & Pay
                   </button>
                 </div>
               ))}

@@ -1,7 +1,7 @@
 const DEFAULT_API_BASE_URL =
-  'https://restadmin20260810182511-b7gaaqbfesdxa3cu.centralindia-01.azurewebsites.net/api';
+  'https://menzaposapi20260927220419-efbdafa3buaccge8.centralindia-01.azurewebsites.net/api';
 const DEFAULT_CUSTOMER_ORDERING_BASE_URL =
-  'https://lemon-mud-097d55a00.7.azurestaticapps.net';
+  'https://menza-order-web.vercel.app';
 
 export const APP_CONSTANTS = {
   APP_NAME:
@@ -10,6 +10,11 @@ export const APP_CONSTANTS = {
     process.env.APP_NAME ||
     'Menza',
   APP_TAGLINE: 'Smart Multi-Tenant Restaurant Suite',
+  APP_VERSION: '1.0.0',
+  APP_BUILD_NUMBER: 1,
+  APP_TYPE: 'POS_ADMIN',
+  DEFAULT_STORE_URL:
+    'https://play.google.com/store/apps/details?id=com.anonymous.MenzaAdmin',
   // Live Azure Web API Endpoint (Configurable via .env, Vercel & EAS)
   API_BASE_URL:
     process.env.NEXT_PUBLIC_API_BASE_URL ||
@@ -26,9 +31,27 @@ export const APP_CONSTANTS = {
   CASHFREE_ENV:
     process.env.NEXT_PUBLIC_CASHFREE_ENV ||
     process.env.EXPO_PUBLIC_CASHFREE_ENV ||
-    process.env.CASHFREE_ENV ||
+    process.env.CASHFRaEE_ENV ||
     'SANDBOX',
-
+  // Active Payment Gateway Configuration (RAZORPAY or CASHFREE)
+  PAYMENT_GATEWAY:
+    process.env.EXPO_PUBLIC_PAYMENT_GATEWAY ||
+    process.env.NEXT_PUBLIC_PAYMENT_GATEWAY ||
+    process.env.PAYMENT_GATEWAY ||
+    'RAZORPAY',
+  IS_RAZORPAY:
+    (
+      process.env.EXPO_PUBLIC_IS_RAZORPAY ||
+      process.env.NEXT_PUBLIC_IS_RAZORPAY ||
+      process.env.IS_RAZORPAY ||
+      'true'
+    ).toLowerCase() === 'true' ||
+    (
+      process.env.EXPO_PUBLIC_PAYMENT_GATEWAY ||
+      process.env.NEXT_PUBLIC_PAYMENT_GATEWAY ||
+      process.env.PAYMENT_GATEWAY ||
+      'RAZORPAY'
+    ).toUpperCase() === 'RAZORPAY',
   ROLES: {
     SUPER_ADMIN: 'SuperAdmin',
     OWNER: 'Owner',

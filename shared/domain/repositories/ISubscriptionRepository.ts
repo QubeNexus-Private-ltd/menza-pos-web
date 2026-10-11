@@ -1,8 +1,9 @@
-import { SubscriptionPlan, UserSubscriptionStatus } from '../models/Subscription';
+import { RestaurantSubscriptionHistory, SubscriptionPlan, UserSubscriptionStatus } from '../models/Subscription';
 
 export interface ISubscriptionRepository {
   getPlans(): Promise<SubscriptionPlan[]>;
   getMySubscription(): Promise<UserSubscriptionStatus | null>;
+  getRestaurantSubscription(restaurantId: number): Promise<UserSubscriptionStatus | null>;
   createPaymentOrder(planId: number): Promise<{ cfOrderId: string; paymentSessionId: string }>;
   verifyPayment(cfOrderId: string): Promise<boolean>;
   initiateCashFreePayment(
@@ -10,12 +11,24 @@ export interface ISubscriptionRepository {
     subscriptionConfigurationId: number,
     amount: number,
     mobileNumber?: string
-  ): Promise<{ success: boolean; orderId: string; paymentSessionId?: string; instrumentResponseUrl?: string; message?: string }>;
+  ): Promise<{
+    success: boolean;
+    orderId: string;
+    paymentSessionId?: string;
+    instrumentResponseUrl?: string;
+    message?: string;
+    gateway?: string;
+    keyId?: string;
+    amount?: number;
+    currency?: string;
+  }>;
   verifyCashFreePayment(
     orderId: string,
     restaurantId: number,
     subscriptionConfigurationId: number,
-    amountPaid: number
+    amountPaid: number,
+    razorpayPaymentId?: string,
+    razorpaySignature?: string
   ): Promise<{ success: boolean; message?: string }>;
   getCashFreePaymentStatus(
     orderId: string
@@ -46,4 +59,5 @@ export interface ISubscriptionRepository {
   }): Promise<boolean>;
   getPaymentsBySubscriptionId(restaurantSubscriptionId: number): Promise<any[]>;
   getAllPayments(): Promise<any[]>;
+  getSubscriptionHistory(restaurantId: number): Promise<RestaurantSubscriptionHistory[]>;
 }

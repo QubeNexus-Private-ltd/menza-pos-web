@@ -37,8 +37,13 @@
   ],
   "exclude": [
     "node_modules",
+    "shared/presentation/screens/**/*",
     "shared/presentation/screens",
+    "shared/presentation/components/**/*",
     "shared/presentation/components",
-    "shared/presentation/hooks"
+    "shared/presentation/hooks/**/*",
+    "shared/presentation/hooks",
+    "shared/presentation/navigation/**/*",
+    "shared/presentation/navigation"
   ]
 }

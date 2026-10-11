@@ -153,7 +153,7 @@ export const WalletBalanceWidget: React.FC<WalletBalanceWidgetProps> = ({
         <View style={styles.cardHeaderRow}>
           <View style={styles.titleBox}>
             <Wallet size={18} color={Colors.amber} />
-            <Text style={styles.cardTitle}>Commission Wallet</Text>
+            <Text style={styles.cardTitle}>Platform Fee Wallet</Text>
           </View>
           <StatusBadge
             label={isLowBalance ? 'LOW CREDIT' : 'ACTIVE'}
@@ -178,7 +178,7 @@ export const WalletBalanceWidget: React.FC<WalletBalanceWidgetProps> = ({
         </View>
 
         <Text style={styles.cardSubtext}>
-          Auto-deducted for commissions on walk-in POS cash orders
+          Auto-deducted for platform fees on walk-in POS cash orders
         </Text>
       </View>
 

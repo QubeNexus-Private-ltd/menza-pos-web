@@ -9,10 +9,18 @@ export class CatalogRemoteDataSource {
       const response = await apiClient.get(url);
       const data = response?.data;
       console.log('📌 [API RESPONSE] getCategories:', JSON.stringify(data));
-      if (Array.isArray(data)) return data;
-      if (data && Array.isArray(data.items)) return data.items;
-      if (data && Array.isArray(data.data)) return data.data;
-      return [];
+      let list: any[] = [];
+      if (Array.isArray(data)) list = data;
+      else if (data && Array.isArray(data.items)) list = data.items;
+      else if (data && Array.isArray(data.data)) list = data.data;
+
+      return list.map((cat: any) => ({
+        ...cat,
+        id: Number(cat.id ?? cat.Id ?? 0),
+        categoryName: String(cat.categoryName ?? cat.CategoryName ?? 'Category'),
+        kitchenStationId: cat.kitchenStationId ?? cat.KitchenStationId ?? undefined,
+        kitchenStationName: cat.kitchenStationName ?? cat.KitchenStationName ?? undefined,
+      }));
     } catch (err) {
       console.warn('❌ [API ERROR] getCategories:', err);
       return [];
@@ -61,6 +69,11 @@ export class CatalogRemoteDataSource {
         isVeg: item.isVeg !== undefined ? Boolean(item.isVeg) : item.IsVeg !== undefined ? Boolean(item.IsVeg) : true,
         isAvailable: item.isAvailable !== undefined ? Boolean(item.isAvailable) : item.IsAvailable !== undefined ? Boolean(item.IsAvailable) : Boolean(item.isActive ?? item.IsActive ?? true),
         imageUrl: item.imageUrl || item.ImageUrl || item.image || item.Image || item.itemImage || item.ItemImage || item.photoUrl || item.PhotoUrl || '',
+        kitchenStationId: item.kitchenStationId ?? item.KitchenStationId ?? undefined,
+        kitchenStationName: item.kitchenStationName ?? item.KitchenStationName ?? undefined,
+        unitId: item.unitId ?? item.UnitId ?? undefined,
+        unitName: item.unitName ?? item.UnitName ?? undefined,
+        portionDisplay: item.portionDisplay ?? item.PortionDisplay ?? undefined,
       }));
     } catch (err) {
       console.warn('❌ [API ERROR] getMenuItems:', err);
@@ -88,6 +101,7 @@ export class CatalogRemoteDataSource {
     price: number;
     quantity?: number;
     unitId?: number;
+    portionDisplay?: string;
     isVeg: boolean;
     isSpicy?: boolean;
     preparationTimeMinutes?: number;
@@ -107,6 +121,7 @@ export class CatalogRemoteDataSource {
         price: item.price,
         quantity: item.quantity && item.quantity > 0 ? item.quantity : 1,
         unitId: item.unitId,
+        portionDisplay: item.portionDisplay || null,
         isVeg: item.isVeg,
         isSpicy: item.isSpicy,
         preparationTimeMinutes: item.preparationTimeMinutes,
@@ -152,6 +167,7 @@ export class CatalogRemoteDataSource {
       price: number;
       quantity?: number;
       unitId?: number;
+      portionDisplay?: string;
       isVeg: boolean;
       isSpicy?: boolean;
       preparationTimeMinutes?: number;
@@ -172,6 +188,7 @@ export class CatalogRemoteDataSource {
         price: item.price,
         quantity: item.quantity && item.quantity > 0 ? item.quantity : 1,
         unitId: item.unitId,
+        portionDisplay: item.portionDisplay || null,
         isVeg: item.isVeg,
         isSpicy: item.isSpicy,
         preparationTimeMinutes: item.preparationTimeMinutes,

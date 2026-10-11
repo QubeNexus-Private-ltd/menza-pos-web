@@ -22,10 +22,6 @@ interface SplashScreenProps {
   minDisplayDurationMs?: number;
 }
 
-// Exact design aspect ratio from Newsplashdesign.png (853 × 1844)
-const DESIGN_WIDTH = 853;
-const DESIGN_HEIGHT = 1844;
-const DESIGN_ASPECT_RATIO = DESIGN_WIDTH / DESIGN_HEIGHT;
 
 const SAFE_MAX_TIMEOUT_MS = 4200;
 const MIN_DISPLAY_DURATION_MS = 1800;
@@ -50,14 +46,9 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
   const isFinishedRef = useRef(false);
   const currentProgressRef = useRef(0);
 
-  // Proportional canvas dimensions preserving exact aspect ratio across all devices
-  let canvasWidth = windowWidth;
-  let canvasHeight = windowWidth / DESIGN_ASPECT_RATIO;
-
-  if (canvasHeight > windowHeight) {
-    canvasHeight = windowHeight;
-    canvasWidth = windowHeight * DESIGN_ASPECT_RATIO;
-  }
+  // Full-bleed responsive canvas dimensions adapting dynamically to all screen aspect ratios
+  const canvasWidth = windowWidth;
+  const canvasHeight = windowHeight;
 
   // Smoothly update progress percentage
   const animateProgressTo = useCallback(
@@ -191,7 +182,16 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
             if (restaurants && restaurants.length > 0) {
               useAuthStore.getState().setRestaurants(restaurants);
             }
-          } catch (syncErr) {
+                    } catch (syncErr: any) {
+            // If the user's authentication was rejected or invalidated
+            if (!useAuthStore.getState().isAuthenticated || syncErr?.response?.status === 401) {
+              logger.warn('AUTH', 'SESSION_EXPIRED_DURING_SPLASH', 'User session expired during startup sync');
+              useAuthStore.getState().logout();
+              updateStatus('Please sign in to continue...');
+              await animateProgressTo(1.0, 200);
+              completeSplash();
+              return;
+            }
             logger.warn('AUTH', 'REST_SYNC_CACHED', 'Using cached restaurant info', {
               error: String(syncErr),
             });
@@ -249,10 +249,10 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
     updateStatus,
   ]);
 
-  // Geometric position matching Newsplashdesign.png loading bar coordinates (Y=1608/1844 = 87.2%)
-  const barTop = canvasHeight * 0.872;
-  const barWidth = Math.min(canvasWidth * 0.42, 360);
-  const barHeight = Math.max(7, Math.min(10, canvasHeight * 0.0055));
+  // Geometric position matching loading bar coordinates (above safe-area bottom)
+  const barTop = Math.min(canvasHeight * 0.855, canvasHeight - Math.max(insets.bottom, 16) - 65);
+  const barWidth = Math.min(canvasWidth * 0.55, 320);
+  const barHeight = Math.max(7, Math.min(9, canvasHeight * 0.0055));
 
   const progressFillWidth = progressAnim.interpolate({
     inputRange: [0, 1],
@@ -263,7 +263,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
     <View style={styles.root}>
       <StatusBar barStyle="dark-content" backgroundColor="#FAF7F2" translucent />
 
-      {/* Main Canvas Container with fixed aspect ratio */}
+      {/* Main Full-Bleed Canvas Container */}
       <Animated.View
         style={[
           styles.canvasContainer,
@@ -274,12 +274,12 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
           },
         ]}
       >
-        {/* Exact visual reference artwork with panda, cloche logo, kitchen & dining hall, leaves, and bottom wave */}
+        {/* Full-bleed visual reference artwork */}
         <Image
           accessibilityLabel="Menza — Order, Dine, Delight"
           source={require('../../../../assets/menza_splash_clean.png')}
           style={styles.fullImage}
-          resizeMode="contain"
+          resizeMode="cover"
         />
 
         {/* Real Dynamic Loading Container positioned over the loading region */}

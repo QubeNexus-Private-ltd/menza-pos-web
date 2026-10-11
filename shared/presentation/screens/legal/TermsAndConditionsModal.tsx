@@ -62,6 +62,7 @@ interface TermsAndConditionsModalProps {
   onClose: () => void;
   onAccept?: () => void;
   showAcceptButton?: boolean;
+  onOpenPrivacyPolicy?: () => void;
 }
 
 export const TermsAndConditionsModal: React.FC<TermsAndConditionsModalProps> = ({
@@ -69,6 +70,7 @@ export const TermsAndConditionsModal: React.FC<TermsAndConditionsModalProps> = (
   onClose,
   onAccept,
   showAcceptButton = false,
+  onOpenPrivacyPolicy,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -154,8 +156,9 @@ export const TermsAndConditionsModal: React.FC<TermsAndConditionsModalProps> = (
   };
 
   const handleOpenWebsite = () => {
-    Linking.openURL('https://www.menza.in').catch(() => {
-      Alert.alert('Website', 'Please visit https://www.menza.in in your browser.');
+    const websiteUrl = `https://${MENZA_LEGAL_METADATA.website}`;
+    Linking.openURL(websiteUrl).catch(() => {
+      Alert.alert('Website', `Please visit ${websiteUrl} in your browser.`);
     });
   };
 
@@ -221,6 +224,24 @@ export const TermsAndConditionsModal: React.FC<TermsAndConditionsModalProps> = (
               <Text style={styles.metaBadgeText}>Bhopal, MP, India</Text>
             </View>
           </View>
+
+          {/* Cross-Link Banner to Privacy Policy if Available */}
+          {onOpenPrivacyPolicy && (
+            <TouchableOpacity
+              onPress={() => {
+                onClose();
+                onOpenPrivacyPolicy();
+              }}
+              style={styles.crossNavBanner}
+              activeOpacity={0.75}
+            >
+              <ShieldCheck size={13} color="#10B981" style={{ marginRight: 6 }} />
+              <Text style={styles.crossNavText}>
+                Review our <Text style={styles.crossNavHighlight}>Privacy & Data Protection Policy (DPDP)</Text>? Tap here
+              </Text>
+              <ChevronRight size={13} color="#10B981" style={{ marginLeft: 'auto' }} />
+            </TouchableOpacity>
+          )}
 
           {/* 2. Interactive Search Bar */}
           <View style={styles.searchContainer}>
@@ -427,6 +448,23 @@ export const TermsAndConditionsModal: React.FC<TermsAndConditionsModalProps> = (
                 <ChevronRight size={14} color="#D96B14" style={{ marginLeft: 'auto' }} />
               </TouchableOpacity>
 
+              {onOpenPrivacyPolicy && (
+                <TouchableOpacity
+                  onPress={() => {
+                    onClose();
+                    onOpenPrivacyPolicy();
+                  }}
+                  style={styles.entityActionRow}
+                  activeOpacity={0.7}
+                >
+                  <ShieldCheck size={15} color="#059669" style={styles.entityIcon} />
+                  <Text style={[styles.entityLinkText, { color: '#059669' }]}>
+                    Privacy Policy & DPDP Data Protection
+                  </Text>
+                  <ChevronRight size={14} color="#059669" style={{ marginLeft: 'auto' }} />
+                </TouchableOpacity>
+              )}
+
               <View style={styles.sloganContainer}>
                 <Text style={styles.sloganText}>{MENZA_LEGAL_METADATA.appName} — {MENZA_LEGAL_METADATA.tagline}</Text>
               </View>
@@ -552,6 +590,26 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#D6D3D1',
     fontWeight: '500',
+  },
+  crossNavBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.25)',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginBottom: 10,
+  },
+  crossNavText: {
+    fontSize: 11,
+    color: '#D6D3D1',
+  },
+  crossNavHighlight: {
+    color: '#34D399',
+    fontWeight: '700',
+    textDecorationLine: 'underline',
   },
   searchContainer: {
     flexDirection: 'row',

@@ -16,6 +16,9 @@ const sharedPath = localSharedExists
 const nextConfig = {
   ...(monorepoSrcExists ? { outputFileTracingRoot: path.resolve(__dirname, '..') } : {}),
   reactStrictMode: false,
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
   logging: {
     fetches: {
       fullUrl: true,

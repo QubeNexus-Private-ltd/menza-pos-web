@@ -1,6 +1,6 @@
 import { ISubscriptionRepository } from '../../domain/repositories/ISubscriptionRepository';
 import { SubscriptionRemoteDataSource } from '../datasources/SubscriptionRemoteDataSource';
-import { SubscriptionPlan, UserSubscriptionStatus } from '../../domain/models/Subscription';
+import { RestaurantSubscriptionHistory, SubscriptionPlan, UserSubscriptionStatus } from '../../domain/models/Subscription';
 
 export class SubscriptionRepositoryImpl implements ISubscriptionRepository {
   constructor(private remoteDataSource: SubscriptionRemoteDataSource) {}
@@ -11,6 +11,10 @@ export class SubscriptionRepositoryImpl implements ISubscriptionRepository {
 
   async getMySubscription(): Promise<UserSubscriptionStatus | null> {
     return await this.remoteDataSource.getMySubscription();
+  }
+
+  async getRestaurantSubscription(restaurantId: number): Promise<UserSubscriptionStatus | null> {
+    return await this.remoteDataSource.getRestaurantSubscription(restaurantId);
   }
 
   async createPaymentOrder(planId: number): Promise<{ cfOrderId: string; paymentSessionId: string }> {
@@ -26,7 +30,17 @@ export class SubscriptionRepositoryImpl implements ISubscriptionRepository {
     subscriptionConfigurationId: number,
     amount: number,
     mobileNumber?: string
-  ): Promise<{ success: boolean; orderId: string; paymentSessionId?: string; instrumentResponseUrl?: string; message?: string }> {
+  ): Promise<{
+    success: boolean;
+    orderId: string;
+    paymentSessionId?: string;
+    instrumentResponseUrl?: string;
+    message?: string;
+    gateway?: string;
+    keyId?: string;
+    amount?: number;
+    currency?: string;
+  }> {
     return await this.remoteDataSource.initiateCashFreePayment(restaurantId, subscriptionConfigurationId, amount, mobileNumber);
   }
 
@@ -34,9 +48,18 @@ export class SubscriptionRepositoryImpl implements ISubscriptionRepository {
     orderId: string,
     restaurantId: number,
     subscriptionConfigurationId: number,
-    amountPaid: number
+    amountPaid: number,
+    razorpayPaymentId?: string,
+    razorpaySignature?: string
   ): Promise<{ success: boolean; message?: string }> {
-    return await this.remoteDataSource.verifyCashFreePayment(orderId, restaurantId, subscriptionConfigurationId, amountPaid);
+    return await this.remoteDataSource.verifyCashFreePayment(
+      orderId,
+      restaurantId,
+      subscriptionConfigurationId,
+      amountPaid,
+      razorpayPaymentId,
+      razorpaySignature
+    );
   }
 
   async getCashFreePaymentStatus(
@@ -93,5 +116,9 @@ export class SubscriptionRepositoryImpl implements ISubscriptionRepository {
 
   async getAllPayments(): Promise<any[]> {
     return await this.remoteDataSource.getAllPayments();
+  }
+
+  async getSubscriptionHistory(restaurantId: number): Promise<RestaurantSubscriptionHistory[]> {
+    return await this.remoteDataSource.getSubscriptionHistory(restaurantId);
   }
 }

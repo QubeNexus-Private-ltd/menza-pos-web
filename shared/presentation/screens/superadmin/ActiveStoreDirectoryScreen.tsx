@@ -43,6 +43,7 @@ import {
 import { Colors } from '../../../core/theme/colors';
 import { Typography } from '../../../core/theme/typography';
 import { Spacing } from '../../../core/theme/spacing';
+import { getSanitizedErrorMessage } from '../../../core/utils/errorSanitizer';
 import { StatusBadge } from '../../components/StatusBadge';
 import { RestaurantDetail } from '../../../domain/models/Restaurant';
 import { SuperAdminRemoteDataSource } from '../../../data/datasources/SuperAdminRemoteDataSource';
@@ -196,7 +197,7 @@ export const ActiveStoreDirectoryScreen: React.FC<ActiveStoreDirectoryScreenProp
       );
       fetchFirstPageWithFilters();
     } catch (err: any) {
-      const msg = err.response?.data?.message || err.message || 'Failed to assign owner to restaurant.';
+      const msg = getSanitizedErrorMessage(err, 'Failed to assign owner to restaurant.');
       showAlert('Assignment Error', msg, 'danger');
     } finally {
       setAssigningOwner(false);

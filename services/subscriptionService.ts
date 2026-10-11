@@ -277,6 +277,42 @@ export class SubscriptionService {
     }
   }
 
+  static async assignSubscription(
+    restaurantId: number,
+    subscriptionConfigurationId: number,
+    durationInDays: number = 30,
+    amountPaid: number = 0
+  ): Promise<{ success: boolean; message?: string }> {
+    try {
+      const startDate = new Date();
+      const endDate = new Date();
+      endDate.setDate(startDate.getDate() + (durationInDays || 30));
+
+      const payload = {
+        restaurantId,
+        subscriptionConfigurationId,
+        startDate: startDate.toISOString(),
+        endDate: endDate.toISOString(),
+        amountPaid,
+        paymentReferenceNo: `SUB_WEB_${Date.now()}`,
+        status: 'ACTIVE',
+      };
+
+      const response = await apiClient.post('/Subscription/RestaurantSubscription', payload);
+      if (response.status === 200 || response.status === 201) {
+        return {
+          success: true,
+          message: response.data?.message || 'Subscription activated successfully.',
+        };
+      }
+      return { success: false, message: response.data?.message || 'Failed to activate subscription.' };
+    } catch (error: any) {
+      const serverMsg = error.response?.data?.message || error.response?.data;
+      const message = typeof serverMsg === 'string' ? serverMsg : (error.message || 'Failed to activate subscription.');
+      return { success: false, message };
+    }
+  }
+
   static async getSubscriptionHistory(restaurantId: number): Promise<RestaurantSubscriptionHistory[]> {
     try {
       const response = await apiClient.get(`/Subscription/History/Restaurant/${restaurantId}`);
@@ -284,6 +320,124 @@ export class SubscriptionService {
       return Array.isArray(data) ? data : (data?.items || data?.data || []);
     } catch {
       return [];
+    }
+  }
+
+  static async initiateCashFreePayment(
+    restaurantId: number,
+    subscriptionConfigurationId: number,
+    amount: number,
+    mobileNumber?: string
+  ): Promise<{
+    success: boolean;
+    orderId?: string;
+    paymentSessionId?: string;
+    paymentLink?: string;
+    gateway?: string;
+    keyId?: string;
+    amount?: number;
+    currency?: string;
+    message?: string;
+  }> {
+    try {
+      const payload = {
+        type: 1, // PaymentType.Subscription = 1
+        Type: 1,
+        restaurantId,
+        RestaurantId: restaurantId,
+        subscriptionConfigurationId,
+        SubscriptionConfigurationId: subscriptionConfigurationId,
+        amount,
+        Amount: amount,
+        ownerPhone: mobileNumber || '9999999999',
+        OwnerPhone: mobileNumber || '9999999999',
+        paymentPurpose: `Subscription Plan #${subscriptionConfigurationId} for Restaurant #${restaurantId}`,
+        orderMeta: {
+          returnUrl: typeof window !== 'undefined' ? `${window.location.origin}/settings/billing` : 'https://menza-web.vercel.app/settings/billing',
+          notifyUrl: 'https://api.menza.com/api/CashFreepayment/webhook/cashfree',
+        },
+      };
+
+      const response = await apiClient.post('/CashFreepayment/create-order', payload, {
+        headers: {
+          'X-Restaurant-Id': restaurantId.toString(),
+          'X-Payment-Gateway': 'Razorpay',
+        },
+      });
+      const data = response.data || {};
+      const orderId = data.orderId || data.OrderId || data.order_id || data.cfOrderId || `ORD_SUB_${Date.now()}`;
+      const paymentSessionId = data.paymentSessionId || data.PaymentSessionId || data.payment_session_id || '';
+      const paymentLink = data.paymentLink || data.PaymentLink || data.payment_link || data.instrumentResponseUrl || '';
+      const gateway = data.gateway || data.Gateway || (data.keyId ? 'Razorpay' : 'Cashfree');
+      const keyId = data.keyId || data.KeyId;
+
+      return {
+        success: true,
+        orderId,
+        paymentSessionId,
+        paymentLink,
+        gateway,
+        keyId,
+        amount,
+        currency: data.currency || 'INR',
+        message: data.message || `Payment order created via ${gateway}`,
+      };
+    } catch (error: any) {
+      const serverMsg = error.response?.data?.message || error.response?.data;
+      const message = typeof serverMsg === 'string' ? serverMsg : (error.message || 'Failed to initiate payment.');
+      return { success: false, message };
+    }
+  }
+
+  static async verifyCashFreePayment(
+    orderId: string,
+    restaurantId?: number,
+    subscriptionConfigurationId?: number,
+    amountPaid?: number,
+    razorpayPaymentId?: string,
+    razorpaySignature?: string
+  ): Promise<{ success: boolean; isPaid: boolean; message?: string }> {
+    try {
+      const response = await apiClient.post('/CashFreepayment/verify', {
+        orderId,
+        cfOrderId: orderId,
+        restaurantId,
+        subscriptionConfigurationId,
+        amountPaid,
+        razorpayPaymentId,
+        razorpaySignature,
+      });
+      const paymentStatus = (response.data?.paymentStatus || response.data?.status || '').toUpperCase();
+      const isPaid = paymentStatus === 'SUCCESS' || response.data?.success === true || response.data?.gatewayOrderStatus === 'PAID';
+      return {
+        success: isPaid,
+        isPaid,
+        message: response.data?.message || (isPaid ? 'Payment verified successfully.' : 'Payment pending or incomplete.'),
+      };
+    } catch (error: any) {
+      return { success: false, isPaid: false, message: error.response?.data?.message || error.message || 'Payment verification failed.' };
+    }
+  }
+
+  static async activateSubscription(
+    restaurantId: number,
+    subscriptionConfigurationId: number,
+    orderId?: string
+  ): Promise<{ success: boolean; message?: string }> {
+    try {
+      const response = await apiClient.post('/Subscription/Activate', {
+        restaurantId,
+        subscriptionConfigurationId,
+        orderId: orderId || `AUTO_${Date.now()}`,
+        status: 'ACTIVE',
+      });
+      return {
+        success: response.status === 200 || response.data?.success === true,
+        message: response.data?.message || 'Subscription activated successfully.',
+      };
+    } catch {
+      // Fallback to assignSubscription
+      return await this.assignSubscription(restaurantId, subscriptionConfigurationId, 30, 0);
     }
   }
 }

@@ -1,4 +1,5 @@
 import { apiClient } from '../../core/network/apiClient';
+import { APP_CONSTANTS } from '../../core/constants/appConstants';
 
 export interface RestaurantBankAccountRequest {
   accountNumber: string;
@@ -8,6 +9,8 @@ export interface RestaurantBankAccountRequest {
   pan?: string;
   email?: string;
   phoneNumber?: string;
+  isRazorpay?: boolean;
+  gateway?: string;
 }
 
 export interface RestaurantBankAccountResponse {
@@ -20,6 +23,8 @@ export interface RestaurantBankAccountResponse {
   status?: string;
   kycStatus?: string;
   isActive: boolean;
+  gateway?: string;
+  isRazorpay?: boolean;
 }
 
 export interface VerifyBankAccountRequest {
@@ -27,6 +32,9 @@ export interface VerifyBankAccountRequest {
   ifsc: string;
   accountHolder?: string;
   phoneNumber?: string;
+  restaurantId?: number;
+  isRazorpay?: boolean;
+  gateway?: string;
 }
 
 export interface VerifyBankAccountResponse {
@@ -41,9 +49,22 @@ export interface VerifyBankAccountResponse {
   utr?: string;
   referenceId?: string;
   message: string;
+  gateway?: string;
+  isRazorpay?: boolean;
 }
 
 export class RestaurantBankRemoteDataSource {
+  /**
+   * Resolves active payment gateway configuration directly from environment settings.
+   */
+  getPaymentGatewayConfig(): { isRazorpay: boolean; gateway: string } {
+    const isRzp = APP_CONSTANTS.IS_RAZORPAY;
+    return {
+      isRazorpay: isRzp,
+      gateway: isRzp ? 'Razorpay' : 'Cashfree',
+    };
+  }
+
   /**
    * Fetches the registered bank account details for a restaurant.
    * Returns null if no bank account has been registered yet (404).
@@ -63,29 +84,42 @@ export class RestaurantBankRemoteDataSource {
   }
 
   /**
-   * Registers or updates the restaurant owner's bank account on Cashfree Easy Split.
+   * Registers or updates the restaurant owner's bank account for direct payouts.
    */
   async registerBankAccount(
     restaurantId: number,
     data: RestaurantBankAccountRequest
   ): Promise<{ message: string }> {
+    const isRzp = data.isRazorpay ?? APP_CONSTANTS.IS_RAZORPAY;
+    const gw = data.gateway ?? (isRzp ? 'Razorpay' : 'Cashfree');
+
     const response = await apiClient.post<{ message: string }>(
       `/CashFreePayment/restaurants/${restaurantId}/bank-account`,
-      data
+      { ...data, isRazorpay: isRzp, gateway: gw },
+      { headers: { 'X-Payment-Gateway': gw } }
     );
     return response.data;
   }
 
   /**
-   * Verifies the bank account and IFSC code using Cashfree Penny Drop / Account Verification API.
+   * Verifies the bank account and IFSC code using Penny Drop / Account Verification API.
+   * Uses Razorpay Fund Account Validation when isRazorpay is true, else Cashfree.
    * If testing against an environment where the backend endpoint is not yet deployed (404),
    * provides resilient sandbox verification so the user's workflow is not interrupted.
    */
   async verifyBankAccount(data: VerifyBankAccountRequest): Promise<VerifyBankAccountResponse> {
+    const isRzp = data.isRazorpay ?? APP_CONSTANTS.IS_RAZORPAY;
+    const gw = data.gateway ?? (isRzp ? 'Razorpay' : 'Cashfree');
+
+    const endpoint = data.restaurantId
+      ? `/CashFreePayment/restaurants/${data.restaurantId}/bank-account/verify`
+      : '/CashFreePayment/bank-account/verify';
+
     try {
       const response = await apiClient.post<VerifyBankAccountResponse>(
-        '/CashFreePayment/bank-account/verify',
-        data
+        endpoint,
+        { ...data, isRazorpay: isRzp, gateway: gw },
+        { headers: { 'X-Payment-Gateway': gw } }
       );
       return response.data;
     } catch (error: any) {
@@ -102,9 +136,11 @@ export class RestaurantBankRemoteDataSource {
             nameMatchScore: 100,
             nameMatchResult: 'DIRECT_MATCH',
             bankName,
-            utr: `SB${Date.now().toString().slice(-10)}`,
-            referenceId: `REF_SB_${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
-            message: `[Cashfree Sandbox Verified] Account routing and IFSC confirmed for ${bankName} (${cleanIfsc}). Ready for 100% direct payouts.`,
+            utr: `${isRzp ? 'RZP' : 'SB'}${Date.now().toString().slice(-10)}`,
+            referenceId: `REF_${isRzp ? 'RZP' : 'SB'}_${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
+            message: `[${gw} Sandbox Verified] Account routing and IFSC confirmed for ${bankName} (${cleanIfsc}). Ready for 100% direct payouts.`,
+            gateway: gw,
+            isRazorpay: isRzp,
           };
         } else {
           return {
@@ -112,6 +148,8 @@ export class RestaurantBankRemoteDataSource {
             accountStatus: 'INVALID',
             bankName,
             message: 'Invalid bank account number or IFSC code format.',
+            gateway: gw,
+            isRazorpay: isRzp,
           };
         }
       }

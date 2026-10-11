@@ -39,6 +39,7 @@ import { OrderRemoteDataSource } from '../../data/datasources/OrderRemoteDataSou
 import { RestaurantConfigRemoteDataSource } from '../../data/datasources/RestaurantConfigRemoteDataSource';
 import { usePrinterStore } from '../state/usePrinterStore';
 import { ReceiptData } from '../../core/printer/EscPosBuilder';
+import { getSanitizedErrorMessage } from '../../core/utils/errorSanitizer';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const orderDataSource = new OrderRemoteDataSource();
@@ -291,7 +292,7 @@ export const CashierSettlementModal: React.FC<CashierSettlementModalProps> = ({
         Alert.alert('Settlement Failed', result.message || 'Unable to settle order at this time.');
       }
     } catch (err: any) {
-      Alert.alert('Settlement Error', err?.response?.data?.message || err?.message || 'Failed to settle order.');
+      Alert.alert('Settlement Error', getSanitizedErrorMessage(err, 'Failed to settle order. Please try again.'));
     } finally {
       setSettling(false);
     }

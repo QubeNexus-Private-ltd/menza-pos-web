@@ -32,6 +32,7 @@ import {
 } from 'lucide-react-native';
 import { APP_CONSTANTS } from '../../../core/constants/appConstants';
 import { logger, maskMobile } from '../../../core/logging';
+import { getAuthErrorMessage } from '../../../core/utils/errorSanitizer';
 import { AuthRemoteDataSource } from '../../../data/datasources/AuthRemoteDataSource';
 import { AuthRepositoryImpl } from '../../../data/repositories/AuthRepositoryImpl';
 import { TermsConditionRemoteDataSource } from '../../../data/datasources/TermsConditionRemoteDataSource';
@@ -39,6 +40,7 @@ import { TermsConditionRepositoryImpl } from '../../../data/repositories/TermsCo
 import { useAuthStore } from '../../state/useAuthStore';
 import { useAutoVerifyOtp } from '../../hooks/useAutoVerifyOtp';
 import { TermsAndConditionsModal } from '../legal/TermsAndConditionsModal';
+import { PrivacyPolicyModal } from '../legal/PrivacyPolicyModal';
 import { LoginHeader } from './components/LoginHeader';
 import { LoginBottomWaveSvg } from './components/LoginBottomWaveSvg';
 import { LoginSvgBackground } from './components/LoginSvgBackground';
@@ -57,9 +59,11 @@ export const LoginScreen: React.FC = () => {
   const [resendTimer, setResendTimer] = useState(120);
   const [canResend, setCanResend] = useState(false);
   const [termsModalVisible, setTermsModalVisible] = useState(false);
+  const [privacyModalVisible, setPrivacyModalVisible] = useState(false);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
 
   const isVerifyingRef = useRef(false);
+  const isSendingOtpRef = useRef(false);
   const entranceAnim = useRef(new Animated.Value(0)).current;
   const setAuthData = useAuthStore((state) => state.setAuthData);
 
@@ -75,10 +79,13 @@ export const LoginScreen: React.FC = () => {
     enabled: isOtpSent,
     numberOfDigits: 6,
     onOtpReceived: (detectedCode) => {
+      if (isVerifyingRef.current) return;
       setOtpCode(detectedCode);
       Keyboard.dismiss();
       setTimeout(() => {
-        handleVerifyOtp(detectedCode);
+        if (!isVerifyingRef.current) {
+          handleVerifyOtp(detectedCode);
+        }
       }, 150);
     },
   });
@@ -156,7 +163,7 @@ export const LoginScreen: React.FC = () => {
   };
 
   const handleSendOtp = async (overrideMobile?: string) => {
-    if (loading) return;
+    if (loading || isSendingOtpRef.current) return;
 
     const mobileToUse = overrideMobile || mobile;
     if (mobileToUse.length < 10) {
@@ -164,6 +171,7 @@ export const LoginScreen: React.FC = () => {
       return;
     }
     try {
+      isSendingOtpRef.current = true;
       setLoading(true);
       setErrorMsg(null);
       logger.auth('OTP_REQUEST_STARTED', 'Initiating OTP request', {
@@ -184,20 +192,22 @@ export const LoginScreen: React.FC = () => {
       }
     } catch (err: any) {
       logger.auth('OTP_REQUEST_FAILED', 'OTP generation request failed', {
-        error: err.message,
+        error: err?.message,
       });
-      setErrorMsg(
-        err.message || 'Unable to send OTP. Please check your mobile number and try again.'
-      );
+      setErrorMsg(getAuthErrorMessage(err, 'send_otp'));
     } finally {
       setLoading(false);
+      setTimeout(() => {
+        isSendingOtpRef.current = false;
+      }, 1000);
     }
   };
 
   const handleResendOtp = async () => {
-    if (loading || !canResend) return;
+    if (loading || !canResend || isSendingOtpRef.current) return;
     setErrorMsg(null);
     try {
+      isSendingOtpRef.current = true;
       setLoading(true);
       logger.auth('OTP_REQUEST_STARTED', 'Resending OTP request', {
         mobile: maskMobile(mobile),
@@ -214,10 +224,13 @@ export const LoginScreen: React.FC = () => {
         setTimeout(() => handleVerifyOtp(res.otpCode), 250);
       }
     } catch (err: any) {
-      logger.auth('OTP_REQUEST_FAILED', 'Resend OTP failed', { error: err.message });
-      setErrorMsg(err.message || 'Unable to resend OTP. Please try again.');
+      logger.auth('OTP_REQUEST_FAILED', 'Resend OTP failed', { error: err?.message });
+      setErrorMsg(getAuthErrorMessage(err, 'resend_otp'));
     } finally {
       setLoading(false);
+      setTimeout(() => {
+        isSendingOtpRef.current = false;
+      }, 1000);
     }
   };
 
@@ -257,10 +270,7 @@ export const LoginScreen: React.FC = () => {
         'OTP verification failed',
         { error: err?.message }
       );
-      setErrorMsg(
-        err?.message ||
-          'Invalid verification code. Please check the code and try again.'
-      );
+      setErrorMsg(getAuthErrorMessage(err, 'verify_otp'));
     } finally {
       isVerifyingRef.current = false;
       setLoading(false);
@@ -612,18 +622,26 @@ export const LoginScreen: React.FC = () => {
                     </View>
                   )}
 
-                  {/* Legal Terms & Conditions Notice */}
-                  <TouchableOpacity
-                    onPress={() => setTermsModalVisible(true)}
-                    activeOpacity={0.75}
-                    style={styles.termsFooterLink}
-                  >
-                    <Scale size={13} color="#A8A29E" style={{ marginRight: 5 }} />
+                  {/* Legal Terms & Privacy Notice */}
+                  <View style={styles.termsFooterLink}>
+                    <Scale size={13} color="#A8A29E" style={{ marginRight: 5, marginTop: 1 }} />
                     <Text style={styles.termsFooterText}>
                       By signing in, you agree to Menza's{' '}
-                      <Text style={styles.termsFooterHighlight}>Terms & Conditions, Rules and Regulations</Text>
+                      <Text
+                        onPress={() => setTermsModalVisible(true)}
+                        style={styles.termsFooterHighlight}
+                      >
+                        Terms & Conditions
+                      </Text>
+                      {' and '}
+                      <Text
+                        onPress={() => setPrivacyModalVisible(true)}
+                        style={[styles.termsFooterHighlight, { color: '#059669' }]}
+                      >
+                        Privacy Policy
+                      </Text>
                     </Text>
-                  </TouchableOpacity>
+                  </View>
                 </View>
 
                 {/* Dynamic Bottom Animated Spacer: balances the screen and adapts to keyboard */}
@@ -648,6 +666,14 @@ export const LoginScreen: React.FC = () => {
       <TermsAndConditionsModal
         visible={termsModalVisible}
         onClose={() => setTermsModalVisible(false)}
+        onOpenPrivacyPolicy={() => setPrivacyModalVisible(true)}
+      />
+
+      {/* Privacy Policy & DPDP Data Protection Modal */}
+      <PrivacyPolicyModal
+        visible={privacyModalVisible}
+        onClose={() => setPrivacyModalVisible(false)}
+        onOpenTerms={() => setTermsModalVisible(true)}
       />
     </View>
   );

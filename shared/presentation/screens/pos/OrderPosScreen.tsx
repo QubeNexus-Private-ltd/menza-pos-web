@@ -43,6 +43,7 @@ import {
 import { Spacing } from '../../../core/theme/spacing';
 import { WalletBalanceWidget } from '../../components/WalletBalanceWidget';
 import { WalletEvents } from '../../../core/utils/walletEvents';
+import { getSanitizedErrorMessage } from '../../../core/utils/errorSanitizer';
 import { SkeletonLoader } from '../../components/SkeletonLoader';
 import { GildedAlertModal, GildedAlertConfig } from '../../components/GildedAlertModal';
 import { OrderRemoteDataSource } from '../../../data/datasources/OrderRemoteDataSource';
@@ -62,6 +63,9 @@ import { useAuthStore } from '../../state/useAuthStore';
 import { useKitchenStationStore } from '../../state/useKitchenStationStore';
 import { usePrinterStore } from '../../state/usePrinterStore';
 import { useNotificationStore } from '../../state/useNotificationStore';
+import { useSubscriptionStore } from '../../state/useSubscriptionStore';
+import { SubscriptionGraceBanner } from '../../components/subscription/SubscriptionGraceBanner';
+import { SubscriptionBillingScreen } from '../subscription/SubscriptionBillingScreen';
 import { BluetoothPrinterScreen } from '../printer/BluetoothPrinterScreen';
 import { OrderNotificationModal } from '../dashboard/OrderNotificationModal';
 import { OrderAlertBanner } from '../../components/OrderAlertBanner';
@@ -210,6 +214,7 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
     Array<{
       itemId: number;
       itemName: string;
+      description?: string;
       quantity: number;
       price: number;
       isVeg: boolean;
@@ -250,6 +255,14 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
   const [operatingStatus, setOperatingStatus] = useState<StoreOperatingStatus | null>(null);
   const [operatingStatusModalVisible, setOperatingStatusModalVisible] = useState<boolean>(false);
   const [walletModalVisible, setWalletModalVisible] = useState<boolean>(false);
+  const [subscriptionModalVisible, setSubscriptionModalVisible] = useState<boolean>(false);
+
+  const {
+    subscription,
+    lifecycleState: subscriptionLifecycleState,
+    isExpired: isSubscriptionExpired,
+    fetchSubscriptionStatus,
+  } = useSubscriptionStore();
 
   const { stations, fetchStations } = useKitchenStationStore();
 
@@ -262,6 +275,7 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
       loadRestaurantConfig();
       loadOperatingStatus();
       fetchStations(activeRestId);
+      fetchSubscriptionStatus(activeRestId);
 
       const unsubscribeStatus = onStoreOperatingStatusChanged((data) => {
         if (data) setOperatingStatus(data);
@@ -416,6 +430,7 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
     const portionLabel =
       item.portionDisplay ||
       (item.unitName ? `${item.quantity && item.quantity > 0 ? item.quantity : 1} ${item.unitName}` : '');
+    const itemDesc = (item.description || (item as any).itemDescription || (item as any).ItemDescription || '').trim() || undefined;
 
     setCartItems((prev) => {
       const existingIndex = prev.findIndex((c) => c.itemId === id);
@@ -429,6 +444,7 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
           {
             itemId: id,
             itemName: name,
+            description: itemDesc,
             quantity: 1,
             price,
             isVeg,
@@ -445,13 +461,14 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
   const [qtyModalItem, setQtyModalItem] = useState<{
     itemId: number;
     itemName: string;
+    description?: string;
     price: number;
     currentQty: number;
   } | null>(null);
   const [qtyInputValue, setQtyInputValue] = useState<string>('1');
 
-  const openQtyModal = (itemId: number, itemName: string, currentQty: number, price: number) => {
-    setQtyModalItem({ itemId, itemName, currentQty, price });
+  const openQtyModal = (itemId: number, itemName: string, currentQty: number, price: number, description?: string) => {
+    setQtyModalItem({ itemId, itemName, description, currentQty, price });
     setQtyInputValue(currentQty.toString());
   };
 
@@ -584,6 +601,18 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
         'Recharge Wallet',
         'Cancel',
         () => setWalletModalVisible(true)
+      );
+      return;
+    }
+
+    if (isSubscriptionExpired || subscriptionLifecycleState === 'EXPIRED') {
+      showAlert(
+        'Subscription Expired 🔒',
+        'Your restaurant subscription has expired beyond the grace period. Order taking and billing are locked until your plan is renewed.\n\nPlease renew your plan to resume operations.',
+        'danger',
+        'Renew Subscription',
+        'Cancel',
+        () => setSubscriptionModalVisible(true)
       );
       return;
     }
@@ -860,7 +889,7 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
         );
       }
     } catch (err: any) {
-      showAlert('Checkout Error', err?.message || 'Failed to process order.', 'danger');
+      showAlert('Checkout Error', getSanitizedErrorMessage(err, 'Failed to process order. Please try again.'), 'danger');
     } finally {
       setLoading(false);
       setIsKotLoading(false);
@@ -1000,6 +1029,12 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
             )}
           </View>
         </View>
+
+        {/* SUBSCRIPTION GRACE PERIOD / EXPIRATION BANNER */}
+        <SubscriptionGraceBanner
+          onRenewPress={() => setSubscriptionModalVisible(true)}
+          style={{ marginHorizontal: 12, marginBottom: 4 }}
+        />
 
         {/* PREPAID WALLET EXHAUSTED BANNER */}
         {((restaurantConfig?.walletBalance !== undefined && restaurantConfig.walletBalance <= 0) || operatingStatus?.status === 'WALLET_EXHAUSTED') && (
@@ -1352,6 +1387,19 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
                         {dish.itemName}
                       </Text>
 
+                      {Boolean((dish.description || (dish as any).itemDescription || (dish as any).ItemDescription)?.trim()) && (
+                        <Text
+                          style={[
+                            styles.dishCardDesc,
+                            !isAvailable && styles.dishCardDescDisabled,
+                          ]}
+                          numberOfLines={2}
+                          ellipsizeMode="tail"
+                        >
+                          {(dish.description || (dish as any).itemDescription || (dish as any).ItemDescription).trim()}
+                        </Text>
+                      )}
+
                       <Text
                         style={[
                           styles.dishCardTag,
@@ -1392,7 +1440,7 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
                                 style={styles.dishCardQtyBtn}
                                 onPress={(e) => {
                                   e.stopPropagation?.();
-                                  openQtyModal(dishId, dish.itemName, inCartQty, dish.price);
+                                  openQtyModal(dishId, dish.itemName, inCartQty, dish.price, (dish.description || (dish as any).itemDescription || (dish as any).ItemDescription)?.trim());
                                 }}
                                 hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
                                 activeOpacity={0.75}
@@ -1698,6 +1746,11 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
                             {item.itemName}
                           </Text>
                         </View>
+                        {Boolean(item.description) && (
+                          <Text style={styles.cartDrawerItemDesc} numberOfLines={1} ellipsizeMode="tail">
+                            {item.description}
+                          </Text>
+                        )}
                         <Text style={styles.cartDrawerItemUnitPrice}>
                           ₹{item.price} {item.portionLabel ? `• ${item.portionLabel}` : ''}
                         </Text>
@@ -1716,7 +1769,7 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
                         </TouchableOpacity>
                         <TouchableOpacity
                           style={styles.qtyTextBtn}
-                          onPress={() => openQtyModal(item.itemId, item.itemName, item.quantity, item.price)}
+                          onPress={() => openQtyModal(item.itemId, item.itemName, item.quantity, item.price, item.description)}
                           hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
                           activeOpacity={0.75}
                         >
@@ -2047,6 +2100,11 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
                 <Text style={styles.qtyModalDishName} numberOfLines={1}>
                   {qtyModalItem?.itemName}
                 </Text>
+                {Boolean(qtyModalItem?.description) && (
+                  <Text style={styles.qtyModalDishDesc} numberOfLines={2} ellipsizeMode="tail">
+                    {qtyModalItem?.description}
+                  </Text>
+                )}
                 <Text style={styles.qtyModalPrice}>
                   ₹{qtyModalItem?.price} per item • Current: {qtyModalItem?.currentQty} in cart
                 </Text>
@@ -2196,6 +2254,23 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
           loadOperatingStatus();
         }}
       />
+
+      {/* SUBSCRIPTION BILLING / RENEWAL MODAL */}
+      <Modal
+        visible={subscriptionModalVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setSubscriptionModalVisible(false)}
+      >
+        <SubscriptionBillingScreen
+          onClose={() => {
+            setSubscriptionModalVisible(false);
+            if (activeRestId > 0) {
+              fetchSubscriptionStatus(activeRestId);
+            }
+          }}
+        />
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -2829,6 +2904,16 @@ const styles = StyleSheet.create({
   dishCardNameDisabled: {
     color: '#9CA3AF',
   },
+  dishCardDesc: {
+    fontSize: 11,
+    fontWeight: '400',
+    color: '#7C6F62',
+    lineHeight: 14,
+    marginTop: 2,
+  },
+  dishCardDescDisabled: {
+    color: '#9CA3AF',
+  },
   dishVegDotSmall: {
     width: 6,
     height: 6,
@@ -3219,6 +3304,12 @@ const styles = StyleSheet.create({
   cartDrawerItemUnitPrice: {
     fontSize: 11,
     color: '#78716C',
+    marginTop: 1,
+  },
+  cartDrawerItemDesc: {
+    fontSize: 10.5,
+    color: '#8C7A6B',
+    lineHeight: 13,
     marginTop: 1,
   },
   cartDrawerItemRight: {
@@ -3659,6 +3750,12 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
     color: '#1F2937',
+  },
+  qtyModalDishDesc: {
+    fontSize: 11,
+    color: '#7C6F62',
+    lineHeight: 15,
+    marginTop: 2,
   },
   qtyModalPrice: {
     fontSize: 11,

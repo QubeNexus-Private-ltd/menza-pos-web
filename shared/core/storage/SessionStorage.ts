@@ -27,15 +27,8 @@ export class SessionStorage {
   /**
    * Persist full user session after successful login / OTP verification
    */
-  static async saveSession(session: {
-    token: string;
-    refreshToken: string;
-    user: User;
-    restaurants: RestaurantDetail[];
-    activeRestaurant?: RestaurantDetail | null;
-    hasCompletedOnboarding?: boolean;
-    hasAcceptedTerms?: boolean;
-  }): Promise<void> {
+  static async saveSession(session: PersistedSession): Promise<void> {
+
     try {
       const items: [string, string][] = [
         [STORAGE_KEYS.TOKEN, session.token || ''],
@@ -47,7 +40,10 @@ export class SessionStorage {
       ];
 
       if (session.activeRestaurant) {
-        items.push([STORAGE_KEYS.ACTIVE_RESTAURANT, JSON.stringify(session.activeRestaurant)]);
+        items.push([
+          STORAGE_KEYS.ACTIVE_RESTAURANT, 
+          session.activeRestaurant ? JSON.stringify(session.activeRestaurant) : '',
+        ]);
       }
 
       await AsyncStorage.multiSet(items);

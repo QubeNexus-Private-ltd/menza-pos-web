@@ -36,7 +36,7 @@ import { StatusBadge } from './StatusBadge';
 import { RestaurantWallet, WalletTransaction } from '../../domain/models/Wallet';
 import { WalletRemoteDataSource } from '../../data/datasources/WalletRemoteDataSource';
 import { WalletRepositoryImpl } from '../../data/repositories/WalletRepositoryImpl';
-import { CashfreeSdkService } from '../../data/datasources/CashfreeSdkService';
+import { PaymentGatewayManager } from '../../data/datasources/PaymentGatewayManager';
 import { PdfLedgerGenerator } from '../../core/utils/pdfLedgerGenerator';
 import { useAuthStore } from '../state/useAuthStore';
 
@@ -207,26 +207,41 @@ export const WalletRechargeModal: React.FC<WalletRechargeModalProps> = ({
         return;
       }
 
-      // If Cashfree PG SDK is available, launch PG checkout
+      // Launch payment checkout through PaymentGatewayManager (supports Razorpay or Cashfree)
+      let paymentResult: any = null;
       if (res.paymentSessionId || res.instrumentResponseUrl) {
         try {
-          await CashfreeSdkService.getInstance().startPayment({
+          paymentResult = await PaymentGatewayManager.getInstance().startPayment({
             orderId: res.orderId,
             paymentSessionId: res.paymentSessionId || '',
             paymentLink: res.instrumentResponseUrl || '',
+            gateway: res.gateway,
+            keyId: res.keyId,
+            amount: selectedAmount,
+            currency: res.currency || 'INR',
+            customerName: activeRestaurant?.restaurantName || user?.name || 'Restaurant Owner',
+            customerPhone: user?.mobile || activeRestaurant?.ownerMobile || '9999999999',
+            customerEmail: (user as any)?.email || (activeRestaurant as any)?.email || 'billing@menza.com',
+            orderNotes: `Platform Fee Wallet Top-up (₹${selectedAmount})`,
             environment: 'SANDBOX',
           });
-        } catch {
-          // Native SDK fallback
+        } catch (sdkErr) {
+          console.warn('Payment checkout note:', sdkErr);
         }
       }
 
       // Verify and credit wallet
-      const verifyRes = await walletRepository.verifyRecharge(res.orderId, restaurantId, selectedAmount);
+      const verifyRes = await walletRepository.verifyRecharge(
+        res.orderId,
+        restaurantId,
+        selectedAmount,
+        paymentResult?.razorpayPaymentId,
+        paymentResult?.razorpaySignature
+      );
       if (verifyRes.success) {
         Alert.alert(
           'Recharge Successful! 🎉',
-          `₹${selectedAmount.toLocaleString('en-IN')} has been added to your Commission Wallet.`
+          `₹${selectedAmount.toLocaleString('en-IN')} has been added to your Platform Fee Wallet.`
         );
         await loadWalletData();
         onRechargeSuccess?.();
@@ -254,7 +269,7 @@ export const WalletRechargeModal: React.FC<WalletRechargeModalProps> = ({
           <View style={styles.headerRow}>
             <View style={styles.headerTitleBox}>
               <Wallet size={22} color="#DE8626" />
-              <Text style={styles.headerTitle}>Commission Wallet</Text>
+              <Text style={styles.headerTitle}>Platform Fee Wallet</Text>
             </View>
             <TouchableOpacity style={styles.closeIconBtn} onPress={onClose} activeOpacity={0.7}>
               <X size={20} color="#8C7A6B" />
@@ -317,7 +332,7 @@ export const WalletRechargeModal: React.FC<WalletRechargeModalProps> = ({
                 </View>
                 <Text style={styles.balanceValue}>₹{currentBalance.toLocaleString('en-IN')}</Text>
                 <Text style={styles.balanceSubtext}>
-                  Used for auto-deducting commission on POS Walk-in Cash orders
+                  Used for auto-deducting platform fees on POS Walk-in Cash orders
                 </Text>
               </View>
 
@@ -397,7 +412,7 @@ export const WalletRechargeModal: React.FC<WalletRechargeModalProps> = ({
                       <>
                         <CreditCard size={18} color="#FFFFFF" />
                         <Text style={styles.payButtonText}>
-                          Pay ₹{(selectedAmount || 0).toLocaleString('en-IN')} via CashFree PG
+                          Pay ₹{(selectedAmount || 0).toLocaleString('en-IN')} Online
                         </Text>
                       </>
                     )}

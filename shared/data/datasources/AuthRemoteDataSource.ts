@@ -2,28 +2,7 @@ import { apiClient } from '../../core/network/apiClient';
 import { AuthResponse } from '../../domain/models/AuthResponse';
 import { RestaurantDetail } from '../../domain/models/Restaurant';
 import { useAuthStore } from '../../presentation/state/useAuthStore';
-
-function decodeJwtClaims(token: string): Record<string, any> {
-  try {
-    if (!token || typeof token !== 'string') return {};
-    const parts = token.split('.');
-    if (parts.length < 2) return {};
-    const base64Url = parts[1];
-    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-    if (typeof atob !== 'undefined') {
-      const jsonPayload = decodeURIComponent(
-        atob(base64)
-          .split('')
-          .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
-          .join('')
-      );
-      return JSON.parse(jsonPayload);
-    }
-    return {};
-  } catch {
-    return {};
-  }
-}
+import { decodeJwtClaims } from '../../core/auth/jwtUtils';
 
 export class AuthRemoteDataSource {
   async generateOtp(mobile: string, deviceId?: string): Promise<{ message: string; otpCode?: string }> {
@@ -32,11 +11,8 @@ export class AuthRemoteDataSource {
       mobileNumber: cleanMobile,
       mobile: cleanMobile,
       deviceId,
-      smsHash: '7nP3ic8JzV5',
-      appHash: '7nP3ic8JzV5',
-      hash: '7nP3ic8JzV5',
     });
-    const resData = response.data;
+    const resData = response.data?.data ?? response.data;
     const otpCode = resData?.otpCode || resData?.OtpCode || resData?.otp || resData?.Otp || resData?.code || resData?.Code;
     return {
       message: resData?.message || resData?.Message || 'OTP sent successfully',
@@ -50,11 +26,8 @@ export class AuthRemoteDataSource {
       mobileNumber: cleanMobile,
       mobile: cleanMobile,
       deviceId,
-      smsHash: '7nP3ic8JzV5',
-      appHash: '7nP3ic8JzV5',
-      hash: '7nP3ic8JzV5',
     });
-    const resData = response.data;
+    const resData = response.data?.data ?? response.data;
     const otpCode = resData?.otpCode || resData?.OtpCode || resData?.otp || resData?.Otp || resData?.code || resData?.Code;
     return {
       message: resData?.message || resData?.Message || 'OTP sent successfully',
@@ -64,16 +37,17 @@ export class AuthRemoteDataSource {
 
   private mapAuthResponse(data: any): AuthResponse {
     if (!data) return data;
-    const token = data.token || data.Token || data.accessToken || data.AccessToken || '';
+    const raw = data?.data ?? data;
+    const token = raw.token || raw.Token || raw.accessToken || raw.AccessToken || '';
     const tokenClaims = decodeJwtClaims(token);
 
-    const rawRoles = data.roles || data.Roles || (data.role ? [data.role] : data.Role ? [data.Role] : (data.roleName ? [data.roleName] : []));
+    const rawRoles = raw.roles || raw.Roles || (raw.role ? [raw.role] : raw.Role ? [raw.Role] : (raw.roleName ? [raw.roleName] : []));
     const rolesList = Array.isArray(rawRoles) ? rawRoles : typeof rawRoles === 'string' ? [rawRoles] : [];
 
-    const topLogo = data.logoUrl || data.LogoUrl || data.logo || data.Logo || tokenClaims.logoUrl || tokenClaims.storeLogoUrl || tokenClaims.logo || '';
-    const topImage = data.imageUrl || data.ImageUrl || data.bannerUrl || data.BannerUrl || data.image || data.Image || data.banner || data.Banner || tokenClaims.imageUrl || tokenClaims.bannerUrl || tokenClaims.bannerImageUrl || tokenClaims.storeImageUrl || '';
+    const topLogo = raw.logoUrl || raw.LogoUrl || raw.logo || raw.Logo || tokenClaims.logoUrl || tokenClaims.storeLogoUrl || tokenClaims.logo || '';
+    const topImage = raw.imageUrl || raw.ImageUrl || raw.bannerUrl || raw.BannerUrl || raw.image || raw.Image || raw.banner || raw.Banner || tokenClaims.imageUrl || tokenClaims.bannerUrl || tokenClaims.bannerImageUrl || tokenClaims.storeImageUrl || '';
 
-    const rawRestaurants = data.restaurants || data.Restaurants || [];
+    const rawRestaurants = raw.restaurants || raw.Restaurants || [];
     const mappedRestaurants: RestaurantDetail[] = Array.isArray(rawRestaurants)
       ? rawRestaurants.map((r: any) => ({
           restaurantId: r.restaurantId || r.RestaurantId || r.id || r.Id || 0,
@@ -91,18 +65,18 @@ export class AuthRemoteDataSource {
 
     return {
       token,
-      refreshToken: data.refreshToken || data.RefreshToken || data.refresh_token || '',
-      userId: data.userId || data.UserId || (tokenClaims.userId ? Number(tokenClaims.userId) : 0),
-      name: data.name || data.Name || tokenClaims.unique_name || '',
-      mobile: data.mobileNumber || data.MobileNumber || data.mobile || data.Mobile || '',
+      refreshToken: raw.refreshToken || raw.RefreshToken || raw.refresh_token || '',
+      userId: raw.userId || raw.UserId || (tokenClaims.userId ? Number(tokenClaims.userId) : 0),
+      name: raw.name || raw.Name || tokenClaims.unique_name || '',
+      mobile: raw.mobileNumber || raw.MobileNumber || raw.mobile || raw.Mobile || '',
       roles: rolesList,
-      activeRestaurantId: data.activeRestaurantId || data.ActiveRestaurantId || (tokenClaims.activeRestId ? Number(tokenClaims.activeRestId) : undefined),
-      restaurantName: data.restaurantName || data.RestaurantName || tokenClaims.restaurantName,
+      activeRestaurantId: raw.activeRestaurantId || raw.ActiveRestaurantId || (tokenClaims.activeRestId ? Number(tokenClaims.activeRestId) : undefined),
+      restaurantName: raw.restaurantName || raw.RestaurantName || tokenClaims.restaurantName,
       logoUrl: topLogo,
       imageUrl: topImage,
       bannerUrl: topImage,
       restaurants: mappedRestaurants,
-      isTermConditionChecked: Boolean(data.isTermConditionChecked ?? data.IsTermConditionChecked ?? false),
+      isTermConditionChecked: Boolean(raw.isTermConditionChecked ?? raw.IsTermConditionChecked ?? false),
     };
   }
 
@@ -167,7 +141,10 @@ export class AuthRemoteDataSource {
         role: r.role || r.Role || defaultRole,
         isDefault: Boolean(r.isDefault || r.IsDefault),
       }));
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.response?.status === 401) {
+        throw err;
+      }
       if (storeState.restaurants.length > 0) {
         return storeState.restaurants;
       }

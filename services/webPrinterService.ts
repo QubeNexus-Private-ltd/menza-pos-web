@@ -47,6 +47,80 @@ export class WebPrinterService {
   }
 
   /**
+   * Prints both the Customer Tax Invoice and Kitchen KOT according to enabled settings
+   */
+  static async printBifurcatedOrder(
+    data: ReceiptData,
+    paperWidth: PaperWidth = '58mm',
+    printReceiptEnabled: boolean = true,
+    printKotEnabled: boolean = true
+  ): Promise<{ receiptPrinted: boolean; kotPrinted: boolean }> {
+    let receiptPrinted = false;
+    let kotPrinted = false;
+
+    if (printReceiptEnabled) {
+      try {
+        receiptPrinted = await this.printReceipt(data, paperWidth);
+      } catch (err) {
+        console.warn('Bifurcated receipt print error:', err);
+      }
+    }
+
+    if (printReceiptEnabled && printKotEnabled && receiptPrinted) {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    }
+
+    if (printKotEnabled) {
+      try {
+        kotPrinted = await this.printKot(data, paperWidth);
+      } catch (err) {
+        console.warn('Bifurcated KOT print error:', err);
+      }
+    }
+
+    return { receiptPrinted, kotPrinted };
+  }
+
+  /**
+   * Prints bifurcated KOT slips partitioned by kitchen station (e.g. GRILL, CURRY, BAR)
+   */
+  static async printStationKots(
+    data: ReceiptData,
+    paperWidth: PaperWidth = '58mm'
+  ): Promise<boolean> {
+    if (!data.items || data.items.length === 0) {
+      return this.printKot(data, paperWidth);
+    }
+
+    // Group items by station
+    const stationGroups = new Map<string, typeof data.items>();
+    data.items.forEach((item) => {
+      const station = (item.stationName || item.stationCode || 'Main Kitchen').trim();
+      const existing = stationGroups.get(station) || [];
+      existing.push(item);
+      stationGroups.set(station, existing);
+    });
+
+    if (stationGroups.size <= 1) {
+      return this.printKot(data, paperWidth);
+    }
+
+    let allPrinted = true;
+    for (const [stationName, stationItems] of stationGroups.entries()) {
+      const stationData: ReceiptData = {
+        ...data,
+        restaurantName: `${data.restaurantName || 'Menza'} - [${stationName.toUpperCase()}]`,
+        items: stationItems,
+      };
+      const ok = await this.printKot(stationData, paperWidth);
+      if (!ok) allPrinted = false;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+
+    return allPrinted;
+  }
+
+  /**
    * Print a Test Receipt to verify thermal printer alignment and roll width
    */
   static async printTestReceipt(restaurantName: string = 'Menza Restaurant', paperWidth: PaperWidth = '58mm'): Promise<boolean> {
@@ -430,6 +504,14 @@ export class WebPrinterService {
     </div>
 
     <div class="divider-solid"></div>
+
+    ${data.isProforma ? `
+    <div class="center bold" style="border: 1px dashed #000; padding: 3px 0; margin: 4px 0; font-size: ${is80mm ? '12px' : '10.5px'};">
+      *** PROFORMA / GUEST CHECK ***<br/><span style="font-size: ${is80mm ? '10px' : '9px'}; font-weight: normal;">(NOT A TAX INVOICE)</span>
+    </div>` : data.isDuplicate ? `
+    <div class="center bold" style="border: 1px dashed #000; padding: 3px 0; margin: 4px 0; font-size: ${is80mm ? '12px' : '10.5px'};">
+      *** DUPLICATE RECEIPT ***
+    </div>` : ''}
 
     <!-- Metadata -->
     <div class="row">

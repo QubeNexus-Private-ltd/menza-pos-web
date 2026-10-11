@@ -1,4 +1,4 @@
-import { NativeModules, Platform, PermissionsAndroid } from 'react-native';
+import { NativeModules, Platform, PermissionsAndroid, Linking } from 'react-native';
 import { EscPosBuilder, ReceiptData, PaperWidth } from '../../core/printer/EscPosBuilder';
 import { logger } from '../../core/logging';
 
@@ -74,6 +74,23 @@ export class BluetoothPrinterService {
     }
   }
 
+  /** Check if Bluetooth permissions are already granted on Android */
+  async hasPermissions(): Promise<boolean> {
+    if (Platform.OS !== 'android') return true;
+    try {
+      const apiLevel = typeof Platform.Version === 'number' ? Platform.Version : parseInt(String(Platform.Version), 10);
+      if (apiLevel >= 31) {
+        const scanGranted = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN);
+        const connectGranted = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT);
+        return scanGranted && connectGranted;
+      } else {
+        return await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION);
+      }
+    } catch {
+      return false;
+    }
+  }
+
   /** Check if device has Bluetooth hardware */
   async isBluetoothAvailable(): Promise<boolean> {
     if (!this.isNativeModuleAvailable()) return false;
@@ -91,6 +108,54 @@ export class BluetoothPrinterService {
       return await BluetoothPrinter.isBluetoothEnabled();
     } catch {
       return false;
+    }
+  }
+
+  /** Prompt user to turn on Bluetooth or open Bluetooth settings */
+  async enableBluetooth(): Promise<boolean> {
+    if (Platform.OS === 'android') {
+      if (this.isNativeModuleAvailable() && BluetoothPrinter.enableBluetooth) {
+        try {
+          return await BluetoothPrinter.enableBluetooth();
+        } catch {}
+      }
+      try {
+        await Linking.sendIntent('android.settings.BLUETOOTH_SETTINGS');
+        return true;
+      } catch {
+        try {
+          await Linking.openSettings();
+          return true;
+        } catch {
+          return false;
+        }
+      }
+    }
+    return false;
+  }
+
+  /** Open phone Bluetooth settings */
+  async openBluetoothSettings(): Promise<boolean> {
+    try {
+      if (Platform.OS === 'android') {
+        if (this.isNativeModuleAvailable() && BluetoothPrinter.openBluetoothSettings) {
+          try {
+            return await BluetoothPrinter.openBluetoothSettings();
+          } catch {}
+        }
+        await Linking.sendIntent('android.settings.BLUETOOTH_SETTINGS');
+        return true;
+      } else {
+        await Linking.openSettings();
+        return true;
+      }
+    } catch {
+      try {
+        await Linking.openSettings();
+        return true;
+      } catch {
+        return false;
+      }
     }
   }
 
@@ -118,6 +183,10 @@ export class BluetoothPrinterService {
   async getPairedDevices(): Promise<BluetoothDevice[]> {
     if (!this.isNativeModuleAvailable()) return [];
     try {
+      const isEnabled = await this.isBluetoothEnabled();
+      if (!isEnabled) {
+        return [];
+      }
       const hasPerm = await this.requestPermissions();
       if (!hasPerm) {
         throw new Error('Bluetooth permissions not granted.');
@@ -133,34 +202,38 @@ export class BluetoothPrinterService {
   /** Scan for nearby Bluetooth devices */
   async scanDevices(): Promise<BluetoothDevice[]> {
     if (!this.isNativeModuleAvailable()) {
-      return [
-        { name: 'MPT-II Thermal Printer', address: '00:11:22:33:44:55', isPaired: true },
-        { name: 'POS-58 Bluetooth', address: 'AA:BB:CC:DD:EE:FF', isPaired: false },
-      ];
+      throw new Error('Bluetooth printer service is not available on this device.');
+    }
+
+    const isEnabled = await this.isBluetoothEnabled();
+    if (!isEnabled) {
+      throw new Error('Bluetooth is turned off. Please turn on your Bluetooth first.');
+    }
+
+    const hasPerm = await this.requestPermissions();
+    if (!hasPerm) {
+      throw new Error('Bluetooth permissions are required to scan for printers.');
     }
 
     try {
-      const hasPerm = await this.requestPermissions();
-      if (!hasPerm) {
-        throw new Error('Bluetooth permissions are required to scan for printers.');
-      }
-
-      const isEnabled = await this.isBluetoothEnabled();
-      if (!isEnabled) {
-        throw new Error('Please turn on Bluetooth in your phone settings first.');
-      }
-
       const devices = await BluetoothPrinter.scanDevices();
       return Array.isArray(devices) ? devices : [];
     } catch (err: any) {
       logger.error('PRINTER', 'SCAN_DEVICES_ERROR', err);
+      // Fallback: If hardware discovery throws an error (e.g. system radio busy), return paired devices
+      try {
+        const paired = await this.getPairedDevices();
+        if (paired && paired.length > 0) {
+          return paired;
+        }
+      } catch {}
       throw err;
     }
   }
 
   /** Pair an unbonded Bluetooth device */
   async pairDevice(address: string): Promise<boolean> {
-    if (!this.isNativeModuleAvailable()) return true;
+    if (!this.isNativeModuleAvailable()) return false;
     try {
       return await BluetoothPrinter.pairDevice(address);
     } catch (err: any) {
@@ -172,15 +245,20 @@ export class BluetoothPrinterService {
   /** Connect to a printer by MAC Address */
   async connect(address: string): Promise<{ success: boolean; name?: string; address?: string }> {
     if (!this.isNativeModuleAvailable()) {
-      return { success: true, name: 'Simulated Mobile Printer', address };
+      throw new Error('Bluetooth printer service is not available on this device.');
+    }
+
+    const isEnabled = await this.isBluetoothEnabled();
+    if (!isEnabled) {
+      throw new Error('Bluetooth is turned off. Please turn on your Bluetooth first.');
+    }
+
+    const hasPerm = await this.requestPermissions();
+    if (!hasPerm) {
+      throw new Error('Bluetooth permissions are required to connect.');
     }
 
     try {
-      const hasPerm = await this.requestPermissions();
-      if (!hasPerm) {
-        throw new Error('Bluetooth permissions are required to connect.');
-      }
-
       const result = await BluetoothPrinter.connect(address);
       return result || { success: true, address };
     } catch (err: any) {
@@ -212,7 +290,12 @@ export class BluetoothPrinterService {
   /** Print raw ESC/POS byte array directly to Bluetooth printer */
   async printBytes(bytes: number[]): Promise<boolean> {
     if (!this.isNativeModuleAvailable()) {
-      return true;
+      throw new Error('Bluetooth printer service is not available on this device.');
+    }
+
+    const isEnabled = await this.isBluetoothEnabled();
+    if (!isEnabled) {
+      throw new Error('Bluetooth is turned off. Please turn on Bluetooth.');
     }
 
     try {
@@ -231,7 +314,12 @@ export class BluetoothPrinterService {
   /** Print plain text string to printer */
   async printText(text: string): Promise<boolean> {
     if (!this.isNativeModuleAvailable()) {
-      return true;
+      throw new Error('Bluetooth printer service is not available on this device.');
+    }
+
+    const isEnabled = await this.isBluetoothEnabled();
+    if (!isEnabled) {
+      throw new Error('Bluetooth is turned off. Please turn on Bluetooth.');
     }
 
     try {

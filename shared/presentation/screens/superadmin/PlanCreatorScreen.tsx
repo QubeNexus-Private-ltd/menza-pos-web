@@ -95,7 +95,7 @@ const COMMISSION_TYPE_CONFIG: Record<
   },
   FEATURE_DRIVEN: {
     label: 'Add-on Driven Only',
-    desc: 'Zero base commission; only active add-ons apply',
+    desc: 'Zero base platform fee; only active add-ons apply',
     icon: Sliders,
     example: 'e.g. Only delivery/online order fees apply',
   },
@@ -153,10 +153,11 @@ export const PlanCreatorScreen: React.FC<PlanCreatorScreenProps> = ({ onClose })
   const [discountAmount, setDiscountAmount] = useState('0');
   const [includedWalletCredit, setIncludedWalletCredit] = useState('0');
 
-  // Step 2: Commission & Splits
+  // Step 2: Platform Fee & Splits
   const [commissionType, setCommissionType] = useState<CommissionType>('PERCENTAGE');
   const [baseCommissionPercentage, setBaseCommissionPercentage] = useState('0');
   const [baseFlatCommissionPerOrder, setBaseFlatCommissionPerOrder] = useState('0');
+  const [minCommissionFloorPerOrder, setMinCommissionFloorPerOrder] = useState('0');
   const [maxCommissionCapPerOrder, setMaxCommissionCapPerOrder] = useState('0');
 
   // Alert State
@@ -198,6 +199,7 @@ export const PlanCreatorScreen: React.FC<PlanCreatorScreenProps> = ({ onClose })
 
   const parsedBaseCommissionPct = parseNumber(baseCommissionPercentage);
   const parsedBaseFlatFee = parseNumber(baseFlatCommissionPerOrder);
+  const parsedMinFloor = parseNumber(minCommissionFloorPerOrder);
   const parsedMaxCap = parseNumber(maxCommissionCapPerOrder);
   const parsedWalletCredit = parseNumber(includedWalletCredit);
 
@@ -307,6 +309,16 @@ export const PlanCreatorScreen: React.FC<PlanCreatorScreenProps> = ({ onClose })
       return;
     }
 
+    if (parsedMinFloor > 0 && parsedMaxCap > 0 && parsedMinFloor > parsedMaxCap) {
+      showAlert(
+        'Configuration Conflict',
+        `Minimum platform fee floor (₹${parsedMinFloor}) cannot be greater than maximum platform fee cap (₹${parsedMaxCap}).`,
+        'danger'
+      );
+      setCurrentStep(2);
+      return;
+    }
+
     const durationDays = DURATION_MAP[selectedCycle].days;
 
     const payload: Partial<SubscriptionPlan> = {
@@ -321,6 +333,7 @@ export const PlanCreatorScreen: React.FC<PlanCreatorScreenProps> = ({ onClose })
       commissionType: commissionType,
       baseCommissionPercentage: parsedBaseCommissionPct,
       baseFlatCommissionPerOrder: parsedBaseFlatFee,
+      minCommissionFloorPerOrder: parsedMinFloor,
       maxCommissionCapPerOrder: parsedMaxCap,
       includedWalletCredit: parsedWalletCredit,
       isActive: true,
@@ -351,6 +364,7 @@ export const PlanCreatorScreen: React.FC<PlanCreatorScreenProps> = ({ onClose })
             setDiscountAmount('0');
             setBaseCommissionPercentage('0');
             setBaseFlatCommissionPerOrder('0');
+            setMinCommissionFloorPerOrder('0');
             setMaxCommissionCapPerOrder('0');
             setIncludedWalletCredit('0');
             setCurrentStep(1);
@@ -499,7 +513,7 @@ export const PlanCreatorScreen: React.FC<PlanCreatorScreenProps> = ({ onClose })
                 <View style={styles.trackerTrack}>
                   {[
                     { step: 1, label: 'Identity & Price' },
-                    { step: 2, label: 'Commission' },
+                    { step: 2, label: 'Platform Fee' },
                     { step: 3, label: 'Features' },
                     { step: 4, label: 'Preview' },
                   ].map((s, idx, arr) => {
@@ -761,10 +775,10 @@ export const PlanCreatorScreen: React.FC<PlanCreatorScreenProps> = ({ onClose })
                       <View style={styles.walletBonusCard}>
                         <View style={styles.walletBonusTop}>
                           <Gift size={16} color="#17845A" />
-                          <Text style={styles.walletBonusTitle}>Complimentary Commission Wallet Credits</Text>
+                          <Text style={styles.walletBonusTitle}>Complimentary Platform Fee Wallet Credits</Text>
                         </View>
                         <Text style={styles.walletBonusDesc}>
-                          Automatically loaded to the outlet's commission ledger to pay for POS cash bills.
+                          Automatically loaded to the outlet's platform fee ledger to pay for POS cash bills.
                         </Text>
                         <TextInput
                           style={[styles.fieldInput, { backgroundColor: '#FFFFFF', marginTop: 8 }]}
@@ -780,7 +794,7 @@ export const PlanCreatorScreen: React.FC<PlanCreatorScreenProps> = ({ onClose })
                 )}
 
                 {/* ------------------------------------------------------------- */}
-                {/* STEP 2: COMMISSION & REVENUE SPLIT */}
+                {/* STEP 2: PLATFORM FEE & REVENUE SPLIT */}
                 {/* ------------------------------------------------------------- */}
                 {currentStep === 2 && (
                   <View style={styles.wizardCard}>
@@ -790,15 +804,15 @@ export const PlanCreatorScreen: React.FC<PlanCreatorScreenProps> = ({ onClose })
                         <Percent size={16} color="#DE8626" />
                       </View>
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.stepBannerTitle}>Commission & Order Splits</Text>
+                        <Text style={styles.stepBannerTitle}>Platform Fee & Order Splits</Text>
                         <Text style={styles.stepBannerSubtitle}>
-                          Configure take-rate rules and order commission deductions
+                          Configure take-rate rules and order platform fee deductions
                         </Text>
                       </View>
                     </View>
 
                     <View style={styles.formFieldsStack}>
-                      <Text style={styles.fieldLabel}>COMMISSION MODEL *</Text>
+                      <Text style={styles.fieldLabel}>PLATFORM FEE MODEL *</Text>
                       <View style={{ gap: 8 }}>
                         {(['PERCENTAGE', 'FLAT_PER_ORDER', 'FEATURE_DRIVEN'] as CommissionType[]).map((typeKey) => {
                           const isSel = typeKey === commissionType;
@@ -857,16 +871,30 @@ export const PlanCreatorScreen: React.FC<PlanCreatorScreenProps> = ({ onClose })
                         </View>
                       </View>
 
-                      <View style={styles.fieldBox}>
-                        <Text style={styles.fieldLabel}>MAX COMMISSION CAP / ORDER (₹) (0 = Unlimited)</Text>
-                        <TextInput
-                          style={styles.fieldInput}
-                          placeholder="50.00 (0 for no cap)"
-                          placeholderTextColor="#9CA3AF"
-                          keyboardType="numeric"
-                          value={maxCommissionCapPerOrder}
-                          onChangeText={setMaxCommissionCapPerOrder}
-                        />
+                      <View style={{ flexDirection: 'row', gap: 12 }}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.fieldLabel}>MIN FLOOR / ORDER (₹) (0 = None)</Text>
+                          <TextInput
+                            style={styles.fieldInput}
+                            placeholder="2.00 (0 for no floor)"
+                            placeholderTextColor="#9CA3AF"
+                            keyboardType="numeric"
+                            value={minCommissionFloorPerOrder}
+                            onChangeText={setMinCommissionFloorPerOrder}
+                          />
+                        </View>
+
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.fieldLabel}>MAX CAP / ORDER (₹) (0 = Unlimited)</Text>
+                          <TextInput
+                            style={styles.fieldInput}
+                            placeholder="50.00 (0 for no cap)"
+                            placeholderTextColor="#9CA3AF"
+                            keyboardType="numeric"
+                            value={maxCommissionCapPerOrder}
+                            onChangeText={setMaxCommissionCapPerOrder}
+                          />
+                        </View>
                       </View>
 
                       {/* Effective Simulation Telemetry */}
@@ -877,6 +905,14 @@ export const PlanCreatorScreen: React.FC<PlanCreatorScreenProps> = ({ onClose })
                             {aggregatedCommissionPct.toFixed(2)}% + ₹{aggregatedFlatFee.toFixed(2)}
                           </Text>
                         </View>
+                        {parsedMinFloor > 0 && (
+                          <View style={styles.receiptLine}>
+                            <Text style={[styles.receiptLabel, { color: '#0E6240' }]}>Minimum Floor Protection:</Text>
+                            <Text style={[styles.receiptVal, { color: '#17845A', fontWeight: '800' }]}>
+                              Floor ₹{parsedMinFloor.toFixed(2)} / order
+                            </Text>
+                          </View>
+                        )}
                         {parsedMaxCap > 0 && (
                           <View style={styles.receiptLine}>
                             <Text style={[styles.receiptLabel, { color: '#0E6240' }]}>Maximum Take Ceiling:</Text>
@@ -887,7 +923,7 @@ export const PlanCreatorScreen: React.FC<PlanCreatorScreenProps> = ({ onClose })
                         )}
                         <View style={styles.receiptDashedDivider} />
                         <Text style={{ fontSize: 10, color: '#0E6240', fontStyle: 'italic' }}>
-                          💡 Simulation: On a ₹1,000 dine-in order, commission deducted = ₹{Math.min(parsedMaxCap > 0 ? parsedMaxCap : Infinity, 1000 * (aggregatedCommissionPct / 100) + aggregatedFlatFee).toFixed(2)}
+                          💡 Simulation: ₹1,000 order = ₹{Math.min(1000, Math.max(parsedMinFloor, Math.min(parsedMaxCap > 0 ? parsedMaxCap : Infinity, 1000 * (aggregatedCommissionPct / 100) + aggregatedFlatFee))).toFixed(2)} | Micro ₹15 order = ₹{Math.min(15, Math.max(parsedMinFloor, Math.min(parsedMaxCap > 0 ? parsedMaxCap : Infinity, 15 * (aggregatedCommissionPct / 100) + aggregatedFlatFee))).toFixed(2)}
                         </Text>
                       </View>
                     </View>
@@ -1087,11 +1123,14 @@ export const PlanCreatorScreen: React.FC<PlanCreatorScreenProps> = ({ onClose })
 
                         <View style={styles.previewCommissionTelemetryBox}>
                           <Text style={styles.previewCommissionLabelText}>
-                            Commission Rule:{' '}
+                            Platform Fee Rule:{' '}
                             <Text style={{ color: '#FEA619', fontWeight: '800' }}>
                               {aggregatedCommissionPct.toFixed(2)}% + ₹{aggregatedFlatFee.toFixed(2)} / order
                             </Text>
-                            {parsedMaxCap > 0 ? ` (Cap ₹${parsedMaxCap})` : ''}
+                            {parsedMinFloor > 0 ? ` (Min ₹${parsedMinFloor}` : ''}
+                            {parsedMaxCap > 0
+                              ? (parsedMinFloor > 0 ? `, Cap ₹${parsedMaxCap})` : ` (Cap ₹${parsedMaxCap})`)
+                              : (parsedMinFloor > 0 ? ')' : '')}
                           </Text>
                         </View>
 
@@ -1313,13 +1352,16 @@ export const PlanCreatorScreen: React.FC<PlanCreatorScreenProps> = ({ onClose })
                             </View>
                           ) : null}
 
-                          {/* Commission Row */}
+                          {/* Platform Fee Row */}
                           <View style={styles.publishedPlanCommissionRow}>
                             <Text style={styles.publishedPlanCommissionText}>
-                              Commission: <Text style={{ color: '#DE8626', fontWeight: '800' }}>{p.baseCommissionPercentage || 0}% + ₹{p.baseFlatCommissionPerOrder || 0}/order</Text>
-                              {p.maxCommissionCapPerOrder && p.maxCommissionCapPerOrder > 0
-                                ? ` (Cap ₹${p.maxCommissionCapPerOrder})`
+                              Platform Fee: <Text style={{ color: '#DE8626', fontWeight: '800' }}>{p.baseCommissionPercentage || 0}% + ₹{p.baseFlatCommissionPerOrder || 0}/order</Text>
+                              {p.minCommissionFloorPerOrder && p.minCommissionFloorPerOrder > 0
+                                ? ` (Min ₹${p.minCommissionFloorPerOrder}`
                                 : ''}
+                              {p.maxCommissionCapPerOrder && p.maxCommissionCapPerOrder > 0
+                                ? (p.minCommissionFloorPerOrder && p.minCommissionFloorPerOrder > 0 ? `, Cap ₹${p.maxCommissionCapPerOrder})` : ` (Cap ₹${p.maxCommissionCapPerOrder})`)
+                                : (p.minCommissionFloorPerOrder && p.minCommissionFloorPerOrder > 0 ? ')' : '')}
                             </Text>
                           </View>
 

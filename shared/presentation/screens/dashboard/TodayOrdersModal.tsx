@@ -58,6 +58,8 @@ import { OrderMaster, RestaurantTodayRevenue, OrderStatusOption, SettleOrderResp
 import { OrderRemoteDataSource } from '../../../data/datasources/OrderRemoteDataSource';
 import { RestaurantConfigRemoteDataSource } from '../../../data/datasources/RestaurantConfigRemoteDataSource';
 import { usePrinterStore } from '../../state/usePrinterStore';
+import { BluetoothPrinterService } from '../../../data/datasources/BluetoothPrinterService';
+import { BluetoothPrinterScreen } from '../printer/BluetoothPrinterScreen';
 import { useAuthStore } from '../../state/useAuthStore';
 import { useNotificationStore } from '../../state/useNotificationStore';
 import { ReceiptData } from '../../../core/printer/EscPosBuilder';
@@ -121,11 +123,15 @@ export const TodayOrdersModal: React.FC<TodayOrdersModalProps> = ({
   const [storeSgstRate, setStoreSgstRate] = useState<number>(2.5);
   const [printingOrderId, setPrintingOrderId] = useState<string | number | null>(null);
   const [updatingStatusId, setUpdatingStatusId] = useState<number | null>(null);
+  const [printerModalVisible, setPrinterModalVisible] = useState<boolean>(false);
 
   const { connectedDevice, printReceipt, printKot, isPrinting } = usePrinterStore();
 
   useEffect(() => {
     if (visible) {
+      usePrinterStore.getState().init().catch(() => {});
+      usePrinterStore.getState().checkStatus().catch(() => {});
+
       orderDataSource
         .getOrderStatuses()
         .then((statuses) => {
@@ -186,13 +192,23 @@ export const TodayOrdersModal: React.FC<TodayOrdersModalProps> = ({
   };
 
   const handlePrintOrderDetail = async (order: OrderMaster) => {
-    if (!connectedDevice) {
-      Alert.alert(
-        'No Printer Connected 🖨️',
-        'Please pair and connect your mobile thermal printer in Settings > Bluetooth Receipt Printer.',
-        [{ text: 'OK' }]
-      );
-      return;
+    // 1. Verify or re-establish printer connection
+    const printerService = BluetoothPrinterService.getInstance();
+    let isConn = await printerService.isConnected();
+    if (!isConn) {
+      const store = usePrinterStore.getState();
+      const reconnected = await store.ensureConnection();
+      if (!reconnected) {
+        Alert.alert(
+          'Printer Not Connected 🖨️',
+          'Please connect your mobile thermal printer in Bluetooth Printer Settings.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Connect Printer', onPress: () => setPrinterModalVisible(true) },
+          ]
+        );
+        return;
+      }
     }
 
     try {
@@ -206,7 +222,7 @@ export const TodayOrdersModal: React.FC<TodayOrdersModalProps> = ({
       const fetchedOrder: OrderMaster = fetchedOrderRes.status === 'fulfilled' ? fetchedOrderRes.value : order;
       const storeConfig = configRes.status === 'fulfilled' ? configRes.value : null;
 
-      const effectiveToken = formatTokenNumber(fetchedOrder) || formatTokenNumber(order) || order.pickupToken;
+      const effectiveToken = formatTokenNumber(fetchedOrder) || formatTokenNumber(order) || order.pickupToken || String(order.id);
 
       const rawOrderTotal = (fetchedOrder.totalAmount && fetchedOrder.totalAmount > 0)
         ? fetchedOrder.totalAmount
@@ -290,27 +306,42 @@ export const TodayOrdersModal: React.FC<TodayOrdersModalProps> = ({
         sgstPercentage: hasGst ? sgstRate : undefined,
         taxAmount: hasGst ? totalTaxAmt : 0,
         taxPercentage: hasGst ? totalGstRate : 0,
-        grandTotal: fetchedOrder.totalAmount,
+        grandTotal: effectiveOrderTotal,
         date: fetchedOrder.createdAt ? new Date(fetchedOrder.createdAt) : new Date(),
       };
 
+      // 1. Print Customer Bill ONLY (do not print KOT)
       await printReceipt(receiptData);
-      Alert.alert('Receipt Printed! 🖨️', `Token #${effectiveToken || order.orderNumber || order.id} receipt successfully sent to printer.`);
+
+      Alert.alert(
+        'Bill Printed! 🖨️',
+        `Tax bill for Token #${effectiveToken || order.orderNumber || order.id} successfully sent to printer.`
+      );
     } catch (err: any) {
-      Alert.alert('Print Error', err?.message || 'Failed to print receipt.');
+      Alert.alert('Print Error', err?.message || 'Failed to print bill.');
     } finally {
       setPrintingOrderId(null);
     }
   };
 
   const handlePrintKot = async (order: OrderMaster) => {
-    if (!connectedDevice) {
-      Alert.alert(
-        'No Printer Connected 🖨️',
-        'Please pair and connect your mobile thermal printer in Settings > Bluetooth Receipt Printer.',
-        [{ text: 'OK' }]
-      );
-      return;
+    // 1. Verify or re-establish printer connection
+    const printerService = BluetoothPrinterService.getInstance();
+    let isConn = await printerService.isConnected();
+    if (!isConn) {
+      const store = usePrinterStore.getState();
+      const reconnected = await store.ensureConnection();
+      if (!reconnected) {
+        Alert.alert(
+          'Printer Not Connected 🖨️',
+          'Please connect your mobile thermal printer in Bluetooth Printer Settings.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Connect Printer', onPress: () => setPrinterModalVisible(true) },
+          ]
+        );
+        return;
+      }
     }
 
     try {
@@ -325,8 +356,8 @@ export const TodayOrdersModal: React.FC<TodayOrdersModalProps> = ({
       const storeConfig = configRes.status === 'fulfilled' ? configRes.value : null;
 
       const effectiveToken =
-        fetchedOrder.pickupToken ||
-        (fetchedOrder as any).tokenNumber ||
+        formatTokenNumber(fetchedOrder) ||
+        formatTokenNumber(order) ||
         order.pickupToken ||
         (order as any).tokenNumber ||
         String(fetchedOrder.id || order.id);
@@ -984,6 +1015,15 @@ export const TodayOrdersModal: React.FC<TodayOrdersModalProps> = ({
                   <Text style={styles.headerPosBtnText}>POS Bill</Text>
                 </TouchableOpacity>
               )}
+
+              <TouchableOpacity
+                style={[styles.headerPrinterBtn, connectedDevice ? styles.headerPrinterBtnConnected : null]}
+                onPress={() => setPrinterModalVisible(true)}
+                activeOpacity={0.75}
+                accessibilityLabel={connectedDevice ? 'Printer Connected' : 'Connect Printer'}
+              >
+                <Printer size={15} color={connectedDevice ? '#10B981' : '#F59E0B'} />
+              </TouchableOpacity>
 
               <TouchableOpacity
                 onPress={onClose}
@@ -1823,7 +1863,17 @@ export const TodayOrdersModal: React.FC<TodayOrdersModalProps> = ({
           onSettlementSuccess={handleSettlementSuccess}
         />
 
-        {/* 8. REAL-TIME FLOATING ORDER ALERT BANNER */}
+        {/* 8. BLUETOOTH PRINTER MODAL */}
+        <Modal visible={printerModalVisible} animationType="slide">
+          <BluetoothPrinterScreen
+            onClose={() => {
+              setPrinterModalVisible(false);
+              usePrinterStore.getState().checkStatus();
+            }}
+          />
+        </Modal>
+
+        {/* 9. REAL-TIME FLOATING ORDER ALERT BANNER */}
         <OrderAlertBanner
           onPress={handleBannerPress}
           onSettleOrder={handleBannerSettle}
@@ -1905,6 +1955,20 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 11,
     fontWeight: '700',
+  },
+  headerPrinterBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#FAF7F2',
+    borderWidth: 1,
+    borderColor: '#E7E1DA',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerPrinterBtnConnected: {
+    borderColor: '#10B981',
+    backgroundColor: 'rgba(16, 185, 129, 0.08)',
   },
   headerCloseBtn: {
     width: 32,

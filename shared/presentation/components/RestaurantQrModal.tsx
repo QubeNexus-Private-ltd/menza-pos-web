@@ -293,16 +293,36 @@ export const RestaurantQrModal: React.FC<RestaurantQrModalProps> = ({
   // Active Tagline
   const activeTagline = isCustomTagline && customTagline.trim() ? customTagline.trim() : selectedTagline;
 
+  // Normalized Host from configured environment
+  const configuredHost = useMemo(() => {
+    return (
+      APP_CONSTANTS.CUSTOMER_ORDERING_BASE_URL ||
+      'https://menza-order-web.vercel.app'
+    ).replace(/\/+$/, '');
+  }, []);
+
+  // Normalizes any server-provided URL so that it always points to the configured ordering host
+  const normalizeOrderingUrl = (serverUrl: string | null): string | null => {
+    if (!serverUrl) return null;
+    try {
+      const parsed = new URL(serverUrl);
+      const configuredUrl = new URL(configuredHost);
+      if (parsed.origin !== configuredUrl.origin) {
+        return `${configuredHost}${parsed.pathname}${parsed.search}${parsed.hash}`;
+      }
+      return serverUrl;
+    } catch {
+      return serverUrl.replace(/^https?:\/\/[^\/]+/, configuredHost);
+    }
+  };
+
   // Encrypted Ordering URL: completely decoupled between Storefront & Table Standee modes
   const targetOrderingUrl = useMemo(() => {
-    const host = (
-      APP_CONSTANTS.CUSTOMER_ORDERING_BASE_URL ||
-      'https://lemon-mud-097d55a00.7.azurestaticapps.net'
-    ).replace(/\/+$/, '');
+    const host = configuredHost;
 
     if (selectedMode === 'table') {
       if (tableUrl) {
-        return tableUrl;
+        return normalizeOrderingUrl(tableUrl) || tableUrl;
       }
       const encRest = tableEncRestId || encryptIdentifier(restId);
       const encTable =
@@ -315,11 +335,12 @@ export const RestaurantQrModal: React.FC<RestaurantQrModalProps> = ({
 
     // Storefront mode: strictly storefront URL without table
     if (storeUrl) {
-      return storeUrl;
+      return normalizeOrderingUrl(storeUrl) || storeUrl;
     }
     const encRest = storeEncRestId || encryptIdentifier(restId);
     return `${host}/?r=${encodeURIComponent(encRest)}`;
   }, [
+    configuredHost,
     restId,
     selectedMode,
     tableUrl,
@@ -331,16 +352,26 @@ export const RestaurantQrModal: React.FC<RestaurantQrModalProps> = ({
     storeEncRestId,
   ]);
 
-  // QR Code Image source (prioritizes backend-generated Base64 PNG)
+  // QR Code Image source (prioritizes backend-generated Base64 PNG only if matching the configured host)
   const qrImageUri = useMemo(() => {
     const activeServerQr = selectedMode === 'table' ? tableQrPng : storeQrPng;
-    if (activeServerQr) {
+    const activeServerUrl = selectedMode === 'table' ? tableUrl : storeUrl;
+
+    // Check if server URL actually matches our configured host
+    const isServerMatchingConfiguredHost =
+      Boolean(activeServerQr) &&
+      Boolean(activeServerUrl) &&
+      activeServerUrl!.startsWith(configuredHost);
+
+    // If server QR was generated with an obsolete domain (like lemon-mud), do not display it!
+    // Instead, dynamically generate a fresh, crisp QR code for targetOrderingUrl.
+    if (activeServerQr && isServerMatchingConfiguredHost) {
       return activeServerQr;
     }
     return `https://api.qrserver.com/v1/create-qr-code/?size=600x600&data=${encodeURIComponent(
       targetOrderingUrl
     )}&color=1F2937&bgcolor=FFFFFF&margin=1`;
-  }, [selectedMode, tableQrPng, storeQrPng, targetOrderingUrl]);
+  }, [selectedMode, tableQrPng, storeQrPng, tableUrl, storeUrl, configuredHost, targetOrderingUrl]);
 
   // Share Action
   const handleShare = async () => {

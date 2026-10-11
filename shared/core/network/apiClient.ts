@@ -2,6 +2,7 @@ import axios, { InternalAxiosRequestConfig } from 'axios';
 import { APP_CONSTANTS } from '../constants/appConstants';
 import { useAuthStore } from '../../presentation/state/useAuthStore';
 import { logger } from '../logging';
+import { SubscriptionEvents } from '../utils/subscriptionEvents';
 
 /**
  * Client-Side Rate Limiter & Request Throttler Engine
@@ -9,11 +10,9 @@ import { logger } from '../logging';
  * burst pacing, and request deduplication.
  */
 class ApiRateLimiter {
-  private maxRequestsPerWindow: number = 50; // Max 50 requests
-  private windowMs: number = 1500;           // Per 1.5-second sliding window
-  private minIntervalMs: number = 0;          // Zero artificial delay between safe concurrent requests
+  private maxRequestsPerWindow: number = 80; // Max 80 requests
+  private windowMs: number = 1000;           // Per 1-second sliding window
   private requestTimestamps: number[] = [];
-  private inFlightGetRequests: Map<string, Promise<any>> = new Map();
   private endpointLastCalled: Map<string, number> = new Map();
 
   // Custom rate limits for sensitive / high-cost endpoints
@@ -25,7 +24,8 @@ class ApiRateLimiter {
 
   /**
    * Acquire permission to execute an API request.
-   * Throttles execution if sliding window capacity or endpoint limit is reached.
+   * Enforces sliding window safety cap and sensitive endpoint limits
+   * without artificial serialization locks that block web concurrency.
    */
   async acquire(config: InternalAxiosRequestConfig): Promise<void> {
     const url = config.url || '';
@@ -49,7 +49,7 @@ class ApiRateLimiter {
       }
     }
 
-    // 2. Sliding Window Rate Limiter
+    // 2. Sliding Window Safety Cap
     let now = Date.now();
     this.requestTimestamps = this.requestTimestamps.filter((t) => now - t < this.windowMs);
 
@@ -64,16 +64,6 @@ class ApiRateLimiter {
       await this.sleep(timeToWait);
       now = Date.now();
       this.requestTimestamps = this.requestTimestamps.filter((t) => now - t < this.windowMs);
-    }
-
-    // 3. Minimum Inter-Request Spacing Pacing (prevents burst socket exhaustion)
-    if (this.requestTimestamps.length > 0) {
-      const lastReqTime = this.requestTimestamps[this.requestTimestamps.length - 1];
-      const timeSinceLast = now - lastReqTime;
-      if (timeSinceLast < this.minIntervalMs) {
-        await this.sleep(this.minIntervalMs - timeSinceLast);
-        now = Date.now();
-      }
     }
 
     this.requestTimestamps.push(now);
@@ -101,11 +91,19 @@ class ApiCacheManager {
   private routeTtl: Array<{ pattern: string; ttlMs: number }> = [
     { pattern: '/CategoryMaster', ttlMs: 30000 },
     { pattern: '/ItemMaster', ttlMs: 30000 },
+    { pattern: '/RestaurantConfig', ttlMs: 60000 },
     { pattern: '/RestaurantConfiguration', ttlMs: 60000 },
+    { pattern: '/TableMaster', ttlMs: 15000 },
     { pattern: '/RestaurantTable', ttlMs: 15000 },
+    { pattern: '/RestaurantFloor', ttlMs: 60000 },
+    { pattern: '/OperatingStatus', ttlMs: 15000 },
     { pattern: '/Reports', ttlMs: 15000 },
+    { pattern: '/Revenue/Today', ttlMs: 10000 },
     { pattern: '/Order/TodayRevenue', ttlMs: 10000 },
     { pattern: '/Wallet', ttlMs: 15000 },
+    { pattern: '/Subscription/ActivePlan', ttlMs: 60000 },
+    { pattern: '/Subscription/Configuration', ttlMs: 120000 },
+    { pattern: '/Subscription/RestaurantSubscription', ttlMs: 60000 },
   ];
 
   private getTtl(url: string): number {
@@ -159,7 +157,10 @@ class ApiCacheManager {
         urlPattern.includes('ItemMaster') ||
         urlPattern.includes('CategoryMaster') ||
         urlPattern.includes('Order') ||
-        urlPattern.includes('Table')
+        urlPattern.includes('Table') ||
+        urlPattern.includes('RestaurantConfig') ||
+        urlPattern.includes('OperatingStatus') ||
+        urlPattern.includes('Subscription')
       ) {
         this.cache.delete(key);
       }
@@ -261,6 +262,12 @@ apiClient.interceptors.request.use(
     if (activeRestId && !isAuthRoute && typeof activeRestId === 'number' && !isNaN(activeRestId)) {
       config.headers['X-Active-Restaurant-Id'] = activeRestId.toString();
       config.headers['X-Restaurant-Id'] = activeRestId.toString();
+    }
+
+    // Attach client mobile identifier to support mobile-partitioned rate limiting
+    const clientMobile = storeState.user?.mobile || (config.data?.mobile ? String(config.data.mobile).trim() : '');
+    if (clientMobile && clientMobile.length >= 10) {
+      config.headers['X-Client-Mobile'] = clientMobile;
     }
 
     // Attach request metadata for logging & correlation
@@ -385,24 +392,75 @@ apiClient.interceptors.response.use(
       return apiClient(originalRequest);
     }
 
-    // 2. Handle HTTP 429 Too Many Requests with exponential / Retry-After backoff
-    if (status === 429 && !originalRequest._rateLimitRetry) {
-      originalRequest._rateLimitRetry = true;
+    // 2. Handle HTTP 429 Too Many Requests with Exponential Backoff & Jitter
+    const isAuthRoute =
+      url.includes('/Auth/Login') ||
+      url.includes('/Auth/GenerateOtp') ||
+      url.includes('/Auth/Refresh');
+
+    if (status === 429) {
       const retryAfterHeader = error.response?.headers?.['retry-after'];
-      const retryAfterMs = retryAfterHeader ? parseInt(retryAfterHeader, 10) * 1000 : 2500;
+      const retryAfterFromBody = error.response?.data?.retryAfterSeconds;
+      const retryAfterSec = retryAfterHeader
+        ? parseInt(retryAfterHeader, 10)
+        : typeof retryAfterFromBody === 'number'
+        ? retryAfterFromBody
+        : null;
+
+      const current429Count = originalRequest._rateLimitRetryCount || 0;
+      const max429Retries = isAuthRoute ? 1 : 2;
+      const isShortWait = !retryAfterSec || retryAfterSec <= 8;
+
+      if (current429Count < max429Retries && isShortWait) {
+        originalRequest._rateLimitRetryCount = current429Count + 1;
+
+        // Exponential backoff base with randomized jitter to break thundering herd
+        const baseMs = retryAfterSec
+          ? retryAfterSec * 1000
+          : Math.min(600 * Math.pow(2, current429Count), 3000);
+        const jitter = Math.floor(Math.random() * 300); // 0-300ms random jitter
+        const totalWaitMs = baseMs + jitter;
+
+        logger.api(
+          'API_REQUEST',
+          `Server Rate Limit 429 on ${method} ${url}. Backing off for ${totalWaitMs}ms before auto-retrying (attempt ${originalRequest._rateLimitRetryCount}/${max429Retries})...`,
+          { totalWaitMs, attempt: originalRequest._rateLimitRetryCount },
+          { requestId, apiEndpoint: url, httpMethod: method, statusCode: 429 }
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, totalWaitMs));
+        return apiClient(originalRequest);
+      }
 
       logger.api(
         'API_ERROR',
-        `Server Rate Limit 429 Exceeded on ${method} ${url}. Backing off for ${retryAfterMs}ms before auto-retrying`,
-        { retryAfterMs },
+        `Server Rate Limit 429 on ${method} ${url} exhausted retries: ${error.response?.data?.message || error.message}`,
+        { isAuthRoute, responseData: error.response?.data },
         { requestId, apiEndpoint: url, httpMethod: method, statusCode: 429 }
       );
-
-      await new Promise((resolve) => setTimeout(resolve, retryAfterMs));
-      return apiClient(originalRequest);
+      return Promise.reject(error);
     }
 
-    // 2. Check if the request URL is a public auth endpoint that shouldn't trigger refresh token renewal on 401
+    // 2. Handle HTTP 402 Payment Required / Subscription Expired
+    if (
+      status === 402 ||
+      error.response?.data?.errorCode === 'SUBSCRIPTION_EXPIRED' ||
+      (typeof error.response?.data?.message === 'string' &&
+        error.response?.data?.message.includes('SUBSCRIPTION_EXPIRED'))
+    ) {
+      const msg =
+        error.response?.data?.message ||
+        'Restaurant subscription has expired past the grace period. Please renew to take orders.';
+      logger.api(
+        'API_ERROR',
+        `Subscription Expired on ${method} ${url}. Emitting SubscriptionEvents.emitExpired.`,
+        { status, data: error.response?.data }
+      );
+      SubscriptionEvents.emitExpired(msg);
+      return Promise.reject(error);
+    }
+
+    // 3. Check if the request URL is a public auth endpoint that shouldn't trigger refresh token renewal on 401
     const requestUrl = originalRequest.url || '';
     const isAuthEndpoint =
       requestUrl.includes('/Auth/Login') ||
@@ -410,6 +468,25 @@ apiClient.interceptors.response.use(
       requestUrl.includes('/Auth/Refresh');
 
     if (status === 401 && !originalRequest._retry && !isAuthEndpoint) {
+      const storeState = useAuthStore.getState();
+      const currentToken = (globalThis as any).__MENZA_AUTH_TOKEN__ || storeState.token;
+      const currentRefreshToken = (globalThis as any).__MENZA_REFRESH_TOKEN__ || storeState.refreshToken;
+
+      const requestAuthHeader = originalRequest.headers?.Authorization as string | undefined;
+      const requestToken = requestAuthHeader ? requestAuthHeader.replace(/^Bearer\s+/i, '').trim() : '';
+
+      // 1. Concurrent check: if the stored token has already been refreshed by another concurrent request,
+      // retry immediately with the latest token without hitting /Auth/Refresh again.
+      if (currentToken && requestToken && currentToken !== requestToken) {
+        logger.api('API_REQUEST', 'Retrying request with already-refreshed access token', {
+          endpoint: url,
+          requestId,
+        });
+        originalRequest._retry = true;
+        originalRequest.headers.Authorization = `Bearer ${currentToken}`;
+        return apiClient(originalRequest);
+      }
+
       if (isRefreshing) {
         logger.api('API_REQUEST', 'Queuing pending request during active token refresh', {
           endpoint: url,
@@ -424,6 +501,7 @@ apiClient.interceptors.response.use(
               endpoint: url,
               requestId,
             });
+            originalRequest._retry = true;
             originalRequest.headers.Authorization = `Bearer ${token}`;
             return apiClient(originalRequest);
           })
@@ -432,10 +510,6 @@ apiClient.interceptors.response.use(
 
       originalRequest._retry = true;
       isRefreshing = true;
-
-      const storeState = useAuthStore.getState();
-      const currentToken = (globalThis as any).__MENZA_AUTH_TOKEN__ || storeState.token;
-      const currentRefreshToken = (globalThis as any).__MENZA_REFRESH_TOKEN__ || storeState.refreshToken;
 
       const isMockToken = (t: string | null) => Boolean(t && (t.startsWith('mock-') || t.includes('mock')));
 
@@ -450,29 +524,40 @@ apiClient.interceptors.response.use(
             endpoint: '/Auth/Refresh',
           });
 
+          const refreshHeaders: Record<string, string> = {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${currentToken}`,
+          };
+
           const refreshResponse = await axios.post(
             `${APP_CONSTANTS.API_BASE_URL}/Auth/Refresh`,
             {
               token: currentToken,
               Token: currentToken,
+              accessToken: currentToken,
+              AccessToken: currentToken,
               refreshToken: currentRefreshToken,
               RefreshToken: currentRefreshToken,
             },
             {
-              headers: { 'Content-Type': 'application/json' },
+              headers: refreshHeaders,
+              timeout: 15000,
             }
           );
 
+          // Support both unwrapped AuthResponseModel and wrapped response envelopes
+          const raw = refreshResponse.data?.data ?? refreshResponse.data;
+
           const newAccessToken =
-            refreshResponse.data?.token ||
-            refreshResponse.data?.Token ||
-            refreshResponse.data?.accessToken ||
-            refreshResponse.data?.AccessToken;
+            raw?.token ||
+            raw?.Token ||
+            raw?.accessToken ||
+            raw?.AccessToken;
 
           const newRefreshToken =
-            refreshResponse.data?.refreshToken ||
-            refreshResponse.data?.RefreshToken ||
-            refreshResponse.data?.refresh_token ||
+            raw?.refreshToken ||
+            raw?.RefreshToken ||
+            raw?.refresh_token ||
             currentRefreshToken;
 
           if (newAccessToken) {
@@ -488,13 +573,35 @@ apiClient.interceptors.response.use(
           } else {
             throw new Error('Refresh response missing access token.');
           }
-        } catch (refreshErr) {
+        } catch (refreshErr: any) {
+          const refreshStatus = refreshErr?.response?.status;
           logger.api('API_ERROR', 'Session token renewal failed', {
-            error: error?.message,
+            status: refreshStatus,
+            error: refreshErr?.message,
           });
 
           processQueue(refreshErr, null);
-          storeState.logout();
+
+          // Strictly reserve logout for explicit authentication rejection from backend.
+          // Never log out on network disconnects, timeouts, 502/503/504 gateway errors, or 429 rate limits!
+                    const errData = refreshErr?.response?.data;
+          const errMsg = typeof errData === 'string'
+            ? errData
+            : String(errData?.message || errData?.error || errData?.title || '');
+
+          const isExplicitAuthFailure =
+            refreshStatus === 401 ||
+            refreshStatus === 403 ||
+            refreshStatus === 400 ||
+            errMsg.toLowerCase().includes('token') ||
+            errMsg.toLowerCase().includes('unauthorized') ||
+            errMsg.toLowerCase().includes('invalid');
+
+          if (isExplicitAuthFailure) {
+            logger.auth('AUTH_SESSION_EXPIRED', 'Refresh token expired or invalid. Logging out.');
+            storeState.logout();
+          }
+
           return Promise.reject(refreshErr);
         } finally {
           isRefreshing = false;

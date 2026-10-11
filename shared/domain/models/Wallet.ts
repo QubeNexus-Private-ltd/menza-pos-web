@@ -48,5 +48,9 @@ export interface WalletRechargeResponse {
   orderId: string;
   paymentSessionId?: string;
   instrumentResponseUrl?: string;
+  gateway?: string;
+  keyId?: string;
+  amount?: number;
+  currency?: string;
   message?: string;
 }

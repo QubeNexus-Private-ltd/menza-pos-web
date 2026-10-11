@@ -124,7 +124,7 @@ export class WalletRemoteDataSource {
         amount,
         Amount: amount,
         ownerPhone: ownerPhone || '9999999999',
-        paymentPurpose: `Commission Wallet Top-up (₹${amount}) for Restaurant #${restaurantId}`,
+        paymentPurpose: `Platform Fee Wallet Top-up (₹${amount}) for Restaurant #${restaurantId}`,
         orderMeta: {
           returnUrl: 'https://admin.menza.com/wallet-status?order_id={order_id}',
           notifyUrl: 'https://api.menza.com/api/CashFreepayment/webhook/cashfree',
@@ -135,13 +135,19 @@ export class WalletRemoteDataSource {
       const data = response.data || {};
       const orderId = data.orderId || data.OrderId || data.cfOrderId || `ORD_WAL_${restaurantId}_${Date.now()}`;
       const paymentSessionId = data.paymentSessionId || data.PaymentSessionId || '';
-      const instrumentResponseUrl = data.paymentLink || data.instrumentResponseUrl || '';
+      const instrumentResponseUrl = data.paymentLink || data.PaymentLink || data.instrumentResponseUrl || '';
+      const gateway = data.gateway || data.Gateway || (data.keyId ? 'Razorpay' : 'Cashfree');
+      const keyId = data.keyId || data.KeyId;
 
       return {
         success: true,
         orderId,
         paymentSessionId,
         instrumentResponseUrl,
+        gateway,
+        keyId,
+        amount,
+        currency: data.currency || 'INR',
         message: data.message || 'Wallet recharge order created successfully',
       };
     } catch (error: any) {
@@ -158,7 +164,9 @@ export class WalletRemoteDataSource {
   async verifyRecharge(
     orderId: string,
     restaurantId: number,
-    amountPaid: number
+    amountPaid: number,
+    razorpayPaymentId?: string,
+    razorpaySignature?: string
   ): Promise<{ success: boolean; message?: string }> {
     try {
       const response = await apiClient.post('/CashFreepayment/verify', {
@@ -166,6 +174,8 @@ export class WalletRemoteDataSource {
         restaurantId,
         amountPaid,
         type: 4,
+        razorpayPaymentId,
+        razorpaySignature,
       });
 
       const paymentStatus = (response.data?.paymentStatus || response.data?.status || '').toUpperCase();

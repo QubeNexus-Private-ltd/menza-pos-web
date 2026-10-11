@@ -19,7 +19,7 @@ export const OrderStatusHelper = {
   isActive: (status?: string): boolean => {
     if (!status) return false;
     const s = status.toLowerCase();
-    return ['placed', 'confirmed', 'preparing', 'ready', 'served', 'delivered'].includes(s);
+    return ['pendingpayment', 'placed', 'confirmed', 'preparing', 'cooking', 'ready', 'served', 'delivered'].includes(s);
   },
   isTerminal: (status?: string): boolean => {
     if (!status) return false;

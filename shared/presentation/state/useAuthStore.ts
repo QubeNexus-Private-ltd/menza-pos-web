@@ -7,6 +7,7 @@ import { AuthRemoteDataSource } from '../../data/datasources/AuthRemoteDataSourc
 import { TermsConditionRemoteDataSource } from '../../data/datasources/TermsConditionRemoteDataSource';
 import { TermsConditionRepositoryImpl } from '../../data/repositories/TermsConditionRepositoryImpl';
 import { isOwnerUser } from '../../core/auth/rolePermissions';
+import { isJwtExpired } from '../../core/auth/jwtUtils';
 
 const termsRepository = new TermsConditionRepositoryImpl(new TermsConditionRemoteDataSource());
 
@@ -48,6 +49,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // Fast path: if state is already authenticated with valid user, skip redundant storage read
     const state = get();
     if (state.isAuthenticated && state.token && state.user) {
+      set({ isHydrating: false });
       return true;
     }
 
@@ -56,11 +58,53 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const session = await SessionStorage.loadSession();
 
       if (!session.hasCompletedOnboarding) {
-        set({ isHydrating: false, hasCompletedOnboarding: false });
+        set({ 
+          isHydrating: false, 
+          hasCompletedOnboarding: false 
+        });
         return false;
       }
 
       if (session.token && session.user) {
+        // Verify whether the stored access token is expired or about to expire
+        if (isJwtExpired(session.token)) {
+          logger.auth('AUTH_SESSION_EXPIRED', 'Access token found in storage is expired. Attempting renewal...');
+          let refreshSuccessful = false;
+          if (session.refreshToken) {
+            try {
+              const refreshed = await new AuthRemoteDataSource().refreshToken(session.token, session.refreshToken);
+              if (refreshed && refreshed.token) {
+                logger.auth('AUTH_SESSION_CREATED', 'Successfully refreshed expired session on app launch');
+                session.token = refreshed.token;
+                session.refreshToken = refreshed.refreshToken || session.refreshToken;
+                await SessionStorage.saveTokens(session.token, session.refreshToken);
+                refreshSuccessful = true;
+              }
+            } catch (refErr) {
+              logger.auth('AUTH_SESSION_EXPIRED', 'Failed to refresh token on launch', { error: String(refErr) });
+            }
+          }
+
+          if (!refreshSuccessful) {
+            logger.auth('AUTH_SESSION_EXPIRED', 'Stored session credentials expired or invalid. Wiping stale session.');
+            (globalThis as any).__MENZA_AUTH_TOKEN__ = null;
+            (globalThis as any).__MENZA_REFRESH_TOKEN__ = null;
+            (globalThis as any).__MENZA_ACTIVE_REST_ID__ = null;
+            await SessionStorage.clearSession();
+            set({
+              isHydrating: false,
+              hasCompletedOnboarding: true,
+              isAuthenticated: false,
+              token: null,
+              refreshToken: null,
+              user: null,
+              restaurants: [],
+              activeRestaurant: null,
+              hasAcceptedTerms: false,
+            });
+            return false;
+          }
+        }
         logger.auth('AUTH_SESSION_CREATED', 'Successfully restored user session from persistent storage', {
           userId: session.user.id,
           name: session.user.name,

@@ -11,7 +11,7 @@ export const Platform: any = {
 };
 
 export const Alert = {
-  alert: (title: string, message?: string, buttons?: Array<{ text?: string; onPress?: () => void }>) => {
+  alert: (title: string, message?: string, buttons?: Array<{ text?: string; onPress?: () => void; style?: string }>) => {
     if (typeof window !== 'undefined') {
       const confirmed = window.confirm(`${title}${message ? '\n\n' + message : ''}`);
       if (confirmed && buttons && buttons.length > 0) {
@@ -114,6 +114,31 @@ export type ViewStyle = any;
 export type TextStyle = any;
 export type ImageStyle = any;
 
+export const Linking = {
+  openURL: async (url: string) => {
+    if (typeof window !== 'undefined') {
+      window.open(url, '_blank');
+      return true;
+    }
+    return false;
+  },
+  canOpenURL: async (url: string) => true,
+  openSettings: async () => {},
+  getInitialURL: async () => null,
+  sendIntent: async (action: string, extras?: any[]) => {},
+  addEventListener: () => ({ remove: () => {} }),
+  removeEventListener: () => {},
+};
+
+export class NativeEventEmitter {
+  constructor(nativeModule?: any) {}
+  addListener(eventType: string, listener: (...args: any[]) => any) {
+    return { remove: () => {} };
+  }
+  removeAllListeners(eventType?: string) {}
+  emit(eventType: string, ...params: any[]) {}
+}
+
 export default {
   Platform,
   Alert,
@@ -124,5 +149,7 @@ export default {
   StyleSheet,
   Dimensions,
   AppState,
+  Linking,
+  NativeEventEmitter,
 };
 

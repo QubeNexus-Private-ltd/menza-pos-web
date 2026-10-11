@@ -16,18 +16,24 @@ import {
   ArrowUpDown,
   Sparkles,
   Upload,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
 import { DishImage } from '@/components/common/DishImage';
+import { ManageVariantsModal } from '@/components/menu/ManageVariantsModal';
 import { WebImageUploadService } from '@/services/imageUploadService';
 import { WebMenuService } from '@/services/menuService';
+import { WebKitchenService, KitchenStationDTO } from '@/services/kitchenService';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { CatalogRemoteDataSource } from '@shared/data/datasources/CatalogRemoteDataSource';
+import { MasterDataRemoteDataSource } from '@shared/data/datasources/MasterDataRemoteDataSource';
 import { MenuItem } from '@shared/domain/models/Item';
 import { Category } from '@shared/domain/models/Category';
+import { UnitMaster } from '@shared/domain/models/MasterData';
 
 const catalogDataSource = new CatalogRemoteDataSource();
+const masterDataSource = new MasterDataRemoteDataSource();
 
 export default function MenuCatalogPage() {
   const { activeRestaurant, restaurants } = useAuthStore();
@@ -35,11 +41,16 @@ export default function MenuCatalogPage() {
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [items, setItems] = useState<MenuItem[]>([]);
+  const [stations, setStations] = useState<KitchenStationDTO[]>([]);
+  const [units, setUnits] = useState<UnitMaster[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState<number | null>(null);
   const [vegFilter, setVegFilter] = useState<'ALL' | 'VEG' | 'NON_VEG'>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [togglingItemId, setTogglingItemId] = useState<number | null>(null);
+
+  // Manage Portions & Addons Modal
+  const [managingVariantsItem, setManagingVariantsItem] = useState<MenuItem | null>(null);
 
   // Add/Edit Item Modal
   const [itemModalOpen, setItemModalOpen] = useState(false);
@@ -47,6 +58,9 @@ export default function MenuCatalogPage() {
   const [itemName, setItemName] = useState('');
   const [itemPrice, setItemPrice] = useState('');
   const [itemCategoryId, setItemCategoryId] = useState<number>(0);
+  const [itemStationId, setItemStationId] = useState<number | undefined>(undefined);
+  const [itemUnitId, setItemUnitId] = useState<number | undefined>(undefined);
+  const [itemPortionDisplay, setItemPortionDisplay] = useState('');
   const [itemIsVeg, setItemIsVeg] = useState(true);
   const [itemCode, setItemCode] = useState('');
   const [itemImageUrl, setItemImageUrl] = useState('');
@@ -57,15 +71,18 @@ export default function MenuCatalogPage() {
   const [catModalOpen, setCatModalOpen] = useState(false);
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
   const [newCatName, setNewCatName] = useState('');
+  const [catStationId, setCatStationId] = useState<number | undefined>(undefined);
   const [savingCat, setSavingCat] = useState(false);
 
   const loadData = useCallback(async () => {
     if (!currentRestId) return;
     try {
       setLoading(true);
-      const [catsRes, itemsRes] = await Promise.allSettled([
+      const [catsRes, itemsRes, stationsRes, unitsRes] = await Promise.allSettled([
         catalogDataSource.getCategories(currentRestId),
         catalogDataSource.getMenuItems(currentRestId),
+        WebKitchenService.getStations(currentRestId),
+        masterDataSource.getUnits(),
       ]);
 
       if (catsRes.status === 'fulfilled' && Array.isArray(catsRes.value)) {
@@ -77,12 +94,21 @@ export default function MenuCatalogPage() {
       if (itemsRes.status === 'fulfilled' && Array.isArray(itemsRes.value)) {
         setItems(itemsRes.value);
       }
+      if (stationsRes.status === 'fulfilled' && Array.isArray(stationsRes.value)) {
+        setStations(stationsRes.value);
+      }
+      if (unitsRes.status === 'fulfilled' && Array.isArray(unitsRes.value)) {
+        setUnits(unitsRes.value);
+        if (unitsRes.value.length > 0 && !itemUnitId) {
+          setItemUnitId(unitsRes.value[0].id);
+        }
+      }
     } catch (err) {
       console.warn('Failed to load menu catalog', err);
     } finally {
       setLoading(false);
     }
-  }, [currentRestId, itemCategoryId]);
+  }, [currentRestId, itemCategoryId, itemUnitId]);
 
   useEffect(() => {
     loadData();
@@ -110,6 +136,9 @@ export default function MenuCatalogPage() {
     setItemName(item.itemName);
     setItemPrice(String(item.price));
     setItemCategoryId(item.categoryId || categories[0]?.id || 0);
+    setItemStationId(item.kitchenStationId);
+    setItemUnitId(item.unitId || units[0]?.id);
+    setItemPortionDisplay(item.portionDisplay || '');
     setItemIsVeg(Boolean(item.isVeg));
     setItemCode((item as any).itemCode || '');
     setItemImageUrl(item.imageUrl || '');
@@ -122,6 +151,9 @@ export default function MenuCatalogPage() {
     setItemName('');
     setItemPrice('');
     setItemCategoryId(categories[0]?.id || 0);
+    setItemStationId(undefined);
+    setItemUnitId(units[0]?.id || 1);
+    setItemPortionDisplay('');
     setItemIsVeg(true);
     setItemCode('');
     setItemImageUrl('');
@@ -144,6 +176,10 @@ export default function MenuCatalogPage() {
         itemName: itemName.trim(),
         itemDescription: '',
         price: parseFloat(itemPrice),
+        quantity: 1,
+        unitId: itemUnitId,
+        portionDisplay: itemPortionDisplay.trim() || undefined,
+        kitchenStationId: itemStationId || undefined,
         isVeg: itemIsVeg,
         imageUrl: itemImageUrl.trim(),
       };
@@ -194,12 +230,14 @@ export default function MenuCatalogPage() {
   const handleOpenCreateCategory = () => {
     setEditingCategory(null);
     setNewCatName('');
+    setCatStationId(undefined);
     setCatModalOpen(true);
   };
 
   const handleOpenEditCategory = (cat: Category) => {
     setEditingCategory(cat);
     setNewCatName(cat.categoryName);
+    setCatStationId(cat.kitchenStationId);
     setCatModalOpen(true);
   };
 
@@ -226,12 +264,13 @@ export default function MenuCatalogPage() {
     try {
       setSavingCat(true);
       if (editingCategory) {
-        await WebMenuService.updateCategory(editingCategory.id, newCatName.trim(), '', currentRestId);
+        await WebMenuService.updateCategory(editingCategory.id, newCatName.trim(), '', currentRestId, catStationId);
       } else {
-        await catalogDataSource.createCategory(newCatName.trim(), '', currentRestId);
+        await catalogDataSource.createCategory(newCatName.trim(), '', currentRestId, '', catStationId);
       }
       await loadData();
       setNewCatName('');
+      setCatStationId(undefined);
       setEditingCategory(null);
       setCatModalOpen(false);
     } catch (err: any) {
@@ -422,7 +461,13 @@ export default function MenuCatalogPage() {
                   </thead>
                   <tbody className="divide-y divide-[#E7E1DA]/60 dark:divide-[#2B3540]/60">
                     {filteredItems.map((item) => {
-                      const catName = categories.find((c) => c.id === item.categoryId)?.categoryName || 'General';
+                      const cat = categories.find((c) => c.id === item.categoryId);
+                      const catName = cat?.categoryName || 'General';
+                      const routedStation = stations.find((s) => s.id === item.kitchenStationId)
+                        || (item.kitchenStationName ? { stationName: item.kitchenStationName } : null)
+                        || stations.find((s) => s.id === cat?.kitchenStationId)
+                        || (cat?.kitchenStationName ? { stationName: cat.kitchenStationName } : null);
+
                       return (
                         <tr key={item.id} className="hover:bg-black/5 dark:hover:bg-white/5 transition-colors">
                           <td className="py-3 px-4">
@@ -437,23 +482,34 @@ export default function MenuCatalogPage() {
                                 />
                               </div>
                               <div>
-                                <div className="flex items-center gap-1.5">
+                                <div className="flex items-center gap-1.5 flex-wrap">
                                   <p className="font-bold text-sm text-[#1E2930] dark:text-[#F3F4F6]">{item.itemName}</p>
+                                  {item.portionDisplay && (
+                                    <span className="rounded bg-black/5 dark:bg-white/5 px-1.5 py-0.5 text-[10px] font-semibold text-[#667085] dark:text-[#94A3B8]">
+                                      {item.portionDisplay}
+                                    </span>
+                                  )}
                                 </div>
                                 {item.description ? (
                                   <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] line-clamp-1 max-w-xs">{item.description}</p>
                                 ) : (item as any).itemCode ? (
                                   <p className="text-[10px] text-[#667085] dark:text-[#94A3B8]">Code: {(item as any).itemCode}</p>
-                                ) : item.portionDisplay ? (
-                                  <p className="text-[10px] text-[#667085] dark:text-[#94A3B8]">{item.portionDisplay}</p>
                                 ) : null}
                               </div>
                             </div>
                           </td>
                           <td className="py-3 px-4 text-[#667085] dark:text-[#94A3B8]">
-                            <span className="rounded-lg bg-black/5 dark:bg-white/5 px-2 py-1 text-[11px] font-medium">
-                              {catName}
-                            </span>
+                            <div className="flex flex-col gap-1 items-start">
+                              <span className="rounded-lg bg-black/5 dark:bg-white/5 px-2 py-1 text-[11px] font-medium">
+                                {catName}
+                              </span>
+                              {routedStation && (
+                                <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-bold text-[#DE8626] border border-amber-500/20">
+                                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                                  {routedStation.stationName}
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="py-3 px-4 font-extrabold text-sm text-[#1E2930] dark:text-[#F3F4F6]">
                             ₹{item.price}
@@ -478,6 +534,14 @@ export default function MenuCatalogPage() {
                           </td>
                           <td className="py-3 px-4 text-right">
                             <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                onClick={() => setManagingVariantsItem(item)}
+                                className="flex items-center gap-1.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-colors"
+                                title="Portions, Variants & Addons"
+                              >
+                                <SlidersHorizontal className="h-3.5 w-3.5" />
+                                <span className="hidden sm:inline">Portions & Addons</span>
+                              </button>
                               <button
                                 onClick={() => handleOpenEdit(item)}
                                 className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] p-2 text-[#667085] hover:border-[#DE8626] hover:text-[#DE8626] transition-colors"
@@ -564,6 +628,60 @@ export default function MenuCatalogPage() {
                         </option>
                       ))}
                     </select>
+                  </div>
+                </div>
+
+                {/* Kitchen Station Routing */}
+                <div>
+                  <label className="block text-xs font-semibold text-[#667085] dark:text-[#94A3B8] uppercase mb-1">
+                    Kitchen Station Routing
+                  </label>
+                  <select
+                    value={itemStationId ?? ''}
+                    onChange={(e) => setItemStationId(e.target.value ? Number(e.target.value) : undefined)}
+                    className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3.5 py-2 text-xs font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
+                  >
+                    <option value="">Auto-Route / Inherit from Category</option>
+                    {stations.map((st) => (
+                      <option key={st.id} value={st.id}>
+                        {st.stationName} ({st.stationCode})
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-[10px] text-[#667085] dark:text-[#94A3B8]">
+                    Directs KOT slips to this preparation station (e.g. Tandoor, Main Curry, Bar).
+                  </p>
+                </div>
+
+                {/* Unit Master & Portion Display */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-[#667085] dark:text-[#94A3B8] uppercase mb-1">
+                      Unit Master
+                    </label>
+                    <select
+                      value={itemUnitId ?? ''}
+                      onChange={(e) => setItemUnitId(e.target.value ? Number(e.target.value) : undefined)}
+                      className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3.5 py-2 text-xs font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
+                    >
+                      {units.map((u) => (
+                        <option key={u.id} value={u.id}>
+                          {u.unitName} {u.shortName ? `(${u.shortName})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-[#667085] dark:text-[#94A3B8] uppercase mb-1">
+                      Portion Display
+                    </label>
+                    <input
+                      type="text"
+                      value={itemPortionDisplay}
+                      onChange={(e) => setItemPortionDisplay(e.target.value)}
+                      placeholder="e.g. 1 Plate / 2 Pcs"
+                      className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3.5 py-2 text-xs font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
+                    />
                   </div>
                 </div>
 
@@ -706,6 +824,27 @@ export default function MenuCatalogPage() {
                   />
                 </div>
 
+                <div>
+                  <label className="block text-xs font-semibold text-[#667085] dark:text-[#94A3B8] uppercase mb-1">
+                    Kitchen Station Routing (Optional)
+                  </label>
+                  <select
+                    value={catStationId ?? ''}
+                    onChange={(e) => setCatStationId(e.target.value ? Number(e.target.value) : undefined)}
+                    className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3.5 py-2 text-xs font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
+                  >
+                    <option value="">None / General Kitchen</option>
+                    {stations.map((st) => (
+                      <option key={st.id} value={st.id}>
+                        {st.stationName} ({st.stationCode})
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-[10px] text-[#667085] dark:text-[#94A3B8]">
+                    All dishes added to this category will default to this station.
+                  </p>
+                </div>
+
                 <div className="pt-2 flex gap-2">
                   <button
                     type="button"
@@ -728,6 +867,16 @@ export default function MenuCatalogPage() {
               </form>
             </div>
           </div>
+        )}
+
+        {/* 3. Manage Portions & Add-ons Modal */}
+        {managingVariantsItem && (
+          <ManageVariantsModal
+            isOpen={Boolean(managingVariantsItem)}
+            item={managingVariantsItem}
+            onClose={() => setManagingVariantsItem(null)}
+            onUpdated={loadData}
+          />
         )}
       </AppShell>
     </AuthGuard>

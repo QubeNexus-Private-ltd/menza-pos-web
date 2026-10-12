@@ -57,29 +57,52 @@ export class SubscriptionRemoteDataSource {
 
   async createPlan(plan: Partial<SubscriptionPlan>): Promise<{ success: boolean; message?: string }> {
     try {
+      const mappedEntitlements = (plan.entitlements || []).map((e) => ({
+        orderConfigId: e.orderConfigId,
+        OrderConfigId: e.orderConfigId,
+        configKey: e.configKey,
+        ConfigKey: e.configKey,
+        isAllowed: e.isAllowed,
+        IsAllowed: e.isAllowed,
+        featureCommissionPercentage: e.featureCommissionPercentage || 0,
+        FeatureCommissionPercentage: e.featureCommissionPercentage || 0,
+        featureFlatFeePerOrder: e.featureFlatFeePerOrder || 0,
+        FeatureFlatFeePerOrder: e.featureFlatFeePerOrder || 0,
+      }));
+
       const payload = {
         subscriptionCode: plan.subscriptionCode,
+        SubscriptionCode: plan.subscriptionCode,
         subscriptionName: plan.subscriptionName || plan.planName,
+        SubscriptionName: plan.subscriptionName || plan.planName,
         description: plan.description,
+        Description: plan.description,
         durationInDays: plan.durationInDays || plan.durationDays || 30,
+        DurationInDays: plan.durationInDays || plan.durationDays || 30,
         billingCycle: plan.billingCycle || 'MONTHLY',
+        BillingCycle: plan.billingCycle || 'MONTHLY',
         price: plan.price,
+        Price: plan.price,
         discountAmount: plan.discountAmount || 0,
+        DiscountAmount: plan.discountAmount || 0,
         finalPrice: plan.finalPrice ?? Math.max(0, (plan.price || 0) - (plan.discountAmount || 0)),
+        FinalPrice: plan.finalPrice ?? Math.max(0, (plan.price || 0) - (plan.discountAmount || 0)),
         commissionType: plan.commissionType || 'PERCENTAGE',
+        CommissionType: plan.commissionType || 'PERCENTAGE',
         baseCommissionPercentage: plan.baseCommissionPercentage || 0,
+        BaseCommissionPercentage: plan.baseCommissionPercentage || 0,
         baseFlatCommissionPerOrder: plan.baseFlatCommissionPerOrder || 0,
+        BaseFlatCommissionPerOrder: plan.baseFlatCommissionPerOrder || 0,
         minCommissionFloorPerOrder: plan.minCommissionFloorPerOrder || 0,
+        MinCommissionFloorPerOrder: plan.minCommissionFloorPerOrder || 0,
         maxCommissionCapPerOrder: plan.maxCommissionCapPerOrder || 0,
+        MaxCommissionCapPerOrder: plan.maxCommissionCapPerOrder || 0,
         includedWalletCredit: plan.includedWalletCredit || 0,
+        IncludedWalletCredit: plan.includedWalletCredit || 0,
         isActive: plan.isActive ?? true,
-        entitlements: (plan.entitlements || []).map((e) => ({
-          orderConfigId: e.orderConfigId,
-          configKey: e.configKey,
-          isAllowed: e.isAllowed,
-          featureCommissionPercentage: e.featureCommissionPercentage || 0,
-          featureFlatFeePerOrder: e.featureFlatFeePerOrder || 0,
-        })),
+        IsActive: plan.isActive ?? true,
+        entitlements: mappedEntitlements,
+        Entitlements: mappedEntitlements,
       };
       const response = await apiClient.post('/Subscription/Configuration', payload);
       if (response.status === 200 || response.status === 201) {

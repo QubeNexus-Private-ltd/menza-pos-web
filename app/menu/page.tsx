@@ -61,6 +61,8 @@ interface ItemModifierItem {
 interface ExtendedMenuItem extends MenuItem {
   variants?: ItemVariantItem[];
   modifiers?: ItemModifierItem[];
+  preparationTimeMinutes?: number;
+  isSpicy?: boolean;
 }
 
 export default function MenuCatalogPage() {

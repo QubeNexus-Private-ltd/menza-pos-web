@@ -11,8 +11,6 @@ export interface MenuItem {
   portionDisplay?: string;
   imageUrl?: string;
   isVeg?: boolean;
-  isSpicy?: boolean;
-  preparationTimeMinutes?: number;
   isAvailable?: boolean;
   kitchenStationId?: number;
   kitchenStationName?: string;

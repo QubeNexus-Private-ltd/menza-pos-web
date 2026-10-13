@@ -132,7 +132,7 @@ export default function MenuCatalogPage() {
     try {
       setLoading(true);
       const [catsRes, itemsRes, stationsRes, unitsRes] = await Promise.allSettled([
-        catalogDataSource.getCategories(currentRestId),
+        catalogDataSource.getCategories(currentRestId, false),
         catalogDataSource.getMenuItems(currentRestId),
         WebKitchenService.getStations(currentRestId),
         masterDataSource.getUnits(),

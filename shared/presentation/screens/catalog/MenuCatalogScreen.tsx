@@ -262,7 +262,7 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
         fetchStations(restId);
       }
       const [cats, unitList, rawMenuItems] = await Promise.all([
-        catalogDataSource.getCategories(restId),
+        catalogDataSource.getCategories(restId, false),
         masterDataDataSource.getUnits(),
         catalogDataSource.getMenuItems(restId),
       ]);

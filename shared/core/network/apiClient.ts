@@ -273,11 +273,11 @@ apiClient.interceptors.request.use(
     const token = (globalThis as any).__MENZA_AUTH_TOKEN__ || storeState.token;
     const activeRestId = (globalThis as any).__MENZA_ACTIVE_REST_ID__ || storeState.activeRestaurant?.restaurantId;
 
-    if (token) {
+    const isAuthRoute = config.url?.includes('/Auth/');
+
+    if (token && !isAuthRoute) {
       config.headers.Authorization = `Bearer ${token}`;
     }
-
-    const isAuthRoute = config.url?.includes('/Auth/');
 
     if (activeRestId && !isAuthRoute && typeof activeRestId === 'number' && !isNaN(activeRestId)) {
       config.headers['X-Active-Restaurant-Id'] = activeRestId.toString();
@@ -546,7 +546,6 @@ apiClient.interceptors.response.use(
 
           const refreshHeaders: Record<string, string> = {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${currentToken}`,
           };
 
           const refreshResponse = await axios.post(

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
 import {
@@ -95,6 +95,7 @@ import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { usePrinterStore } from '@shared/presentation/state/usePrinterStore';
 import { useNotificationStore } from '@shared/presentation/state/useNotificationStore';
 import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
+import { usePosCatalogStore } from '@/stores/usePosCatalogStore';
 import { useKitchenStationStore } from '@shared/presentation/state/useKitchenStationStore';
 import { apiClient } from '@shared/core/network/apiClient';
 import { CatalogRemoteDataSource } from '@shared/data/datasources/CatalogRemoteDataSource';
@@ -151,45 +152,103 @@ export interface CartItem {
 
 export default function PosPage() {
   const router = useRouter();
-  const { activeRestaurant, restaurants } = useAuthStore();
-  const { processIncomingOrders, markOrderAsKnown } = useNotificationStore();
-  const { paperWidth, customFooter, autoPrintReceipt, autoPrintKot } = usePrinterStore();
-  const {
-    canTakeOrders,
-    hasEntitlement,
-    isExpired: isSubscriptionExpired,
-    lifecycleState: subscriptionLifecycleState,
-    openRenewalModal,
-    fetchSubscriptionStatus,
-  } = useSubscriptionStore();
-  const { stations, fetchStations } = useKitchenStationStore();
+  const activeRestaurant = useAuthStore((s) => s.activeRestaurant);
+  const restaurants = useAuthStore((s) => s.restaurants);
+  const processIncomingOrders = useNotificationStore((s) => s.processIncomingOrders);
+  const markOrderAsKnown = useNotificationStore((s) => s.markOrderAsKnown);
+  const paperWidth = usePrinterStore((s) => s.paperWidth);
+  const customFooter = usePrinterStore((s) => s.customFooter);
+  const autoPrintReceipt = usePrinterStore((s) => s.autoPrintReceipt);
+  const autoPrintKot = usePrinterStore((s) => s.autoPrintKot);
+  const canTakeOrders = useSubscriptionStore((s) => s.canTakeOrders);
+  const hasEntitlement = useSubscriptionStore((s) => s.hasEntitlement);
+  const isSubscriptionExpired = useSubscriptionStore((s) => s.isExpired);
+  const subscriptionLifecycleState = useSubscriptionStore((s) => s.lifecycleState);
+  const openRenewalModal = useSubscriptionStore((s) => s.openRenewalModal);
+  const fetchSubscriptionStatus = useSubscriptionStore((s) => s.fetchSubscriptionStatus);
+  const stations = useKitchenStationStore((s) => s.stations);
+  const fetchStations = useKitchenStationStore((s) => s.fetchStations);
 
   const currentRestId =
     activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
-  // Core Data
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [items, setItems] = useState<MenuItem[]>([]);
-  const [tables, setTables] = useState<TableMaster[]>([]);
-  const [restaurantConfig, setRestaurantConfig] = useState<RestaurantConfig | null>(null);
-  const [operatingStatus, setOperatingStatus] = useState<StoreOperatingStatus | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Core Data with in-memory catalog cache initialization (prevents flickering)
+  const cachedCatalog = usePosCatalogStore.getState();
+  const hasCachedData = Boolean(
+    currentRestId &&
+    cachedCatalog.restaurantId === currentRestId &&
+    cachedCatalog.hasLoaded &&
+    cachedCatalog.items.length > 0
+  );
+
+  const [categories, setCategories] = useState<Category[]>(() =>
+    hasCachedData ? cachedCatalog.categories : []
+  );
+  const [items, setItems] = useState<MenuItem[]>(() =>
+    hasCachedData ? cachedCatalog.items : []
+  );
+  const [tables, setTables] = useState<TableMaster[]>(() =>
+    hasCachedData ? cachedCatalog.tables : []
+  );
+  const [restaurantConfig, setRestaurantConfig] = useState<RestaurantConfig | null>(() =>
+    hasCachedData ? cachedCatalog.restaurantConfig : null
+  );
+  const [operatingStatus, setOperatingStatus] = useState<StoreOperatingStatus | null>(() =>
+    hasCachedData ? cachedCatalog.operatingStatus : null
+  );
+  const [loading, setLoading] = useState(!hasCachedData);
 
   // Dynamic Active Order Types
-  const [orderTypes, setOrderTypes] = useState<ActiveOrderType[]>([
-    { id: 4, code: 'COUNTER', typeName: 'Counter', configKey: 'IsCounterOrderingEnabled', isAllowedByPlan: true, isEnabledByStore: true, isActive: true, displayOrder: 1 },
-    { id: 1, code: 'DINE_IN', typeName: 'Dine-in', configKey: 'IsTableOrderingEnabled', isAllowedByPlan: true, isEnabledByStore: true, isActive: true, displayOrder: 2 },
-    { id: 2, code: 'TAKEAWAY', typeName: 'Takeaway', configKey: 'IsSelfPickupEnabled', isAllowedByPlan: true, isEnabledByStore: true, isActive: true, displayOrder: 3 },
-    { id: 3, code: 'DELIVERY', typeName: 'Delivery', configKey: 'IsDeliveryEnabled', isAllowedByPlan: false, isEnabledByStore: false, isActive: false, displayOrder: 4 },
-  ]);
-  const [selectedOrderType, setSelectedOrderType] = useState<number>(4);
+  const [orderTypes, setOrderTypes] = useState<ActiveOrderType[]>(() =>
+    hasCachedData && cachedCatalog.orderTypes.length > 0
+      ? cachedCatalog.orderTypes
+      : [
+          { id: 4, code: 'COUNTER', typeName: 'Counter', configKey: 'IsCounterOrderingEnabled', isAllowedByPlan: true, isEnabledByStore: true, isActive: true, displayOrder: 1 },
+          { id: 1, code: 'DINE_IN', typeName: 'Dine-in', configKey: 'IsTableOrderingEnabled', isAllowedByPlan: true, isEnabledByStore: true, isActive: true, displayOrder: 2 },
+          { id: 2, code: 'TAKEAWAY', typeName: 'Takeaway', configKey: 'IsSelfPickupEnabled', isAllowedByPlan: true, isEnabledByStore: true, isActive: true, displayOrder: 3 },
+          { id: 3, code: 'DELIVERY', typeName: 'Delivery', configKey: 'IsDeliveryEnabled', isAllowedByPlan: false, isEnabledByStore: false, isActive: false, displayOrder: 4 },
+        ]
+  );
+  const [selectedOrderType, setSelectedOrderType] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const qTableId = new URLSearchParams(window.location.search).get('tableId');
+      if (qTableId) return 1; // DINE_IN
+    }
+    return 4;
+  });
 
   // Dine-in Flow & Table Selection
-  const [selectedTable, setSelectedTable] = useState<TableMaster | null>(null);
-  const [activeTableOrder, setActiveTableOrder] = useState<OrderMaster | null>(null);
+  const [selectedTable, setSelectedTable] = useState<TableMaster | null>(() => {
+    if (typeof window !== 'undefined') {
+      const qTableId = new URLSearchParams(window.location.search).get('tableId');
+      if (qTableId) {
+        const s = usePosCatalogStore.getState();
+        if (s.tables.length > 0) {
+          return s.tables.find((t) => t.id === Number(qTableId)) || null;
+        }
+      }
+    }
+    return null;
+  });
+  const [activeTableOrder, setActiveTableOrder] = useState<OrderMaster | null>(() => {
+    if (typeof window !== 'undefined') {
+      const qTableId = new URLSearchParams(window.location.search).get('tableId');
+      if (qTableId) {
+        const cached = usePosCatalogStore.getState().getActiveTableOrder(Number(qTableId));
+        if (cached) return cached;
+      }
+    }
+    return null;
+  });
   const [loadingActiveTable, setLoadingActiveTable] = useState(false);
   const [showRunningTableDetails, setShowRunningTableDetails] = useState(false);
-  const [dineInPaymentFlow, setDineInPaymentFlow] = useState<'pay_later' | 'pay_now'>('pay_now');
+  const [dineInPaymentFlow, setDineInPaymentFlow] = useState<'pay_later' | 'pay_now'>(() => {
+    if (typeof window !== 'undefined') {
+      const qTableId = new URLSearchParams(window.location.search).get('tableId');
+      if (qTableId) return 'pay_later';
+    }
+    return 'pay_now';
+  });
 
   // Filters & Search
   const [selectedCategory, setSelectedCategory] = useState<number | null>(null); // null = all
@@ -198,8 +257,26 @@ export default function PosPage() {
 
   // Cart & Customer Details
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [customerName, setCustomerName] = useState('');
-  const [customerPhone, setCustomerPhone] = useState('');
+  const [customerName, setCustomerName] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const qTableId = new URLSearchParams(window.location.search).get('tableId');
+      if (qTableId) {
+        const cached = usePosCatalogStore.getState().getActiveTableOrder(Number(qTableId));
+        if (cached?.customerName) return cached.customerName;
+      }
+    }
+    return '';
+  });
+  const [customerPhone, setCustomerPhone] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const qTableId = new URLSearchParams(window.location.search).get('tableId');
+      if (qTableId) {
+        const cached = usePosCatalogStore.getState().getActiveTableOrder(Number(qTableId));
+        if (cached?.mobileNumber) return cached.mobileNumber;
+      }
+    }
+    return '';
+  });
   const [isCustomerLookupVerified, setIsCustomerLookupVerified] = useState(false);
   const [isLookingUpCustomer, setIsLookingUpCustomer] = useState(false);
   const [discountAmount, setDiscountAmount] = useState(0);
@@ -285,6 +362,10 @@ export default function PosPage() {
       const types = await orderRemoteDataSource.getActiveOrderTypes(currentRestId);
       if (Array.isArray(types) && types.length > 0) {
         setOrderTypes(types);
+        usePosCatalogStore.getState().setCatalogData({
+          restaurantId: currentRestId,
+          orderTypes: types,
+        });
         if (!selectedTable) {
           const firstActive = types.find((t) => t.isActive);
           if (firstActive) {
@@ -302,8 +383,17 @@ export default function PosPage() {
     let isMounted = true;
 
     const loadAll = async () => {
+      const s = usePosCatalogStore.getState();
+      const isAlreadyCached = Boolean(
+        s.hasLoaded &&
+        s.restaurantId === currentRestId &&
+        s.items.length > 0
+      );
+
       try {
-        setLoading(true);
+        if (!isAlreadyCached) {
+          setLoading(true);
+        }
         const [catsRes, itemsRes, tablesRes, cfgRes, opRes] = await Promise.allSettled([
           catalogDataSource.getCategories(currentRestId),
           catalogDataSource.getMenuItems(currentRestId),
@@ -314,18 +404,20 @@ export default function PosPage() {
 
         if (!isMounted) return;
 
-        if (catsRes.status === 'fulfilled' && Array.isArray(catsRes.value)) {
-          setCategories(catsRes.value);
-        }
-        if (itemsRes.status === 'fulfilled' && Array.isArray(itemsRes.value)) {
-          setItems(itemsRes.value);
-        }
-        if (tablesRes.status === 'fulfilled' && Array.isArray(tablesRes.value)) {
-          setTables(tablesRes.value);
+        const resolvedCats = catsRes.status === 'fulfilled' && Array.isArray(catsRes.value) ? catsRes.value : undefined;
+        const resolvedItems = itemsRes.status === 'fulfilled' && Array.isArray(itemsRes.value) ? itemsRes.value : undefined;
+        const resolvedTables = tablesRes.status === 'fulfilled' && Array.isArray(tablesRes.value) ? tablesRes.value : undefined;
+        const resolvedCfg = cfgRes.status === 'fulfilled' && cfgRes.value ? cfgRes.value : undefined;
+        const resolvedOp = opRes.status === 'fulfilled' && opRes.value ? opRes.value : undefined;
+
+        if (resolvedCats) setCategories(resolvedCats);
+        if (resolvedItems) setItems(resolvedItems);
+        if (resolvedTables) {
+          setTables(resolvedTables);
           if (typeof window !== 'undefined') {
             const qTableId = new URLSearchParams(window.location.search).get('tableId');
             if (qTableId) {
-              const matched = tablesRes.value.find((t) => t.id === Number(qTableId));
+              const matched = resolvedTables.find((t) => t.id === Number(qTableId));
               if (matched) {
                 setSelectedOrderType(1); // DINE_IN
                 setSelectedTable(matched);
@@ -334,12 +426,18 @@ export default function PosPage() {
             }
           }
         }
-        if (cfgRes.status === 'fulfilled' && cfgRes.value) {
-          setRestaurantConfig(cfgRes.value);
-        }
-        if (opRes.status === 'fulfilled' && opRes.value) {
-          setOperatingStatus(opRes.value);
-        }
+        if (resolvedCfg) setRestaurantConfig(resolvedCfg);
+        if (resolvedOp) setOperatingStatus(resolvedOp);
+
+        // Update in-memory catalog cache for subsequent instant route switches
+        usePosCatalogStore.getState().setCatalogData({
+          restaurantId: currentRestId,
+          categories: resolvedCats,
+          items: resolvedItems,
+          tables: resolvedTables,
+          restaurantConfig: resolvedCfg,
+          operatingStatus: resolvedOp,
+        });
 
         loadOrderTypes();
         fetchStations(currentRestId);
@@ -367,7 +465,10 @@ export default function PosPage() {
     startPosSignalRConnection(currentRestId).catch(() => {});
 
     const unsubStatus = onStoreOperatingStatusChanged((status) => {
-      if (status && isMounted) setOperatingStatus(status);
+      if (status && isMounted) {
+        setOperatingStatus(status);
+        usePosCatalogStore.getState().updateOperatingStatus(status);
+      }
     });
 
     const unsubCreated = onPosOrderCreated((data) => {
@@ -378,19 +479,26 @@ export default function PosPage() {
 
     const unsubWallet = onWalletBalanceChanged((data) => {
       if (data?.newBalance !== undefined && isMounted) {
-        setRestaurantConfig((prev) =>
-          prev ? { ...prev, walletBalance: Number(data.newBalance) } : prev
-        );
-        setOperatingStatus((prev) =>
-          prev ? { ...prev, walletBalance: Number(data.newBalance) } : prev
-        );
+        setRestaurantConfig((prev) => {
+          const updated = prev ? { ...prev, walletBalance: Number(data.newBalance) } : prev;
+          usePosCatalogStore.getState().updateRestaurantConfig(updated);
+          return updated;
+        });
+        setOperatingStatus((prev) => {
+          const updated = prev ? { ...prev, walletBalance: Number(data.newBalance) } : prev;
+          usePosCatalogStore.getState().updateOperatingStatus(updated);
+          return updated;
+        });
       }
     });
 
     const unsubTable = onPosTableStatusChanged((tableData) => {
       if (isMounted && tableData && currentRestId) {
         tableDataSource.getTables(currentRestId).then((tList) => {
-          if (isMounted) setTables(tList);
+          if (isMounted) {
+            setTables(tList);
+            usePosCatalogStore.getState().updateTables(tList);
+          }
         }).catch(() => {});
       }
     });
@@ -428,22 +536,42 @@ export default function PosPage() {
     loadRestaurantConfig,
   ]);
 
+  // Track last fetched tableId to prevent duplicate fetches & render loops
+  const lastFetchedTableIdRef = useRef<number | null>(null);
+
   // 2. Active Dining Table Order Loader
   const loadActiveTableOrder = useCallback(
-    async (tableId: number) => {
+    async (tableId: number, forceRefresh: boolean = false) => {
       if (!currentRestId || !tableId) {
         setActiveTableOrder(null);
         return;
       }
+
+      // Check if active order was already fetched within last 60 seconds (e.g. from tables floor page)
+      if (!forceRefresh) {
+        const cachedOrder = usePosCatalogStore.getState().getActiveTableOrder(tableId);
+        if (cachedOrder !== undefined) {
+          setActiveTableOrder(cachedOrder);
+          if (cachedOrder?.customerName) {
+            setCustomerName((prev) => prev || cachedOrder.customerName || '');
+          }
+          if (cachedOrder?.mobileNumber) {
+            setCustomerPhone((prev) => prev || cachedOrder.mobileNumber || '');
+          }
+          return;
+        }
+      }
+
       try {
         setLoadingActiveTable(true);
         const active = await orderRepository.getActiveOrderByTable(tableId, currentRestId);
         setActiveTableOrder(active);
-        if (active?.customerName && !customerName) {
-          setCustomerName(active.customerName);
+        usePosCatalogStore.getState().setActiveTableOrder(tableId, active);
+        if (active?.customerName) {
+          setCustomerName((prev) => prev || active.customerName || '');
         }
-        if (active?.mobileNumber && !customerPhone) {
-          setCustomerPhone(active.mobileNumber);
+        if (active?.mobileNumber) {
+          setCustomerPhone((prev) => prev || active.mobileNumber || '');
         }
       } catch (err) {
         console.warn('Failed to load active table order:', err);
@@ -452,20 +580,26 @@ export default function PosPage() {
         setLoadingActiveTable(false);
       }
     },
-    [currentRestId, customerName, customerPhone]
+    [currentRestId]
   );
 
   useEffect(() => {
-    if (selectedOrderType === 1 && selectedTable?.id) {
-      loadActiveTableOrder(selectedTable.id);
+    const tableId = selectedTable?.id;
+    if (selectedOrderType === 1 && tableId) {
+      if (lastFetchedTableIdRef.current === tableId) {
+        return;
+      }
+      lastFetchedTableIdRef.current = tableId;
+      loadActiveTableOrder(tableId);
       setDineInPaymentFlow('pay_later');
     } else {
+      lastFetchedTableIdRef.current = null;
       setActiveTableOrder(null);
       if (selectedOrderType !== 1) {
         setDineInPaymentFlow('pay_now');
       }
     }
-  }, [selectedOrderType, selectedTable, loadActiveTableOrder]);
+  }, [selectedOrderType, selectedTable?.id, loadActiveTableOrder]);
 
   // 3. Customer Mobile Lookup (10 Digits)
   const handlePhoneChange = (val: string) => {
@@ -1064,7 +1198,7 @@ export default function PosPage() {
               clearCart();
               setCartDrawerOpen(false);
               if (selectedTable?.id) {
-                loadActiveTableOrder(selectedTable.id);
+                loadActiveTableOrder(selectedTable.id, true);
               }
             }
           );

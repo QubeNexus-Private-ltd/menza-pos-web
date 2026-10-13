@@ -120,8 +120,8 @@ export const TodayOrdersModal: React.FC<TodayOrdersModalProps> = ({
   const [settleOrderTarget, setSettleOrderTarget] = useState<OrderMaster | null>(null);
   const [returnToDetailOnClose, setReturnToDetailOnClose] = useState<OrderMaster | null>(null);
   const [storeGstNumber, setStoreGstNumber] = useState<string | null>(null);
-  const [storeCgstRate, setStoreCgstRate] = useState<number>(0);
-  const [storeSgstRate, setStoreSgstRate] = useState<number>(0);
+  const [storeCgstRate, setStoreCgstRate] = useState<number>(2.5);
+  const [storeSgstRate, setStoreSgstRate] = useState<number>(2.5);
   const [printingOrderId, setPrintingOrderId] = useState<string | number | null>(null);
   const [updatingStatusId, setUpdatingStatusId] = useState<number | null>(null);
   const [printerModalVisible, setPrinterModalVisible] = useState<boolean>(false);
@@ -258,8 +258,8 @@ export const TodayOrdersModal: React.FC<TodayOrdersModalProps> = ({
         ? (storeConfig?.gstNumber?.trim() || fetchedOrder.gstNumber?.trim())
         : undefined;
 
-      const cgstRate = storeConfig?.cgstPercentage ?? 0;
-      const sgstRate = storeConfig?.sgstPercentage ?? 0;
+      const cgstRate = storeConfig?.cgstPercentage ?? 2.5;
+      const sgstRate = storeConfig?.sgstPercentage ?? 2.5;
       const totalGstRate = cgstRate + sgstRate;
 
       const cgstAmt = hasGst
@@ -1652,8 +1652,8 @@ export const TodayOrdersModal: React.FC<TodayOrdersModalProps> = ({
                   // GST is available if order has CGST/SGST, or bill delta has tax, or GSTIN exists, or store has GST configured
                   const hasGst = hasExplicitGst || hasTaxDelta || hasGstin || (hasConfiguredGst && rawTotal > 0);
 
-                  let effectiveCgstRate = storeCgstRate;
-                  let effectiveSgstRate = storeSgstRate;
+                  let effectiveCgstRate = storeCgstRate > 0 ? storeCgstRate : 2.5;
+                  let effectiveSgstRate = storeSgstRate > 0 ? storeSgstRate : 2.5;
                   let totalGstRate = Number((effectiveCgstRate + effectiveSgstRate).toFixed(1));
 
                   let calcSubtotal = rawSubtotal > 0 ? rawSubtotal : (itemsCalculatedTotal > 0 ? itemsCalculatedTotal : rawTotal);

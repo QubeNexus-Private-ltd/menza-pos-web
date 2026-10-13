@@ -44,6 +44,7 @@ import { RestaurantConfig } from '@shared/domain/models/RestaurantConfig';
 import { ReceiptData } from '@shared/core/printer/EscPosBuilder';
 import { WebPrinterService } from '@/services/webPrinterService';
 import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
+import { usePosCatalogStore } from '@/stores/usePosCatalogStore';
 import {
   startPosSignalRConnection,
   onPosOrderCreated,
@@ -133,6 +134,7 @@ export default function TablesPage() {
 
       if (tablesRes.status === 'fulfilled' && Array.isArray(tablesRes.value)) {
         setTables(tablesRes.value);
+        usePosCatalogStore.getState().updateTables(tablesRes.value);
       }
       if (ordersRes.status === 'fulfilled' && ordersRes.value?.items) {
         setActiveOrders(ordersRes.value.items);
@@ -267,13 +269,19 @@ export default function TablesPage() {
       try {
         setLoadingActiveOrder(true);
         const fetched = await orderDataSource.getActiveOrderByTable(tbl.id, currentRestId);
-        setActiveTableOrder(fetched || existingOrder || null);
+        const active = fetched || existingOrder || null;
+        setActiveTableOrder(active);
+        usePosCatalogStore.getState().setActiveTableOrder(tbl.id, active);
       } catch (err) {
         console.warn('Failed to load active table order:', err);
-        setActiveTableOrder(existingOrder || null);
+        const active = existingOrder || null;
+        setActiveTableOrder(active);
+        usePosCatalogStore.getState().setActiveTableOrder(tbl.id, active);
       } finally {
         setLoadingActiveOrder(false);
       }
+    } else {
+      usePosCatalogStore.getState().setActiveTableOrder(tbl.id, null);
     }
   };
 
@@ -338,6 +346,7 @@ export default function TablesPage() {
     );
     setActionTable(null);
     setActiveTableOrder(null);
+    usePosCatalogStore.getState().invalidateActiveTableOrder(tableId);
     try {
       await tableDataSource.freeTable(tableId, {
         restaurantId: currentRestId,
@@ -874,8 +883,9 @@ export default function TablesPage() {
                           return;
                         }
                         const targetId = actionTable.id;
+                        const activeId = activeOrder?.id || activeTableOrder?.id;
                         setActionTable(null);
-                        router.push(`/pos?tableId=${targetId}`);
+                        router.push(`/pos?tableId=${targetId}${activeId ? `&orderId=${activeId}` : ''}`);
                       }}
                       className={`flex items-center justify-center gap-1.5 rounded-2xl py-2.5 text-xs font-bold transition-colors ${
                         activeOrder

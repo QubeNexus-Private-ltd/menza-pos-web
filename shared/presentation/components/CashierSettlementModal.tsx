@@ -153,8 +153,8 @@ export const CashierSettlementModal: React.FC<CashierSettlementModalProps> = ({
     const effectiveGstNum = storeGst?.gstNumber || order.gstNumber;
     const hasGst = Boolean(effectiveGstNum && effectiveGstNum.trim().length > 0);
 
-    const cgstRate = storeGst?.cgstRate ?? 0;
-    const sgstRate = storeGst?.sgstRate ?? 0;
+    const cgstRate = storeGst?.cgstRate ?? 2.5;
+    const sgstRate = storeGst?.sgstRate ?? 2.5;
 
     let cgst = 0;
     let sgst = 0;

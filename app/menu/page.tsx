@@ -41,6 +41,7 @@ import { MasterDataRemoteDataSource } from '@shared/data/datasources/MasterDataR
 import { MenuItem } from '@shared/domain/models/Item';
 import { Category } from '@shared/domain/models/Category';
 import { UnitMaster } from '@shared/domain/models/MasterData';
+import { usePosCatalogStore } from '@/stores/usePosCatalogStore';
 
 const catalogDataSource = new CatalogRemoteDataSource();
 const masterDataSource = new MasterDataRemoteDataSource();
@@ -132,7 +133,7 @@ export default function MenuCatalogPage() {
     try {
       setLoading(true);
       const [catsRes, itemsRes, stationsRes, unitsRes] = await Promise.allSettled([
-        catalogDataSource.getCategories(currentRestId),
+        catalogDataSource.getCategories(currentRestId, false),
         catalogDataSource.getMenuItems(currentRestId),
         WebKitchenService.getStations(currentRestId),
         masterDataSource.getUnits(),
@@ -315,6 +316,7 @@ export default function MenuCatalogPage() {
       }
 
       await loadData();
+      usePosCatalogStore.getState().invalidateCatalog();
       setItemModalOpen(false);
     } catch (err: any) {
       alert(err?.message || 'Failed to save menu item');
@@ -330,6 +332,7 @@ export default function MenuCatalogPage() {
       const success = await WebMenuService.deleteMenuItem(item.id, currentRestId);
       if (success) {
         await loadData();
+        usePosCatalogStore.getState().invalidateCatalog();
       } else {
         alert('Failed to delete menu item.');
       }
@@ -394,6 +397,7 @@ export default function MenuCatalogPage() {
           setItemCategoryId(match.id);
         }
       }
+      usePosCatalogStore.getState().invalidateCatalog();
       setCatModalOpen(false);
       setEditingCategory(null);
     } catch (err: any) {
@@ -411,6 +415,7 @@ export default function MenuCatalogPage() {
       if (success) {
         if (selectedCategory === cat.id) setSelectedCategory(null);
         await loadData();
+        usePosCatalogStore.getState().invalidateCatalog();
       } else {
         alert('Failed to delete category.');
       }

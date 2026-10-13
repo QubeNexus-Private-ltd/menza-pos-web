@@ -3,9 +3,16 @@ import { Category } from '../../domain/models/Category';
 import { MenuItem } from '../../domain/models/Item';
 
 export class CatalogRemoteDataSource {
-  async getCategories(restaurantId?: number): Promise<Category[]> {
+  async getCategories(restaurantId?: number, onlyWithItems: boolean = true): Promise<Category[]> {
     try {
-      const url = restaurantId ? `/CategoryMaster?restaurantId=${restaurantId}` : '/CategoryMaster';
+      const params = new URLSearchParams();
+      if (restaurantId) {
+        params.append('restaurantId', String(restaurantId));
+        params.append('onlyWithItems', String(onlyWithItems));
+        params.append('pageSize', '1000');
+      }
+      const queryString = params.toString();
+      const url = queryString ? `/CategoryMaster?${queryString}` : '/CategoryMaster';
       const response = await apiClient.get(url);
       const data = response?.data;
       console.log('📌 [API RESPONSE] getCategories:', JSON.stringify(data));

@@ -95,7 +95,8 @@ apiClient.interceptors.request.use(
           }
         }
 
-        if (token && config.headers) {
+        const isAuthEndpoint = config.url?.includes('/Auth/');
+        if (token && config.headers && !isAuthEndpoint) {
           config.headers.Authorization = `Bearer ${token.trim()}`;
         }
 
@@ -147,6 +148,20 @@ apiClient.interceptors.request.use(
   }
 );
 
+let isRefreshingClient = false;
+let failedQueueClient: Array<{ resolve: (token: string) => void; reject: (err: any) => void }> = [];
+
+const processQueueClient = (error: any, token: string | null = null) => {
+  failedQueueClient.forEach((prom) => {
+    if (error) {
+      prom.reject(error);
+    } else {
+      prom.resolve(token!);
+    }
+  });
+  failedQueueClient = [];
+};
+
 // Response Interceptor: Handle 401 Unauthorized, 402 Subscription Expired + Observability
 apiClient.interceptors.response.use(
   (response) => {
@@ -171,7 +186,7 @@ apiClient.interceptors.response.use(
 
     return response;
   },
-  (error) => {
+  async (error) => {
     const config = error.config as any;
     const durationMs = config?._startTime ? Date.now() - config._startTime : 0;
     const method = (config?.method || 'GET').toUpperCase();
@@ -187,10 +202,94 @@ apiClient.interceptors.response.use(
     });
 
     if (typeof window !== 'undefined') {
-      if (status === 401) {
-        const isAuthEndpoint = url.includes('/Auth/');
-        if (!isAuthEndpoint && !window.location.pathname.includes('/login')) {
-          logger.warn(`[ApiClient] 401 Unauthorized encountered on ${url}. Session may be expired.`);
+      const isAuthEndpoint = url.includes('/Auth/');
+
+      if (status === 401 && !config?._retry && !isAuthEndpoint) {
+        config._retry = true;
+
+        const currentToken =
+          (globalThis as any).__MENZA_AUTH_TOKEN__ ||
+          localStorage.getItem('@menza_session_token') ||
+          localStorage.getItem(APP_CONSTANTS.STORAGE_KEYS.AUTH_TOKEN);
+
+        const currentRefreshToken =
+          (globalThis as any).__MENZA_REFRESH_TOKEN__ ||
+          localStorage.getItem('@menza_session_refresh_token') ||
+          localStorage.getItem(APP_CONSTANTS.STORAGE_KEYS.REFRESH_TOKEN);
+
+        if (currentToken && currentRefreshToken) {
+          if (isRefreshingClient) {
+            return new Promise((resolve, reject) => {
+              failedQueueClient.push({ resolve, reject });
+            })
+              .then((token) => {
+                if (config.headers) {
+                  config.headers.Authorization = `Bearer ${token}`;
+                }
+                return apiClient(config);
+              })
+              .catch((err) => Promise.reject(err));
+          }
+
+          isRefreshingClient = true;
+
+          try {
+            logger.warn(`[ApiClient] 401 Unauthorized encountered on ${url}. Attempting session refresh...`);
+            const refreshRes = await axios.post(
+              `${getApiBaseUrl()}/Auth/Refresh`,
+              {
+                token: currentToken,
+                Token: currentToken,
+                refreshToken: currentRefreshToken,
+                RefreshToken: currentRefreshToken,
+              },
+              {
+                headers: { 'Content-Type': 'application/json' },
+                timeout: 15000,
+              }
+            );
+
+            const raw = refreshRes.data?.data ?? refreshRes.data;
+            const newAccessToken = raw?.token || raw?.Token || raw?.accessToken;
+            const newRefreshToken = raw?.refreshToken || raw?.RefreshToken || currentRefreshToken;
+
+            if (newAccessToken) {
+              (globalThis as any).__MENZA_AUTH_TOKEN__ = newAccessToken;
+              (globalThis as any).__MENZA_REFRESH_TOKEN__ = newRefreshToken;
+
+              try {
+                localStorage.setItem('@menza_session_token', newAccessToken);
+                localStorage.setItem(APP_CONSTANTS.STORAGE_KEYS.AUTH_TOKEN, newAccessToken);
+                if (newRefreshToken) {
+                  localStorage.setItem('@menza_session_refresh_token', newRefreshToken);
+                  localStorage.setItem(APP_CONSTANTS.STORAGE_KEYS.REFRESH_TOKEN, newRefreshToken);
+                }
+
+                const { useAuthStore } = require('@shared/presentation/state/useAuthStore');
+                useAuthStore.getState().updateTokens(newAccessToken, newRefreshToken);
+              } catch {}
+
+              processQueueClient(null, newAccessToken);
+              if (config.headers) {
+                config.headers.Authorization = `Bearer ${newAccessToken}`;
+              }
+              return apiClient(config);
+            } else {
+              throw new Error('Refresh response missing access token');
+            }
+          } catch (refreshErr: any) {
+            processQueueClient(refreshErr, null);
+            const refreshStatus = refreshErr?.response?.status;
+            if (refreshStatus === 401 || refreshStatus === 403 || refreshStatus === 400) {
+              try {
+                const { useAuthStore } = require('@shared/presentation/state/useAuthStore');
+                useAuthStore.getState().logout();
+              } catch {}
+            }
+            return Promise.reject(refreshErr);
+          } finally {
+            isRefreshingClient = false;
+          }
         }
       } else if (
         status === 402 ||

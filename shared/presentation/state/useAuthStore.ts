@@ -7,9 +7,44 @@ import { AuthRemoteDataSource } from '../../data/datasources/AuthRemoteDataSourc
 import { TermsConditionRemoteDataSource } from '../../data/datasources/TermsConditionRemoteDataSource';
 import { TermsConditionRepositoryImpl } from '../../data/repositories/TermsConditionRepositoryImpl';
 import { isOwnerUser, isSuperAdminUser } from '../../core/auth/rolePermissions';
-import { isJwtExpired } from '../../core/auth/jwtUtils';
+import { isJwtExpired, getJwtExpirationDate } from '../../core/auth/jwtUtils';
 
 const termsRepository = new TermsConditionRepositoryImpl(new TermsConditionRemoteDataSource());
+
+let silentRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleSilentRefresh(): void {
+  if (silentRefreshTimer) {
+    clearTimeout(silentRefreshTimer);
+    silentRefreshTimer = null;
+  }
+
+  const state = useAuthStore.getState();
+  const token = state.token;
+  const refreshToken = state.refreshToken;
+  if (!token || !refreshToken || !state.isAuthenticated) return;
+
+  const expiryDate = getJwtExpirationDate(token);
+  if (!expiryDate) return;
+
+  // Proactively refresh 5 minutes before expiration, or in 30 seconds if close to expiry
+  const msUntilExpiry = expiryDate.getTime() - Date.now();
+  const refreshInMs = Math.max(msUntilExpiry - 5 * 60 * 1000, 30 * 1000);
+
+  silentRefreshTimer = setTimeout(async () => {
+    try {
+      const currentState = useAuthStore.getState();
+      if (!currentState.token || !currentState.refreshToken || !currentState.isAuthenticated) return;
+      logger.auth('AUTH_SESSION_CREATED', 'Executing proactive background refresh before token expiry');
+      const refreshed = await new AuthRemoteDataSource().refreshToken(currentState.token, currentState.refreshToken);
+      if (refreshed && refreshed.token) {
+        currentState.updateTokens(refreshed.token, refreshed.refreshToken || currentState.refreshToken);
+      }
+    } catch (err) {
+      logger.api('API_ERROR', 'Proactive silent token refresh failed, reactive refresh interceptor will catch next request', { error: String(err) });
+    }
+  }, refreshInMs);
+}
 
 interface AuthState {
   isHydrating: boolean;
@@ -147,6 +182,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             }
           }).catch(() => {});
         }
+        scheduleSilentRefresh();
         return true;
       }
 
@@ -218,6 +254,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       activeRestaurant: activeRest,
     });
 
+    scheduleSilentRefresh();
+
     // If terms acceptance was not provided by login response and user is owner, sync with backend
     if (typeof hasAcceptedTermsExplicit !== 'boolean' && isOwner && !hasAcceptedTerms && user?.id && token) {
       termsRepository.getTermsConditionStatus(user.id, token).then((isAccepted) => {
@@ -276,6 +314,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     (globalThis as any).__MENZA_REFRESH_TOKEN__ = refreshToken;
     SessionStorage.saveTokens(token, refreshToken);
     set({ token, refreshToken });
+    scheduleSilentRefresh();
   },
 
   setRestaurants: (restaurants) => {
@@ -311,6 +350,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   logout: () => {
     logger.auth('LOGOUT_STARTED', 'Initiating user logout process');
+    if (silentRefreshTimer) {
+      clearTimeout(silentRefreshTimer);
+      silentRefreshTimer = null;
+    }
     const currentToken = get().token || (globalThis as any).__MENZA_AUTH_TOKEN__;
     const currentRefreshToken = get().refreshToken || (globalThis as any).__MENZA_REFRESH_TOKEN__;
 

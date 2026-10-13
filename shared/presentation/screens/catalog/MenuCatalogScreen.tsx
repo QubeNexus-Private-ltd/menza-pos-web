@@ -746,6 +746,11 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
   const paginatedItems = isAll ? filteredItems : filteredItems.slice(startIndex, endIndex);
 
   const safeCategories = Array.isArray(categories) ? categories : [];
+  const visibleCategories = useMemo(() => {
+    if (safeItems.length === 0) return safeCategories;
+    const populatedCatIds = new Set(safeItems.map((i) => Number(i.categoryId)));
+    return safeCategories.filter((cat) => populatedCatIds.has(Number(cat.id)));
+  }, [safeCategories, safeItems]);
   const filteredUnits = units.filter((u) => u.unitName.toLowerCase().includes(unitSearchQuery.toLowerCase()));
   const inStockCount = safeItems.filter((x) => x.isAvailable).length;
   return (
@@ -860,7 +865,7 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
               <Text style={styles.catalogStatLabel}>Total Items</Text>
             </View>
             <View style={styles.catalogStatCard}>
-              <Text style={styles.catalogStatValue}>{safeCategories.length}</Text>
+              <Text style={styles.catalogStatValue}>{visibleCategories.length}</Text>
               <Text style={styles.catalogStatLabel}>Categories</Text>
             </View>
             <View style={styles.catalogStatCard}>
@@ -938,7 +943,7 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
               </TouchableOpacity>
 
               {/* Dynamic Categories */}
-              {safeCategories.map((cat) => {
+              {visibleCategories.map((cat) => {
                 const count = safeItems.filter((i) => Number(i.categoryId) === Number(cat.id)).length;
                 const isSelected = selectedCatId === cat.id;
                 return (

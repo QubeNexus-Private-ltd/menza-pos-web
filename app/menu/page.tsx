@@ -386,7 +386,7 @@ export default function MenuCatalogPage() {
           catStationId
         );
       }
-      const updatedCats = await catalogDataSource.getCategories(currentRestId);
+      const updatedCats = await catalogDataSource.getCategories(currentRestId, false);
       if (Array.isArray(updatedCats)) {
         setCategories(updatedCats);
         const match = updatedCats.find((c) => c.categoryName.toLowerCase() === newCatName.trim().toLowerCase());
@@ -463,6 +463,13 @@ export default function MenuCatalogPage() {
   // Operational Counts
   const inStockCount = useMemo(() => items.filter((x) => x.isAvailable !== false).length, [items]);
   const outOfStockCount = useMemo(() => items.length - inStockCount, [items, inStockCount]);
+
+  // Only categories that have items for this restaurant
+  const visibleCategories = useMemo(() => {
+    if (items.length === 0) return categories;
+    const populatedCatIds = new Set(items.map((i) => Number(i.categoryId)));
+    return categories.filter((cat) => populatedCatIds.has(Number(cat.id)));
+  }, [categories, items]);
 
   // Filtered items logic (matching Menza's search across 5 fields)
   const filteredItems = useMemo(() => {
@@ -608,7 +615,7 @@ export default function MenuCatalogPage() {
               <span className="text-[11px] font-bold text-[#7C6F62] dark:text-[#94A3B8] uppercase tracking-wider block">
                 Categories
               </span>
-              <p className="mt-1 text-2xl font-black text-[#DE8626]">{categories.length}</p>
+              <p className="mt-1 text-2xl font-black text-[#DE8626]">{visibleCategories.length}</p>
             </div>
 
             <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-3.5 shadow-xs">
@@ -745,7 +752,7 @@ export default function MenuCatalogPage() {
             </button>
 
             {/* Dynamic Categories */}
-            {categories.map((cat) => {
+            {visibleCategories.map((cat) => {
               const count = items.filter((i) => Number(i.categoryId) === Number(cat.id)).length;
               const isSelected = selectedCategory === cat.id;
               return (

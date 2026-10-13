@@ -522,6 +522,13 @@ export default function PosPage() {
     });
   }, [items, selectedCategory, vegFilter, searchQuery]);
 
+  // Categories that have items for this restaurant
+  const visibleCategories = useMemo(() => {
+    if (items.length === 0) return categories;
+    const itemCatIds = new Set(items.map((it) => Number(it.categoryId)));
+    return categories.filter((cat) => itemCatIds.has(Number(cat.id)));
+  }, [categories, items]);
+
   // 6. Cart Management
   const addToCartQuick = (item: MenuItem) => {
     if (!isItemAvailable(item)) {
@@ -680,8 +687,8 @@ export default function PosPage() {
   const hasGstNumber = Boolean(
     restaurantConfig?.gstNumber && restaurantConfig.gstNumber.trim().length > 0
   );
-  const sgstRate = hasGstNumber ? Number(restaurantConfig?.sgstPercentage ?? 2.5) : 0;
-  const cgstRate = hasGstNumber ? Number(restaurantConfig?.cgstPercentage ?? 2.5) : 0;
+  const sgstRate = hasGstNumber ? Number(restaurantConfig?.sgstPercentage ?? 0) : 0;
+  const cgstRate = hasGstNumber ? Number(restaurantConfig?.cgstPercentage ?? 0) : 0;
   const totalGstRate = sgstRate + cgstRate;
 
   const subtotal = useMemo(() => {
@@ -1907,7 +1914,7 @@ export default function PosPage() {
                 >
                   All Dishes ({items.length})
                 </button>
-                {categories.map((cat) => (
+                {visibleCategories.map((cat) => (
                   <button
                     key={cat.id}
                     type="button"

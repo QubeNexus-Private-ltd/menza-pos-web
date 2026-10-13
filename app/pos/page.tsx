@@ -680,8 +680,8 @@ export default function PosPage() {
   const hasGstNumber = Boolean(
     restaurantConfig?.gstNumber && restaurantConfig.gstNumber.trim().length > 0
   );
-  const sgstRate = hasGstNumber ? Number(restaurantConfig?.sgstPercentage ?? 2.5) : 0;
-  const cgstRate = hasGstNumber ? Number(restaurantConfig?.cgstPercentage ?? 2.5) : 0;
+  const sgstRate = hasGstNumber ? Number(restaurantConfig?.sgstPercentage ?? 0) : 0;
+  const cgstRate = hasGstNumber ? Number(restaurantConfig?.cgstPercentage ?? 0) : 0;
   const totalGstRate = sgstRate + cgstRate;
 
   const subtotal = useMemo(() => {

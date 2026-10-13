@@ -495,8 +495,8 @@ export class EscPosBuilder {
     if (hasGst) {
       builder.twoColumns('Subtotal:', `Rs ${(Number(effectiveSubtotal) || 0).toFixed(2)}`);
 
-      const cgstRate = data.cgstPercentage ?? 2.5;
-      const sgstRate = data.sgstPercentage ?? 2.5;
+      const cgstRate = data.cgstPercentage ?? 0;
+      const sgstRate = data.sgstPercentage ?? 0;
       const cgstAmt = data.cgstAmount !== undefined ? Number(data.cgstAmount) : ((Number(effectiveSubtotal) || 0) * cgstRate) / 100;
       const sgstAmt = data.sgstAmount !== undefined ? Number(data.sgstAmount) : ((Number(effectiveSubtotal) || 0) * sgstRate) / 100;
 

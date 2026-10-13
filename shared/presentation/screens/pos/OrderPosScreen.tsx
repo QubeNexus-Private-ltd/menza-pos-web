@@ -555,9 +555,9 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
     restaurantConfig?.gstNumber && restaurantConfig.gstNumber.trim().length > 0
   );
 
-  // SGST & CGST rates from restaurant config
-  const sgstRate = hasGstNumber ? Number(restaurantConfig?.sgstPercentage ?? 0) : 0;
-  const cgstRate = hasGstNumber ? Number(restaurantConfig?.cgstPercentage ?? 0) : 0;
+  // SGST & CGST rates (defaults to 2.5% each = 5% total if configured)
+  const sgstRate = hasGstNumber ? Number(restaurantConfig?.sgstPercentage ?? 2.5) : 0;
+  const cgstRate = hasGstNumber ? Number(restaurantConfig?.cgstPercentage ?? 2.5) : 0;
   const totalGstRate = sgstRate + cgstRate;
 
   // Tax amounts (calculated when GST number is present)

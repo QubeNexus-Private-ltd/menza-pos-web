@@ -32,6 +32,7 @@ import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
 import { DishImage } from '@/components/common/DishImage';
 import { ManageVariantsModal } from '@/components/menu/ManageVariantsModal';
+import { SearchableCategorySelect } from '@/components/menu/SearchableCategorySelect';
 import { WebImageUploadService } from '@/services/imageUploadService';
 import { WebMenuService } from '@/services/menuService';
 import { WebKitchenService, KitchenStationDTO } from '@/services/kitchenService';
@@ -120,6 +121,10 @@ export default function MenuCatalogPage() {
   const [catImageUrl, setCatImageUrl] = useState('');
   const [isUploadingCatImage, setIsUploadingCatImage] = useState(false);
   const [savingCat, setSavingCat] = useState(false);
+  const [catSuggestions, setCatSuggestions] = useState<Category[]>([]);
+  const [isLoadingCatSuggestions, setIsLoadingCatSuggestions] = useState(false);
+  const [showCatSuggestions, setShowCatSuggestions] = useState(false);
+  const [autofilledFromDb, setAutofilledFromDb] = useState<string | null>(null);
 
   // Add Unit Modal
   const [unitModalOpen, setUnitModalOpen] = useState(false);
@@ -342,12 +347,14 @@ export default function MenuCatalogPage() {
   };
 
   // Open Create Category Modal
-  const handleOpenCreateCategory = () => {
+  const handleOpenCreateCategory = (initialName?: string | React.MouseEvent) => {
     setEditingCategory(null);
-    setNewCatName('');
+    setNewCatName(typeof initialName === 'string' ? initialName : '');
     setNewCatDesc('');
     setCatStationId(undefined);
     setCatImageUrl('');
+    setAutofilledFromDb(null);
+    setShowCatSuggestions(false);
     setCatModalOpen(true);
   };
 
@@ -358,15 +365,71 @@ export default function MenuCatalogPage() {
     setNewCatDesc(cat.description || '');
     setCatStationId(cat.kitchenStationId);
     setCatImageUrl(cat.imageUrl || '');
+    setAutofilledFromDb(null);
+    setShowCatSuggestions(false);
     setCatModalOpen(true);
   };
+
+  // Select Autofill Category Suggestion from DB
+  const handleSelectCatSuggestion = (cat: Category) => {
+    setNewCatName(cat.categoryName);
+    if (cat.description) setNewCatDesc(cat.description);
+    if (cat.imageUrl) setCatImageUrl(cat.imageUrl);
+    if (cat.kitchenStationId) setCatStationId(cat.kitchenStationId);
+    setAutofilledFromDb(cat.categoryName);
+    setShowCatSuggestions(false);
+  };
+
+  // Fetch DB Category Suggestions when typing in Create Category modal
+  useEffect(() => {
+    if (!catModalOpen || editingCategory) {
+      setCatSuggestions([]);
+      setShowCatSuggestions(false);
+      return;
+    }
+
+    let active = true;
+    const timer = setTimeout(async () => {
+      try {
+        setIsLoadingCatSuggestions(true);
+        const res = await catalogDataSource.getCategorySuggestions(newCatName.trim());
+        if (active) {
+          setCatSuggestions(res);
+        }
+      } catch (err) {
+        console.warn('Could not fetch category suggestions:', err);
+      } finally {
+        if (active) {
+          setIsLoadingCatSuggestions(false);
+        }
+      }
+    }, 200);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [newCatName, catModalOpen, editingCategory]);
 
   // Save Category (Create or Update)
   const handleSaveCategory = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newCatName.trim()) {
+    const trimmed = newCatName.trim();
+    if (!trimmed) {
       alert('Please enter category name.');
       return;
+    }
+
+    if (editingCategory) {
+      const existing = categories.find(
+        (c) =>
+          c.id !== editingCategory.id &&
+          (c.categoryName || '').trim().toLowerCase() === trimmed.toLowerCase()
+      );
+      if (existing) {
+        alert(`Another category with the name "${existing.categoryName}" already exists.`);
+        return;
+      }
     }
 
     try {
@@ -374,25 +437,29 @@ export default function MenuCatalogPage() {
       if (editingCategory) {
         await catalogDataSource.updateCategory(
           editingCategory.id,
-          newCatName.trim(),
+          trimmed,
           newCatDesc.trim(),
           currentRestId,
           catImageUrl.trim(),
           catStationId
         );
       } else {
-        await catalogDataSource.createCategory(
-          newCatName.trim(),
+        const res = await catalogDataSource.createCategory(
+          trimmed,
           newCatDesc.trim(),
           currentRestId,
           catImageUrl.trim(),
           catStationId
         );
+        if (!res.success && res.message && !res.message.toLowerCase().includes('already exists')) {
+          alert(res.message);
+          return;
+        }
       }
       const updatedCats = await catalogDataSource.getCategories(currentRestId, false);
       if (Array.isArray(updatedCats)) {
         setCategories(updatedCats);
-        const match = updatedCats.find((c) => c.categoryName.toLowerCase() === newCatName.trim().toLowerCase());
+        const match = updatedCats.find((c) => (c.categoryName || '').toLowerCase() === trimmed.toLowerCase());
         if (match) {
           setItemCategoryId(match.id);
         }
@@ -400,6 +467,8 @@ export default function MenuCatalogPage() {
       usePosCatalogStore.getState().invalidateCatalog();
       setCatModalOpen(false);
       setEditingCategory(null);
+      setAutofilledFromDb(null);
+      setShowCatSuggestions(false);
     } catch (err: any) {
       alert(err?.message || 'Failed to save category');
     } finally {
@@ -469,18 +538,35 @@ export default function MenuCatalogPage() {
   const inStockCount = useMemo(() => items.filter((x) => x.isAvailable !== false).length, [items]);
   const outOfStockCount = useMemo(() => items.length - inStockCount, [items, inStockCount]);
 
-  // Only categories that have items for this restaurant
+  // Only categories that have items for this restaurant, deduplicated by name
   const visibleCategories = useMemo(() => {
-    if (items.length === 0) return categories;
+    if (!items || items.length === 0) return [];
     const populatedCatIds = new Set(items.map((i) => Number(i.categoryId)));
-    return categories.filter((cat) => populatedCatIds.has(Number(cat.id)));
+    const seen = new Set<string>();
+    return categories.filter((cat) => {
+      const norm = (cat.categoryName || '').trim().toLowerCase();
+      if (!populatedCatIds.has(Number(cat.id)) || seen.has(norm)) return false;
+      seen.add(norm);
+      return true;
+    });
   }, [categories, items]);
 
   // Filtered items logic (matching Menza's search across 5 fields)
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
-      // Category Filter
-      if (selectedCategory !== null && Number(item.categoryId) !== Number(selectedCategory)) return false;
+      // Category Filter (matches by id or category name to handle legacy duplicates)
+      if (selectedCategory !== null) {
+        const selCat = categories.find((c) => c.id === selectedCategory);
+        if (selCat) {
+          const selName = (selCat.categoryName || '').trim().toLowerCase();
+          const itemCatName = (item.categoryName || '').trim().toLowerCase();
+          if (Number(item.categoryId) !== Number(selectedCategory) && itemCatName !== selName) {
+            return false;
+          }
+        } else if (Number(item.categoryId) !== Number(selectedCategory)) {
+          return false;
+        }
+      }
 
       // Stock Filter (3-way)
       if (stockFilter === 'instock' && item.isAvailable === false) return false;
@@ -758,7 +844,10 @@ export default function MenuCatalogPage() {
 
             {/* Dynamic Categories */}
             {visibleCategories.map((cat) => {
-              const count = items.filter((i) => Number(i.categoryId) === Number(cat.id)).length;
+              const count = items.filter((i) => 
+                Number(i.categoryId) === Number(cat.id) || 
+                (i.categoryName && i.categoryName.trim().toLowerCase() === (cat.categoryName || '').trim().toLowerCase())
+              ).length;
               const isSelected = selectedCategory === cat.id;
               return (
                 <div
@@ -789,17 +878,6 @@ export default function MenuCatalogPage() {
                       className="rounded p-1 opacity-70 hover:opacity-100 transition-opacity"
                     >
                       <Edit2 className="h-3 w-3" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDeleteCategory(cat);
-                      }}
-                      title="Delete Category"
-                      className="rounded p-1 opacity-70 hover:opacity-100 hover:text-red-300 transition-opacity"
-                    >
-                      <Trash2 className="h-3 w-3" />
                     </button>
                   </div>
                 </div>
@@ -1335,27 +1413,18 @@ export default function MenuCatalogPage() {
                     </label>
                     <button
                       type="button"
-                      onClick={() => setCatModalOpen(true)}
+                      onClick={handleOpenCreateCategory}
                       className="text-[11px] font-bold text-[#DE8626] hover:underline"
                     >
                       + New Category
                     </button>
                   </div>
-                  <select
+                  <SearchableCategorySelect
+                    categories={categories}
                     value={itemCategoryId}
-                    onChange={(e) => setItemCategoryId(Number(e.target.value))}
-                    className="w-full h-10 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3 font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626] transition-colors"
-                  >
-                    {categories.length === 0 ? (
-                      <option value={0}>No categories available (click + New Category)</option>
-                    ) : (
-                      categories.map((c) => (
-                        <option key={`opt-cat-${c.id}`} value={c.id}>
-                          {c.categoryName}
-                        </option>
-                      ))
-                    )}
-                  </select>
+                    onChange={(catId) => setItemCategoryId(catId)}
+                    onAddNewCategory={handleOpenCreateCategory}
+                  />
                 </div>
 
                 {/* BASE PRICE, PORTION QTY & PREP TIME (Responsive 3 Columns) */}
@@ -1651,19 +1720,128 @@ export default function MenuCatalogPage() {
               </div>
 
               <form onSubmit={handleSaveCategory} className="space-y-4 text-xs">
-                <div>
-                  <label className="block text-[11px] font-bold text-[#7C6F62] dark:text-[#94A3B8] uppercase tracking-wider mb-1">
-                    Category Name *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    autoFocus
-                    value={newCatName}
-                    onChange={(e) => setNewCatName(e.target.value)}
-                    placeholder="e.g. Starters, Main Course, Beverages"
-                    className="w-full h-10 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3 font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
-                  />
+                {/* Searchable Autofill Category Name */}
+                <div className="relative">
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-[11px] font-bold text-[#7C6F62] dark:text-[#94A3B8] uppercase tracking-wider">
+                      Category Name *
+                    </label>
+                    {!editingCategory && (
+                      <span className="text-[10px] text-[#DE8626] font-semibold flex items-center gap-1">
+                        <Sparkles className="h-3 w-3" />
+                        Searchable DB Autofill
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="relative">
+                    <input
+                      type="text"
+                      required
+                      autoFocus
+                      data-cat-name-input="true"
+                      value={newCatName}
+                      disabled={savingCat}
+                      onFocus={() => {
+                        if (!editingCategory) setShowCatSuggestions(true);
+                      }}
+                      onChange={(e) => {
+                        setNewCatName(e.target.value);
+                        setAutofilledFromDb(null);
+                        if (!editingCategory) setShowCatSuggestions(true);
+                      }}
+                      placeholder="Type category (e.g. Starters, Main Course, Beverages)..."
+                      className="w-full h-10 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] pl-3 pr-9 font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626] transition-colors disabled:opacity-50"
+                    />
+
+                    {/* Right-hand loading spinner or search icon */}
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1.5 pointer-events-none">
+                      {isLoadingCatSuggestions ? (
+                        <div className="h-4 w-4 border-2 border-[#DE8626]/30 border-t-[#DE8626] rounded-full animate-spin" />
+                      ) : (
+                        <Search className="h-3.5 w-3.5 text-[#8C7A6B]" />
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Autofill Confirmation Chip */}
+                  {autofilledFromDb && (
+                    <div className="mt-1.5 flex items-center justify-between px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-[11px] font-bold text-emerald-700 dark:text-emerald-400">
+                      <div className="flex items-center gap-1.5">
+                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                        <span>Autofilled from DB: <strong>{autofilledFromDb}</strong></span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setAutofilledFromDb(null)}
+                        className="text-[10px] text-emerald-800 dark:text-emerald-300 hover:underline"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Floating Suggestions Dropdown */}
+                  {showCatSuggestions && !editingCategory && (
+                    <div
+                      className="absolute top-full left-0 right-0 mt-1 z-30 max-h-52 overflow-y-auto rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] shadow-xl p-1.5 space-y-1 animate-in fade-in zoom-in-95 duration-150"
+                      onMouseDown={(e) => e.preventDefault()}
+                    >
+                      {isLoadingCatSuggestions && catSuggestions.length === 0 ? (
+                        <div className="py-4 text-center flex items-center justify-center gap-2 text-xs text-[#8C7A6B]">
+                          <div className="h-3.5 w-3.5 border-2 border-[#DE8626]/30 border-t-[#DE8626] rounded-full animate-spin" />
+                          <span>Searching database categories...</span>
+                        </div>
+                      ) : catSuggestions.length > 0 ? (
+                        <>
+                          <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-[#8C7A6B] flex items-center justify-between border-b border-[#E7E1DA] dark:border-[#2B3540] mb-1">
+                            <span>Categories in Database ({catSuggestions.length})</span>
+                            <span className="text-[#DE8626]">Click to Autofill</span>
+                          </div>
+                          {catSuggestions.map((cat) => (
+                            <button
+                              key={`sug-${cat.id}-${cat.categoryName}`}
+                              type="button"
+                              onClick={() => handleSelectCatSuggestion(cat)}
+                              className="w-full text-left px-2.5 py-1.5 rounded-xl hover:bg-[#FAF7F2] dark:hover:bg-[#151A20] transition-colors flex items-center justify-between group"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-xs text-[#1E2930] dark:text-[#F3F4F6] group-hover:text-[#DE8626]">
+                                    {cat.categoryName}
+                                  </span>
+                                  <span className="px-1.5 py-0.2 rounded text-[9px] font-extrabold bg-amber-500/10 text-[#DE8626]">
+                                    In DB
+                                  </span>
+                                </div>
+                                {cat.description && (
+                                  <p className="text-[10px] text-[#667085] dark:text-[#94A3B8] truncate mt-0.5">
+                                    {cat.description}
+                                  </p>
+                                )}
+                              </div>
+                              <span className="text-[10px] font-bold text-[#DE8626] opacity-0 group-hover:opacity-100 transition-opacity ml-2 shrink-0">
+                                Autofill ↵
+                              </span>
+                            </button>
+                          ))}
+                        </>
+                      ) : newCatName.trim() ? (
+                        <div className="py-3 px-2 text-center space-y-1">
+                          <p className="text-[11px] font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                            &ldquo;{newCatName.trim()}&rdquo; is not present in database
+                          </p>
+                          <p className="text-[10px] text-[#8C7A6B]">
+                            Fill details below & click <span className="font-bold text-[#DE8626]">Create Category</span> to create it in DB.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="py-2 px-2 text-center text-[11px] text-[#8C7A6B]">
+                          Start typing to search existing categories in database
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -1672,10 +1850,11 @@ export default function MenuCatalogPage() {
                   </label>
                   <input
                     type="text"
+                    disabled={savingCat}
                     value={newCatDesc}
                     onChange={(e) => setNewCatDesc(e.target.value)}
                     placeholder="e.g. Freshly prepared appetizers & snacks"
-                    className="w-full h-10 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3 font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
+                    className="w-full h-10 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3 font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626] disabled:opacity-50"
                   />
                 </div>
 
@@ -1684,9 +1863,10 @@ export default function MenuCatalogPage() {
                     Assigned Kitchen Station (Optional)
                   </label>
                   <select
+                    disabled={savingCat}
                     value={catStationId ?? ''}
                     onChange={(e) => setCatStationId(e.target.value ? Number(e.target.value) : undefined)}
-                    className="w-full h-10 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3 font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
+                    className="w-full h-10 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3 font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626] disabled:opacity-50"
                   >
                     <option value="">Default (Main Kitchen)</option>
                     {stations.map((st) => (
@@ -1703,13 +1883,13 @@ export default function MenuCatalogPage() {
                     Category Banner Image (Optional)
                   </label>
                   <div className="flex items-center gap-2 mb-2">
-                    <label className="cursor-pointer inline-flex items-center gap-1.5 rounded-xl border border-dashed border-[#DE8626] bg-amber-500/10 px-3 py-2 font-bold text-[#DE8626] hover:bg-amber-500/20 transition-colors">
+                    <label className={`cursor-pointer inline-flex items-center gap-1.5 rounded-xl border border-dashed border-[#DE8626] bg-amber-500/10 px-3 py-2 font-bold text-[#DE8626] hover:bg-amber-500/20 transition-colors ${savingCat ? 'opacity-50 pointer-events-none' : ''}`}>
                       <Camera className="h-3.5 w-3.5" />
                       <span>{isUploadingCatImage ? 'Uploading...' : 'Upload Banner'}</span>
                       <input
                         type="file"
                         accept="image/*"
-                        disabled={isUploadingCatImage}
+                        disabled={isUploadingCatImage || savingCat}
                         onChange={handleCatImageUpload}
                         className="hidden"
                       />
@@ -1717,8 +1897,9 @@ export default function MenuCatalogPage() {
                     {catImageUrl && (
                       <button
                         type="button"
+                        disabled={savingCat}
                         onClick={() => setCatImageUrl('')}
-                        className="inline-flex items-center gap-1 rounded-xl border border-red-500/30 px-2.5 py-2 font-bold text-red-500 hover:bg-red-500/10"
+                        className="inline-flex items-center gap-1 rounded-xl border border-red-500/30 px-2.5 py-2 font-bold text-red-500 hover:bg-red-500/10 disabled:opacity-50"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                         <span>Remove</span>
@@ -1727,30 +1908,44 @@ export default function MenuCatalogPage() {
                   </div>
                   <input
                     type="text"
+                    disabled={savingCat}
                     value={catImageUrl}
                     onChange={(e) => setCatImageUrl(e.target.value)}
                     placeholder="Or enter banner image URL..."
-                    className="w-full h-9 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3 font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
+                    className="w-full h-9 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3 font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626] disabled:opacity-50"
                   />
                 </div>
 
                 <div className="pt-2 flex gap-2">
                   <button
                     type="button"
+                    disabled={savingCat}
                     onClick={() => {
                       setCatModalOpen(false);
                       setEditingCategory(null);
+                      setAutofilledFromDb(null);
+                      setShowCatSuggestions(false);
                     }}
-                    className="flex-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] py-2.5 font-bold text-[#667085]"
+                    className="flex-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] py-2.5 font-bold text-[#667085] hover:bg-black/5 dark:hover:bg-white/5 transition-colors disabled:opacity-50"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
                     disabled={savingCat}
-                    className="flex-1 rounded-xl bg-gradient-to-r from-[#F59E0B] via-[#E58B24] to-[#DE8626] py-2.5 font-bold text-white shadow-md shadow-[#DE8626]/20 hover:opacity-95 disabled:opacity-50"
+                    className="flex-1 rounded-xl bg-gradient-to-r from-[#F59E0B] via-[#E58B24] to-[#DE8626] py-2.5 font-bold text-white shadow-md shadow-[#DE8626]/20 hover:opacity-95 disabled:opacity-50 flex items-center justify-center gap-2 transition-all"
                   >
-                    {savingCat ? 'Saving...' : editingCategory ? 'Save Changes' : 'Create Category'}
+                    {savingCat ? (
+                      <>
+                        <div className="h-3.5 w-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        <span>{editingCategory ? 'Updating in DB...' : 'Creating in DB...'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="h-4 w-4" />
+                        <span>{editingCategory ? 'Save Changes' : 'Create Category'}</span>
+                      </>
+                    )}
                   </button>
                 </div>
               </form>

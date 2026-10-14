@@ -285,16 +285,6 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       loadData();
     });
 
-    // Poll fallback every 45s
-    const pollInterval = setInterval(() => {
-      orderDs
-        .getTodayOrders(currentRestId, 'ALL', 1, 20)
-        .then((res) => {
-          if (res?.items) processIncomingOrders(res.items);
-        })
-        .catch(() => {});
-    }, 45000);
-
     return () => {
       isMounted = false;
       unsubCreated();
@@ -307,7 +297,6 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       unsubPayment();
       unsubWalletEvents();
       unsubReconnected();
-      clearInterval(pollInterval);
     };
   }, [currentRestId, isSuperAdmin, handleOrderStatusChanged, processIncomingOrders]);
 

@@ -63,6 +63,10 @@ const ParkedCartsModal = dynamic(
   () => import('@/components/pos/ParkedCartsModal').then((mod) => mod.ParkedCartsModal),
   { ssr: false }
 );
+const TablePickerModal = dynamic(
+  () => import('@/components/pos/TablePickerModal').then((mod) => mod.TablePickerModal),
+  { ssr: false }
+);
 const OrderNotificationDrawer = dynamic(
   () => import('@/components/pos/OrderNotificationDrawer').then((mod) => mod.OrderNotificationDrawer),
   { ssr: false }
@@ -81,10 +85,6 @@ const WalletRechargeModal = dynamic(
 );
 const SubscriptionGraceBanner = dynamic(
   () => import('@/components/subscription/SubscriptionGraceBanner').then((mod) => mod.SubscriptionGraceBanner),
-  { ssr: false }
-);
-const SubscriptionBlockerModal = dynamic(
-  () => import('@/components/subscription/SubscriptionBlockerModal').then((mod) => mod.SubscriptionBlockerModal),
   { ssr: false }
 );
 import { GildedAlertModal, GildedAlertConfig } from '@/components/common/GildedAlertModal';
@@ -242,13 +242,6 @@ export default function PosPage() {
   });
   const [loadingActiveTable, setLoadingActiveTable] = useState(false);
   const [showRunningTableDetails, setShowRunningTableDetails] = useState(false);
-  const [dineInPaymentFlow, setDineInPaymentFlow] = useState<'pay_later' | 'pay_now'>(() => {
-    if (typeof window !== 'undefined') {
-      const qTableId = new URLSearchParams(window.location.search).get('tableId');
-      if (qTableId) return 'pay_later';
-    }
-    return 'pay_now';
-  });
 
   // Filters & Search
   const [selectedCategory, setSelectedCategory] = useState<number | null>(null); // null = all
@@ -289,7 +282,6 @@ export default function PosPage() {
   const [walletModalOpen, setWalletModalOpen] = useState(false);
   const [printerModalOpen, setPrinterModalOpen] = useState(false);
   const [notificationDrawerOpen, setNotificationDrawerOpen] = useState(false);
-  const [subscriptionModalOpen, setSubscriptionModalOpen] = useState(false);
   const [customizingItem, setCustomizingItem] = useState<MenuItem | null>(null);
   const [numpadItem, setNumpadItem] = useState<{
     cartKey: string;
@@ -301,6 +293,7 @@ export default function PosPage() {
   } | null>(null);
   const [parkedCarts, setParkedCarts] = useState<ParkedCart[]>([]);
   const [parkedModalOpen, setParkedModalOpen] = useState(false);
+  const [tablePickerModalOpen, setTablePickerModalOpen] = useState(false);
   const [cartDrawerOpen, setCartDrawerOpen] = useState(false); // Mobile / Tablet drawer
   const [orderSuccessData, setOrderSuccessData] = useState<any | null>(null);
 
@@ -366,17 +359,19 @@ export default function PosPage() {
           restaurantId: currentRestId,
           orderTypes: types,
         });
-        if (!selectedTable) {
-          const firstActive = types.find((t) => t.isActive);
-          if (firstActive) {
-            setSelectedOrderType(firstActive.id);
-          }
+        const qTableId = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('tableId') : null;
+        if (!qTableId) {
+          setSelectedOrderType((prev) => {
+            if (prev === 1) return prev;
+            const firstActive = types.find((t) => t.isActive);
+            return firstActive ? firstActive.id : prev;
+          });
         }
       }
     } catch (err) {
       console.warn('Failed to load active order types:', err);
     }
-  }, [currentRestId, selectedTable]);
+  }, [currentRestId]);
 
   useEffect(() => {
     if (!currentRestId) return;
@@ -420,8 +415,7 @@ export default function PosPage() {
               const matched = resolvedTables.find((t) => t.id === Number(qTableId));
               if (matched) {
                 setSelectedOrderType(1); // DINE_IN
-                setSelectedTable(matched);
-                setDineInPaymentFlow('pay_later');
+                setSelectedTable((prev) => (prev?.id === matched.id ? prev : matched));
               }
             }
           }
@@ -526,15 +520,7 @@ export default function PosPage() {
       unsubReconnect();
       unsubWalletEvents();
     };
-  }, [
-    currentRestId,
-    loadOrderTypes,
-    fetchStations,
-    fetchSubscriptionStatus,
-    processIncomingOrders,
-    loadOperatingStatus,
-    loadRestaurantConfig,
-  ]);
+  }, [currentRestId]);
 
   // Track last fetched tableId to prevent duplicate fetches & render loops
   const lastFetchedTableIdRef = useRef<number | null>(null);
@@ -591,15 +577,41 @@ export default function PosPage() {
       }
       lastFetchedTableIdRef.current = tableId;
       loadActiveTableOrder(tableId);
-      setDineInPaymentFlow('pay_later');
-    } else {
+    } else if (selectedOrderType !== 1) {
       lastFetchedTableIdRef.current = null;
       setActiveTableOrder(null);
-      if (selectedOrderType !== 1) {
-        setDineInPaymentFlow('pay_now');
-      }
     }
   }, [selectedOrderType, selectedTable?.id, loadActiveTableOrder]);
+
+  // Open table picker and refresh tables
+  const handleOpenTablePicker = useCallback(async () => {
+    setTablePickerModalOpen(true);
+    if (currentRestId) {
+      try {
+        const refreshed = await tableDataSource.getTables(currentRestId);
+        if (refreshed && Array.isArray(refreshed)) {
+          setTables(refreshed);
+          usePosCatalogStore.getState().setCatalogData({ restaurantId: currentRestId, tables: refreshed });
+        }
+      } catch {}
+    }
+  }, [currentRestId]);
+
+  // Select table from TablePickerModal
+  const handleSelectTableFromModal = useCallback(
+    (tbl: TableMaster) => {
+      setSelectedOrderType(1); // Ensure Dine-In is active
+      setSelectedTable(tbl);
+      if (typeof window !== 'undefined') {
+        const url = new URL(window.location.href);
+        url.searchParams.set('tableId', String(tbl.id));
+        window.history.replaceState({}, '', url.toString());
+      }
+      loadActiveTableOrder(tbl.id, true);
+      setTablePickerModalOpen(false);
+    },
+    [loadActiveTableOrder]
+  );
 
   // 3. Customer Mobile Lookup (10 Digits)
   const handlePhoneChange = (val: string) => {
@@ -637,9 +649,18 @@ export default function PosPage() {
   // 5. Filtered Menu Items
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
-      // 1. Category Filter
-      if (selectedCategory !== null && item.categoryId !== selectedCategory) {
-        return false;
+      // 1. Category Filter (matches by id or category name to handle legacy duplicates)
+      if (selectedCategory !== null) {
+        const selCat = categories.find((c) => c.id === selectedCategory);
+        if (selCat) {
+          const selName = (selCat.categoryName || '').trim().toLowerCase();
+          const itemCatName = (item.categoryName || '').trim().toLowerCase();
+          if (Number(item.categoryId) !== Number(selectedCategory) && itemCatName !== selName) {
+            return false;
+          }
+        } else if (Number(item.categoryId) !== Number(selectedCategory)) {
+          return false;
+        }
       }
       // 2. Veg / Non-Veg Filter
       if (vegFilter === 'VEG' && !item.isVeg) return false;
@@ -654,13 +675,19 @@ export default function PosPage() {
       }
       return true;
     });
-  }, [items, selectedCategory, vegFilter, searchQuery]);
+  }, [items, selectedCategory, vegFilter, searchQuery, categories]);
 
-  // Categories that have items for this restaurant
+  // Categories that have items for this restaurant, deduplicated by name
   const visibleCategories = useMemo(() => {
-    if (items.length === 0) return categories;
+    if (!items || items.length === 0) return [];
     const itemCatIds = new Set(items.map((it) => Number(it.categoryId)));
-    return categories.filter((cat) => itemCatIds.has(Number(cat.id)));
+    const seen = new Set<string>();
+    return categories.filter((cat) => {
+      const norm = (cat.categoryName || '').trim().toLowerCase();
+      if (!itemCatIds.has(Number(cat.id)) || seen.has(norm)) return false;
+      seen.add(norm);
+      return true;
+    });
   }, [categories, items]);
 
   // 6. Cart Management
@@ -935,7 +962,7 @@ export default function PosPage() {
         'danger',
         'Renew Subscription',
         'Cancel',
-        () => setSubscriptionModalOpen(true)
+        openRenewalModal
       );
       return;
     }
@@ -1052,6 +1079,17 @@ export default function PosPage() {
           date: new Date().toLocaleTimeString(),
           receiptData,
         });
+
+        if (selectedTable?.id) {
+          orderRemoteDataSource.settleTable(selectedTable.id).catch((err) =>
+            console.warn('Settle table session warning:', err)
+          );
+          usePosCatalogStore.getState().freeTableInCatalog(selectedTable.id);
+          setTables((prev) =>
+            prev.map((t) => (t.id === selectedTable.id ? { ...t, status: 'Available', activeOrderId: undefined } : t))
+          );
+          setSelectedTable(null);
+        }
 
         setActiveTableOrder(null);
         clearCart();
@@ -1188,15 +1226,19 @@ export default function PosPage() {
         }
 
         if (isPostPaid) {
+          clearCart();
+          if (selectedTable?.id) {
+            loadActiveTableOrder(selectedTable.id, true);
+          }
           showAlert(
-            'Sent to Kitchen (Pay Later) 🍳',
-            `Order #${orderId}${pickupToken ? ` (Token #${pickupToken})` : ''} placed for ${effectiveCustomerName}.\nStatus: Active Unsettled Order.`,
+            activeTableOrder ? 'Add-on KOT Sent to Kitchen 🍳' : 'Sent to Kitchen (Pay Later) 🍳',
+            `Order #${orderId}${pickupToken ? ` (Token #${pickupToken})` : ''} placed for ${effectiveCustomerName}.\nStatus: Active Unsettled Order.${
+              activeTableOrder ? '\nDishes appended to running table tab.' : ''
+            }`,
             'success',
             'OK',
             undefined,
             () => {
-              clearCart();
-              setCartDrawerOpen(false);
               if (selectedTable?.id) {
                 loadActiveTableOrder(selectedTable.id, true);
               }
@@ -1219,6 +1261,19 @@ export default function PosPage() {
             date: new Date().toLocaleTimeString(),
             receiptData,
           });
+
+          if (!isPostPaid && selectedTable?.id) {
+            orderRemoteDataSource.settleTable(selectedTable.id).catch((err) =>
+              console.warn('Settle table session warning:', err)
+            );
+            usePosCatalogStore.getState().freeTableInCatalog(selectedTable.id);
+            setTables((prev) =>
+              prev.map((t) => (t.id === selectedTable.id ? { ...t, status: 'Available', activeOrderId: undefined } : t))
+            );
+            setSelectedTable(null);
+            setActiveTableOrder(null);
+          }
+
           clearCart();
           setCartDrawerOpen(false);
         }
@@ -1239,6 +1294,45 @@ export default function PosPage() {
   const handlePrintKot = () => {
     if (!orderSuccessData?.receiptData) return;
     WebPrinterService.printKot(orderSuccessData.receiptData, paperWidth);
+  };
+
+  const handlePrintGuestCheck = () => {
+    if (!activeTableOrder || !selectedTable) return;
+    const receiptData: ReceiptData = {
+      orderId: activeTableOrder.id,
+      orderNumber: String(activeTableOrder.orderNumber || activeTableOrder.id),
+      pickupToken: String(activeTableOrder.pickupToken || activeTableOrder.id),
+      restaurantName: restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant',
+      address: restaurantConfig?.address || activeRestaurant?.address || '',
+      city: restaurantConfig?.city || activeRestaurant?.city || '',
+      state: restaurantConfig?.state || activeRestaurant?.state || '',
+      contactPhone: restaurantConfig?.contactNumber || (activeRestaurant as any)?.contactNumber || activeRestaurant?.ownerMobile || '',
+      gstNumber: hasGstNumber ? (restaurantConfig?.gstNumber || '') : undefined,
+      customerName: activeTableOrder.customerName || 'Dine-In Guest',
+      customerPhone: activeTableOrder.mobileNumber || undefined,
+      orderType: 'DINE_IN',
+      tableName: `Table ${selectedTable.tableNumber}`,
+      sectionName: selectedTable.sectionName || undefined,
+      items: (activeTableOrder.items || []).map((c: any) => ({
+        itemName: c.itemName || 'Dish',
+        quantity: c.quantity || 1,
+        unitPrice: c.unitPrice || c.amount || 0,
+        totalPrice: c.totalPrice || c.totalAmount || (c.quantity * (c.unitPrice || 0)) || 0,
+      })),
+      subtotal: activeTableOrder.subtotal || existingTableTotal,
+      discountAmount: discountAmount || activeTableOrder.discountAmount || 0,
+      cgstPercentage: hasGstNumber ? cgstRate : undefined,
+      cgstAmount: hasGstNumber ? (activeTableOrder.cgst || 0) : undefined,
+      sgstPercentage: hasGstNumber ? sgstRate : undefined,
+      sgstAmount: hasGstNumber ? (activeTableOrder.sgst || 0) : undefined,
+      taxAmount: hasGstNumber ? ((activeTableOrder.cgst || 0) + (activeTableOrder.sgst || 0)) : 0,
+      grandTotal: payableGrandTotal,
+      paymentMode: 'PAY LATER (PROFORMA BILL)',
+      date: new Date().toLocaleString('en-IN'),
+      footerMessage: customFooter || 'Thank you! Please visit again.',
+    };
+    WebPrinterService.printReceipt(receiptData, paperWidth).catch(() => {});
+    showAlert('Guest Check Printed', `Proforma bill for Table T-${selectedTable.tableNumber} sent to printer.`, 'success');
   };
 
   const handleShareWhatsApp = async () => {
@@ -1312,45 +1406,61 @@ export default function PosPage() {
             </div>
           </div>
 
-          {/* Running Table Order Banner */}
+          {/* Running Kitchen Tab (Items Already Sent to Kitchen) */}
           {activeTableOrder && (
-            <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-2.5 space-y-2">
+            <div className="rounded-2xl border border-amber-500/40 bg-gradient-to-br from-amber-500/10 to-orange-500/5 p-3 space-y-2.5 shadow-2xs">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5">
-                  <Utensils className="h-4 w-4 text-[#DE8626] shrink-0" />
+                <div className="flex items-center gap-2">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-xl bg-amber-500/20 text-[#DE8626] shrink-0">
+                    <Utensils className="h-4 w-4" />
+                  </div>
                   <div>
-                    <span className="text-xs font-bold text-[#DE8626] block">
-                      Table #{selectedTable?.tableNumber} • Running Tab #{activeTableOrder.orderNumber || activeTableOrder.id}
-                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-xs font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                        Table T-{selectedTable?.tableNumber} • Running Tab
+                      </span>
+                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-extrabold text-[#DE8626]">
+                        <span className="h-1.5 w-1.5 rounded-full bg-[#DE8626] animate-pulse" />
+                        Kitchen Active
+                      </span>
+                    </div>
                     <span className="text-[10px] text-[#667085] dark:text-[#94A3B8]">
-                      {activeTableOrder.items?.length || 0} active item{(activeTableOrder.items?.length || 0) !== 1 ? 's' : ''} in kitchen
+                      Order #{activeTableOrder.orderNumber || activeTableOrder.id} • {activeTableOrder.items?.length || 0} dishes placed
                     </span>
                   </div>
                 </div>
                 <button
                   type="button"
-                  onClick={() => setShowRunningTableDetails(!showRunningTableDetails)}
-                  className="flex items-center gap-1 text-[11px] font-bold text-[#DE8626] hover:underline"
+                  onClick={handlePrintGuestCheck}
+                  className="flex items-center gap-1 rounded-xl border border-[#DE8626] bg-white dark:bg-[#1B2127] px-2.5 py-1 text-[11px] font-bold text-[#DE8626] hover:bg-amber-500/10 transition-colors shadow-2xs shrink-0"
+                  title="Print Proforma / Guest Check Slip"
                 >
-                  <span>{showRunningTableDetails ? 'Hide' : 'View'}</span>
-                  {showRunningTableDetails ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                  <Printer className="h-3 w-3" />
+                  <span>Bill Slip</span>
                 </button>
               </div>
 
-              {showRunningTableDetails && (
-                <div className="mt-1 pt-1.5 border-t border-amber-500/20 max-h-36 overflow-y-auto space-y-1 text-xs">
-                  {(activeTableOrder.items || []).map((it: any, idx: number) => (
-                    <div key={idx} className="flex justify-between items-center text-[11px] text-[#1E2930] dark:text-[#F3F4F6]">
-                      <span>{it.quantity}x {it.itemName}</span>
-                      <span className="font-semibold">₹{((it.unitPrice || it.amount || 0) * (it.quantity || 1)).toFixed(2)}</span>
-                    </div>
-                  ))}
-                  <div className="flex justify-between font-bold pt-1 border-t border-amber-500/20 text-[#DE8626]">
-                    <span>Previous Tab Total:</span>
-                    <span>₹{existingTableTotal.toFixed(2)}</span>
+              {/* Running Dishes List */}
+              <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+                {(activeTableOrder.items || []).map((it: any, idx: number) => (
+                  <div
+                    key={idx}
+                    className="flex justify-between items-center text-xs py-1 px-2.5 rounded-xl bg-white/70 dark:bg-[#1B2127]/70 border border-[#E7E1DA]/60 dark:border-[#2B3540]/60"
+                  >
+                    <span className="font-semibold text-[#1E2930] dark:text-[#F3F4F6]">
+                      {it.quantity}x {it.itemName}
+                    </span>
+                    <span className="font-bold text-[#DE8626]">
+                      ₹{((it.unitPrice || it.amount || 0) * (it.quantity || 1)).toFixed(2)}
+                    </span>
                   </div>
-                </div>
-              )}
+                ))}
+              </div>
+
+              <div className="flex justify-between items-center font-bold text-xs pt-1.5 border-t border-amber-500/20 text-[#DE8626]">
+                <span>Running Order Total:</span>
+                <span className="text-sm font-black">₹{existingTableTotal.toFixed(2)}</span>
+              </div>
             </div>
           )}
         </div>
@@ -1358,7 +1468,9 @@ export default function PosPage() {
         {/* Cart Items List */}
         <div className="p-3 sm:p-3.5 space-y-2.5 bg-[#FAF7F2]/40 dark:bg-[#111418]/40">
           <div className="flex items-center justify-between text-xs font-bold text-[#667085] dark:text-[#94A3B8] px-0.5">
-            <span>ITEMS IN ORDER ({cartTotalItems})</span>
+            <span>
+              {activeTableOrder ? `NEW ADD-ON DISHES (${cartTotalItems})` : `ITEMS IN ORDER (${cartTotalItems})`}
+            </span>
             {cart.length > 0 && (
               <button
                 type="button"
@@ -1371,13 +1483,21 @@ export default function PosPage() {
           </div>
 
           {cart.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-8 px-4 text-center rounded-2xl border border-dashed border-[#E7E1DA] dark:border-[#2B3540] bg-white/60 dark:bg-[#1B2127]/60">
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-500/10 text-[#DE8626] mb-2 shadow-2xs">
-                <ShoppingBag className="h-5 w-5" />
+            <div className={`flex flex-col items-center justify-center py-6 px-4 text-center rounded-2xl border border-dashed transition-all ${
+              activeTableOrder
+                ? 'border-amber-500/40 bg-amber-500/5'
+                : 'border-[#E7E1DA] dark:border-[#2B3540] bg-white/60 dark:bg-[#1B2127]/60'
+            }`}>
+              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-500/10 text-[#DE8626] mb-2 shadow-2xs">
+                {activeTableOrder ? <Plus className="h-5 w-5 stroke-[2.5]" /> : <ShoppingBag className="h-5 w-5" />}
               </div>
-              <p className="font-extrabold text-xs text-[#1E2930] dark:text-[#F3F4F6]">Your cart is empty</p>
+              <p className="font-extrabold text-xs text-[#1E2930] dark:text-[#F3F4F6]">
+                {activeTableOrder ? 'Ready for Add-on Dishes' : 'Your cart is empty'}
+              </p>
               <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] mt-0.5 max-w-xs">
-                Tap on any dish from the catalog to add items
+                {activeTableOrder
+                  ? `Table T-${selectedTable?.tableNumber} is running. Tap any dish on the menu catalog to add Round 2 items, then send Add-on KOT.`
+                  : 'Tap on any dish from the catalog to add items'}
               </p>
             </div>
           ) : (
@@ -1565,28 +1685,7 @@ export default function PosPage() {
             </div>
           </div>
 
-          {/* Dynamic Flow: Dine-In Pay Later vs Pay Now */}
-          {selectedOrderType === 1 && selectedTable && dineInPaymentFlow === 'pay_later' ? (
-            <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3 space-y-2">
-              <div className="flex items-center gap-2">
-                <Utensils className="h-4 w-4 text-[#DE8626] shrink-0" />
-                <div className="min-w-0">
-                  <p className="text-xs font-bold text-[#DE8626]">DINE-IN ORDER • PAY LATER</p>
-                  <p className="text-[10px] text-[#667085] dark:text-[#94A3B8] leading-tight">
-                    Dishes will be sent to Kitchen (KOT). Payment mode will be selected at table checkout.
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setDineInPaymentFlow('pay_now')}
-                className="text-[11px] font-bold text-[#DE8626] hover:underline block"
-              >
-                Guest paying upfront? Switch to Pay & Settle Now →
-              </button>
-            </div>
-          ) : (
-            <div className="space-y-2.5 pt-1 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60">
+          <div className="space-y-2.5 pt-1 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60">
               {/* Payment Mode Selector */}
               <div>
                 <span className="text-[10px] font-extrabold text-[#667085] dark:text-[#94A3B8] uppercase block mb-1">
@@ -1675,40 +1774,124 @@ export default function PosPage() {
                 </div>
               )}
 
-              {/* Switch back link for Dine-in */}
-              {selectedOrderType === 1 && selectedTable && (
-                <button
-                  type="button"
-                  onClick={() => setDineInPaymentFlow('pay_later')}
-                  className="text-[11px] font-bold text-[#DE8626] hover:underline block"
-                >
-                  ← Switch back to Pay Later (Send KOT)
-                </button>
-              )}
-            </div>
-          )}
+          </div>
         </div>
       </div>
 
       {/* 2. STICKY ACTION BUTTONS PINNED AT BOTTOM */}
       <div className="shrink-0 p-3 sm:p-3.5 border-t border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] shadow-lg space-y-2">
-        {selectedOrderType === 1 && selectedTable && dineInPaymentFlow === 'pay_later' ? (
-          /* Dine-In Primary Full-Width Action: Send to Kitchen */
-          <button
-            type="button"
-            disabled={cart.length === 0 || isKotLoading || isSettling}
-            onClick={() => handleCheckout(PosCheckoutModes.KOT_PAY_LATER)}
-            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-amber-500 via-[#DE8626] to-[#CB741B] py-3.5 text-xs font-bold text-white shadow-md shadow-[#DE8626]/20 hover:brightness-105 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-          >
-            {isKotLoading ? (
-              <span>Sending to Kitchen...</span>
-            ) : (
-              <>
-                <Printer className="h-4 w-4" />
-                <span>Send to Kitchen (KOT) 🍳 [F3]</span>
-              </>
-            )}
-          </button>
+        {selectedOrderType === 1 && selectedTable ? (
+          /* ==================================================== */
+          /* DINE-IN TABLE ORDER ACTIONS                          */
+          /* ==================================================== */
+          activeTableOrder && cart.length === 0 ? (
+            /* Scenario A: Table is running, no new cart items staged */
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-[11px] font-bold px-2.5 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[#DE8626]">
+                <span className="flex items-center gap-1.5">
+                  <Utensils className="h-3.5 w-3.5 shrink-0" />
+                  <span>Tap dishes on menu to send Add-on KOT</span>
+                </span>
+                <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md bg-[#DE8626] text-white">
+                  Multi-Round KOT
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={handlePrintGuestCheck}
+                  className="flex items-center justify-center gap-1.5 rounded-2xl border border-[#DE8626] bg-amber-500/10 py-3.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-all shadow-xs"
+                  title="Print Guest Check / Proforma Slip"
+                >
+                  <Printer className="h-4 w-4" />
+                  <span>Print Bill Slip</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={isSettling}
+                  onClick={() => handleCheckout(PosCheckoutModes.PAY_AND_SETTLE)}
+                  className="flex items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-emerald-600 via-emerald-700 to-emerald-800 py-3.5 text-xs font-bold text-white shadow-md shadow-emerald-600/20 hover:brightness-105 disabled:opacity-40 transition-all"
+                >
+                  {isSettling ? (
+                    <span>Settling...</span>
+                  ) : (
+                    <>
+                      <Receipt className="h-4 w-4" />
+                      <span>Settle Bill ₹{payableGrandTotal.toFixed(2)} [F2]</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          ) : activeTableOrder && cart.length > 0 ? (
+            /* Scenario B: Table is running AND cashier has staged new add-on dishes */
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                disabled={isKotLoading || isSettling}
+                onClick={() => handleCheckout(PosCheckoutModes.KOT_PAY_LATER)}
+                className="flex items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-amber-500 via-[#DE8626] to-[#CB741B] py-3.5 text-xs font-bold text-white shadow-md shadow-[#DE8626]/20 hover:brightness-105 disabled:opacity-40 transition-all"
+              >
+                {isKotLoading ? (
+                  <span>Sending...</span>
+                ) : (
+                  <>
+                    <Printer className="h-4 w-4" />
+                    <span>Send Add-on KOT 🍳 [F3]</span>
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                disabled={isSettling}
+                onClick={() => handleCheckout(PosCheckoutModes.PAY_AND_SETTLE)}
+                className="flex items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-emerald-600 via-emerald-700 to-emerald-800 py-3.5 text-xs font-bold text-white shadow-md shadow-emerald-600/20 hover:brightness-105 disabled:opacity-40 transition-all"
+              >
+                {isSettling ? (
+                  <span>Settling...</span>
+                ) : (
+                  <>
+                    <Receipt className="h-4 w-4" />
+                    <span>Settle All ₹{payableGrandTotal.toFixed(2)} [F2]</span>
+                  </>
+                )}
+              </button>
+            </div>
+          ) : (
+            /* Scenario C: Fresh table seating (first round) */
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                disabled={cart.length === 0 || isKotLoading || isSettling}
+                onClick={() => handleCheckout(PosCheckoutModes.KOT_PAY_LATER)}
+                className="flex items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-amber-500 via-[#DE8626] to-[#CB741B] py-3.5 text-xs font-bold text-white shadow-md shadow-[#DE8626]/20 hover:brightness-105 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              >
+                {isKotLoading ? (
+                  <span>Sending...</span>
+                ) : (
+                  <>
+                    <Utensils className="h-4 w-4" />
+                    <span>Send to Kitchen (KOT) 🍳 [F3]</span>
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                disabled={cart.length === 0 || isSettling}
+                onClick={() => handleCheckout(PosCheckoutModes.PAY_AND_SETTLE)}
+                className="flex items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-emerald-600 via-emerald-700 to-emerald-800 py-3.5 text-xs font-bold text-white shadow-md shadow-emerald-600/20 hover:brightness-105 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              >
+                {isSettling ? (
+                  <span>Settling...</span>
+                ) : (
+                  <>
+                    <IndianRupee className="h-4 w-4" />
+                    <span>Pay & Settle ₹{payableGrandTotal.toFixed(2)} [F2]</span>
+                  </>
+                )}
+              </button>
+            </div>
+          )
         ) : (
           /* Standard Counter / Upfront Settle Actions */
           <>
@@ -1771,7 +1954,7 @@ export default function PosPage() {
           {/* ======================================================== */}
           <div className="shrink-0 px-3 pt-1.5 space-y-1">
             {/* Subscription Grace Banner */}
-            <SubscriptionGraceBanner onRenewPress={() => setSubscriptionModalOpen(true)} />
+            <SubscriptionGraceBanner onRenewPress={openRenewalModal} />
 
             {/* Prepaid Wallet Exhausted Banner */}
             {((restaurantConfig?.walletBalance !== undefined && restaurantConfig.walletBalance <= 0) ||
@@ -1851,11 +2034,20 @@ export default function PosPage() {
                         <Utensils className="h-4 w-4" />
                       </div>
                       <div className="min-w-0">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <span className="text-xs font-black text-[#DE8626] uppercase">DINE-IN ORDER</span>
                           <span className="rounded-md bg-[#DE8626] px-1.5 py-0.5 text-[10px] font-extrabold text-white">
                             Table {selectedTable.tableNumber}
                           </span>
+                          {activeTableOrder ? (
+                            <span className="rounded-md bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30 px-1.5 py-0.5 text-[10px] font-bold">
+                              Active KOT (Order #{activeTableOrder.id})
+                            </span>
+                          ) : (
+                            <span className="rounded-md bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 px-1.5 py-0.5 text-[10px] font-bold">
+                              Fresh Seating
+                            </span>
+                          )}
                         </div>
                         <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] truncate">
                           Section: <strong className="text-[#1E2930] dark:text-[#F3F4F6]">{selectedTable.sectionName || 'Main Hall'}</strong> • Printed on Bill & KOT
@@ -1863,95 +2055,133 @@ export default function PosPage() {
                       </div>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedTable(null);
-                        setActiveTableOrder(null);
-                        if (typeof window !== 'undefined') {
-                          const url = new URL(window.location.href);
-                          url.searchParams.delete('tableId');
-                          window.history.replaceState({}, '', url.toString());
-                        }
-                        const firstActive = orderTypes.find((t) => t.isActive)?.id || 4;
-                        setSelectedOrderType(firstActive);
-                      }}
-                      className="rounded-xl border border-[#DE8626] bg-white dark:bg-[#1B2127] px-3 py-1 text-xs font-bold text-[#DE8626] hover:bg-amber-500/10 transition-colors shadow-xs shrink-0"
-                      title="Clear table lock and return to standard POS"
-                    >
-                      Change
-                    </button>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={handleOpenTablePicker}
+                        className="rounded-xl border border-[#DE8626] bg-white dark:bg-[#1B2127] px-2.5 py-1 text-xs font-bold text-[#DE8626] hover:bg-amber-500/10 transition-colors shadow-xs flex items-center gap-1"
+                        title="Switch to another table or view active orders"
+                      >
+                        <span>Switch Table 🪑</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedTable(null);
+                          setActiveTableOrder(null);
+                          if (typeof window !== 'undefined') {
+                            const url = new URL(window.location.href);
+                            url.searchParams.delete('tableId');
+                            window.history.replaceState({}, '', url.toString());
+                          }
+                          const firstActive = orderTypes.find((t) => t.isActive && t.id !== 1)?.id || 4;
+                          setSelectedOrderType(firstActive);
+                        }}
+                        className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-2.5 py-1 text-xs font-bold text-[#667085] hover:text-red-500 transition-colors shadow-xs"
+                        title="Clear table lock and return to standard POS"
+                      >
+                        Exit
+                      </button>
+                    </div>
                   </div>
                 ) : (
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    {/* Dynamic Order Type Selector Chips */}
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {orderTypes.map((ot) => {
-                        const isSelected = selectedOrderType === ot.id;
-                        const isAllowed = ot.isAllowedByPlan;
-                        const isStoreEnabled = ot.isEnabledByStore;
-                        const isAvailable = ot.isActive;
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      {/* Dynamic Order Type Selector Chips */}
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {orderTypes.map((ot) => {
+                          const isSelected = selectedOrderType === ot.id;
+                          const isAllowed = ot.isAllowedByPlan;
+                          const isStoreEnabled = ot.isEnabledByStore;
+                          const isAvailable = ot.isActive;
 
-                        const renderIcon = () => {
-                          switch (ot.code) {
-                            case 'COUNTER':
-                              return <Store className="h-3.5 w-3.5" />;
-                            case 'DINE_IN':
-                              return <Utensils className="h-3.5 w-3.5" />;
-                            case 'TAKEAWAY':
-                              return <ShoppingBag className="h-3.5 w-3.5" />;
-                            case 'DELIVERY':
-                              return <Truck className="h-3.5 w-3.5" />;
-                            default:
-                              return <Store className="h-3.5 w-3.5" />;
-                          }
-                        };
+                          const renderIcon = () => {
+                            switch (ot.code) {
+                              case 'COUNTER':
+                                return <Store className="h-3.5 w-3.5" />;
+                              case 'DINE_IN':
+                                return <Utensils className="h-3.5 w-3.5" />;
+                              case 'TAKEAWAY':
+                                return <ShoppingBag className="h-3.5 w-3.5" />;
+                              case 'DELIVERY':
+                                return <Truck className="h-3.5 w-3.5" />;
+                              default:
+                                return <Store className="h-3.5 w-3.5" />;
+                            }
+                          };
 
-                        return (
-                          <button
-                            key={`order-type-${ot.id}`}
-                            type="button"
-                            onClick={() => {
-                              if (!isAllowed) {
-                                showAlert(
-                                  'Feature Locked 🔒',
-                                  `${ot.typeName} ordering is not included in your active subscription plan. Please upgrade to unlock this channel.`,
-                                  'warning',
-                                  'Upgrade Plan',
-                                  'Cancel',
-                                  openRenewalModal
-                                );
-                                return;
-                              }
-                              if (!isStoreEnabled) {
-                                showAlert(
-                                  'Channel Disabled ⚙️',
-                                  `${ot.typeName} ordering is currently disabled in your Store Settings. Enable it under Order Configuration.`,
-                                  'warning'
-                                );
-                                return;
-                              }
-                              setSelectedOrderType(ot.id);
-                            }}
-                            className={`flex items-center gap-1.5 rounded-xl px-2.5 sm:px-3 py-1.5 text-xs font-bold transition-all ${
-                              isSelected
-                                ? 'bg-gradient-to-r from-amber-500 to-[#DE8626] text-white shadow-xs shadow-[#DE8626]/20'
-                                : 'border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#667085] dark:text-[#94A3B8] hover:border-[#DE8626]'
-                            } ${!isAvailable ? 'opacity-60' : ''}`}
-                          >
-                            {renderIcon()}
-                            <span>{ot.typeName}</span>
-                            {!isAllowed && <Lock className="h-2.5 w-2.5 text-red-500" />}
-                          </button>
-                        );
-                      })}
+                          return (
+                            <button
+                              key={`order-type-${ot.id}`}
+                              type="button"
+                              onClick={() => {
+                                if (!isAllowed) {
+                                  showAlert(
+                                    'Feature Locked 🔒',
+                                    `${ot.typeName} ordering is not included in your active subscription plan. Please upgrade to unlock this channel.`,
+                                    'warning',
+                                    'Upgrade Plan',
+                                    'Cancel',
+                                    openRenewalModal
+                                  );
+                                  return;
+                                }
+                                if (!isStoreEnabled) {
+                                  showAlert(
+                                    'Channel Disabled ⚙️',
+                                    `${ot.typeName} ordering is currently disabled in your Store Settings. Enable it under Order Configuration.`,
+                                    'warning'
+                                  );
+                                  return;
+                                }
+                                setSelectedOrderType(ot.id);
+                                if ((ot.id === 1 || ot.code === 'DINE_IN') && !selectedTable) {
+                                  handleOpenTablePicker();
+                                }
+                              }}
+                              className={`flex items-center gap-1.5 rounded-xl px-2.5 sm:px-3 py-1.5 text-xs font-bold transition-all ${
+                                isSelected
+                                  ? 'bg-gradient-to-r from-amber-500 to-[#DE8626] text-white shadow-xs shadow-[#DE8626]/20'
+                                  : 'border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#667085] dark:text-[#94A3B8] hover:border-[#DE8626]'
+                              } ${!isAvailable ? 'opacity-60' : ''}`}
+                            >
+                              {renderIcon()}
+                              <span>{ot.typeName}</span>
+                              {!isAllowed && <Lock className="h-2.5 w-2.5 text-red-500" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Keyboard Shortcuts Hint */}
+                      <div className="hidden xl:flex items-center gap-1.5 text-[10px] text-[#667085] bg-[#FAF7F2] dark:bg-[#151A20] px-2.5 py-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540]">
+                        <Keyboard className="h-3.5 w-3.5 text-[#DE8626]" />
+                        <span>F1: Search • F2: Settle • F3: KOT • F4: Clear</span>
+                      </div>
                     </div>
 
-                    {/* Keyboard Shortcuts Hint */}
-                    <div className="hidden xl:flex items-center gap-1.5 text-[10px] text-[#667085] bg-[#FAF7F2] dark:bg-[#151A20] px-2.5 py-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540]">
-                      <Keyboard className="h-3.5 w-3.5 text-[#DE8626]" />
-                      <span>F1: Search • F2: Settle • F3: KOT • F4: Clear</span>
-                    </div>
+                    {/* Dine-In Table Picker Banner Prompt if Dine-In selected without a table */}
+                    {selectedOrderType === 1 && !selectedTable && (
+                      <div
+                        onClick={handleOpenTablePicker}
+                        className="flex items-center justify-between p-2.5 rounded-2xl border border-dashed border-[#DE8626] bg-amber-500/5 hover:bg-amber-500/10 cursor-pointer transition-all shadow-2xs"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-[#DE8626] text-white shadow-xs shrink-0">
+                            <Utensils className="h-4 w-4" />
+                          </div>
+                          <div>
+                            <p className="text-xs font-black text-[#DE8626]">No Table Selected for Dine-In</p>
+                            <p className="text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                              Click here to select an active table to add dishes, or seat guests at an available table
+                            </p>
+                          </div>
+                        </div>
+                        <span className="text-xs font-extrabold text-[#DE8626] px-3 py-1 rounded-xl bg-white dark:bg-[#1B2127] border border-[#DE8626]/30 shadow-2xs hover:bg-[#DE8626] hover:text-white transition-all shrink-0">
+                          Select Table 🪑
+                        </span>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -2513,6 +2743,16 @@ export default function PosPage() {
             onDiscard={handleDiscardParkedCart}
           />
 
+          {/* Dine-In Table Picker & Active Order Selector Modal */}
+          <TablePickerModal
+            isOpen={tablePickerModalOpen}
+            onClose={() => setTablePickerModalOpen(false)}
+            tables={tables}
+            currentSelectedTableId={selectedTable?.id}
+            onSelectTable={handleSelectTableFromModal}
+            onOpenFloorView={() => router.push('/tables')}
+          />
+
           {/* Store Operating Status Controls Modal */}
           <StoreOperatingStatusModal
             isOpen={operatingModalOpen}
@@ -2538,8 +2778,6 @@ export default function PosPage() {
             }}
           />
 
-          {/* Subscription Blocker / Renewal Modal */}
-          <SubscriptionBlockerModal />
 
           {/* Order Notification Drawer */}
           <OrderNotificationDrawer
@@ -2551,6 +2789,7 @@ export default function PosPage() {
                 if (matched) {
                   setSelectedTable(matched);
                   setSelectedOrderType(1);
+                  loadActiveTableOrder(tableId, true);
                 }
               }
               setNotificationDrawerOpen(false);

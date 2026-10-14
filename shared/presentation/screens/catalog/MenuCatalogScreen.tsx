@@ -193,6 +193,7 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
   const [unitDropdownOpen, setUnitDropdownOpen] = useState(false);
   const [unitSearchQuery, setUnitSearchQuery] = useState('');
   const [catDropdownOpen, setCatDropdownOpen] = useState(false);
+  const [catSearchQuery, setCatSearchQuery] = useState('');
 
   // Form State for Items & Categories
   const [imageTarget, setImageTarget] = useState<'item' | 'category'>('item');
@@ -218,6 +219,12 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
   const [catDesc, setCatDesc] = useState('');
   const [catStationId, setCatStationId] = useState<number | null>(null);
   const [itemStationId, setItemStationId] = useState<number | null>(null);
+
+  // Category Suggestions for Autofill from DB
+  const [catSuggestions, setCatSuggestions] = useState<Category[]>([]);
+  const [loadingCatSuggestions, setLoadingCatSuggestions] = useState(false);
+  const [showCatSuggestions, setShowCatSuggestions] = useState(false);
+  const [autofilledFromDb, setAutofilledFromDb] = useState<string | null>(null);
 
   const { stations, fetchStations } = useKitchenStationStore();
 
@@ -421,21 +428,63 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
     }
   };
 
+  const handleSelectCatSuggestion = (cat: Category) => {
+    setCatName(cat.categoryName);
+    if (cat.description) setCatDesc(cat.description);
+    if (cat.imageUrl) setCatImageUrl(cat.imageUrl);
+    if (cat.kitchenStationId) setCatStationId(cat.kitchenStationId);
+    setAutofilledFromDb(cat.categoryName);
+    setShowCatSuggestions(false);
+  };
+
+  useEffect(() => {
+    if (!addCatModalVisible || editCatModalVisible) {
+      setCatSuggestions([]);
+      setShowCatSuggestions(false);
+      return;
+    }
+
+    let active = true;
+    const timer = setTimeout(async () => {
+      try {
+        setLoadingCatSuggestions(true);
+        const res = await catalogDataSource.getCategorySuggestions(catName.trim());
+        if (active) {
+          setCatSuggestions(res);
+        }
+      } catch (err) {
+        console.warn('Could not fetch category suggestions:', err);
+      } finally {
+        if (active) {
+          setLoadingCatSuggestions(false);
+        }
+      }
+    }, 200);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [catName, addCatModalVisible, editCatModalVisible]);
+
   const handleCreateCategory = async () => {
-    if (!catName.trim()) {
+    const trimmed = catName.trim();
+    if (!trimmed) {
       showAlert('Required Field', 'Please enter Category Name.', 'warning');
       return;
     }
 
     try {
       setCreating(true);
-      const res = await catalogDataSource.createCategory(catName.trim(), catDesc.trim(), restId, catImageUrl.trim(), catStationId || undefined);
+      const res = await catalogDataSource.createCategory(trimmed, catDesc.trim(), restId, catImageUrl.trim(), catStationId || undefined);
       if (res.success) {
-        showAlert('Category Created', `Category "${catName}" created successfully.`, 'success', 'OK', undefined, () => {
+        showAlert('Category Created', `Category "${trimmed}" processed successfully.`, 'success', 'OK', undefined, () => {
           setCatName('');
           setCatDesc('');
           setCatImageUrl('');
           setCatStationId(null);
+          setAutofilledFromDb(null);
+          setShowCatSuggestions(false);
           setAddCatModalVisible(false);
           loadCatalogData();
         });
@@ -450,10 +499,20 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
   };
 
   const handleEditCategory = async () => {
-    if (!activeCategory || !catName.trim()) return;
+    const trimmed = catName.trim();
+    if (!activeCategory || !trimmed) return;
+
+    const existing = safeCategories.find(
+      (c) => c.id !== activeCategory.id && (c.categoryName || '').trim().toLowerCase() === trimmed.toLowerCase()
+    );
+    if (existing) {
+      showAlert('Duplicate Category', `Another category with the name "${existing.categoryName}" already exists.`, 'warning');
+      return;
+    }
+
     try {
       setCreating(true);
-      const res = await catalogDataSource.updateCategory(activeCategory.id, catName.trim(), catDesc.trim(), restId, catImageUrl.trim(), catStationId || undefined);
+      const res = await catalogDataSource.updateCategory(activeCategory.id, trimmed, catDesc.trim(), restId, catImageUrl.trim(), catStationId || undefined);
       if (res.success) {
         showAlert('Category Updated', `Category updated successfully.`, 'success', 'OK', undefined, () => {
           setEditCatModalVisible(false);
@@ -598,6 +657,7 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
     setUnitDropdownOpen(false);
     setCatDropdownOpen(false);
     setUnitSearchQuery('');
+    setCatSearchQuery('');
     setEditItemModalVisible(true);
   };
 
@@ -720,8 +780,19 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
 
   // Filter Logic
   const safeItems = Array.isArray(items) ? items : [];
+  const safeCategories = Array.isArray(categories) ? categories : [];
+
   const filteredItems = safeItems.filter((i) => {
-    const matchesCat = selectedCatId ? Number(i.categoryId) === Number(selectedCatId) : true;
+    const matchesCat = (() => {
+      if (!selectedCatId) return true;
+      const selCat = safeCategories.find((c) => c.id === selectedCatId);
+      if (selCat) {
+        const selName = (selCat.categoryName || '').trim().toLowerCase();
+        const itemCatName = (i.categoryName || '').trim().toLowerCase();
+        return Number(i.categoryId) === Number(selectedCatId) || itemCatName === selName;
+      }
+      return Number(i.categoryId) === Number(selectedCatId);
+    })();
     const matchesStock = stockFilter === 'all' ? true : stockFilter === 'instock' ? !!i.isAvailable : !i.isAvailable;
     const query = searchQuery.trim().toLowerCase();
     const matchesQuery = !query
@@ -745,12 +816,44 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
   const endIndex = isAll ? totalItems : Math.min(startIndex + effectiveItemsPerPage, totalItems);
   const paginatedItems = isAll ? filteredItems : filteredItems.slice(startIndex, endIndex);
 
-  const safeCategories = Array.isArray(categories) ? categories : [];
+  // Strictly categories with items for this restaurant, deduplicated by name
   const visibleCategories = useMemo(() => {
-    if (safeItems.length === 0) return safeCategories;
+    if (!safeItems || safeItems.length === 0) return [];
     const populatedCatIds = new Set(safeItems.map((i) => Number(i.categoryId)));
-    return safeCategories.filter((cat) => populatedCatIds.has(Number(cat.id)));
+    const seen = new Set<string>();
+    return safeCategories.filter((cat) => {
+      const norm = (cat.categoryName || '').trim().toLowerCase();
+      if (!populatedCatIds.has(Number(cat.id)) || seen.has(norm)) return false;
+      seen.add(norm);
+      return true;
+    });
   }, [safeCategories, safeItems]);
+
+  // Unique categories for selection dropdowns, deduplicated by name
+  const uniqueCategories = useMemo(() => {
+    const seen = new Set<string>();
+    const list: typeof safeCategories = [];
+    safeCategories.forEach((cat) => {
+      const norm = (cat.categoryName || '').trim().toLowerCase();
+      if (!norm) return;
+      if (!seen.has(norm)) {
+        seen.add(norm);
+        list.push(cat);
+      }
+    });
+    return list.sort((a, b) => (a.categoryName || '').localeCompare(b.categoryName || ''));
+  }, [safeCategories]);
+
+  // Search filtered categories for item create/edit form
+  const filteredCategories = useMemo(() => {
+    if (!catSearchQuery.trim()) return uniqueCategories;
+    const q = catSearchQuery.toLowerCase().trim();
+    return uniqueCategories.filter((c) =>
+      (c.categoryName || '').toLowerCase().includes(q) ||
+      (c.description || '').toLowerCase().includes(q)
+    );
+  }, [uniqueCategories, catSearchQuery]);
+
   const filteredUnits = units.filter((u) => u.unitName.toLowerCase().includes(unitSearchQuery.toLowerCase()));
   const inStockCount = safeItems.filter((x) => x.isAvailable).length;
   return (
@@ -794,6 +897,8 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
               setItemImageUrl('');
               setUnitDropdownOpen(false);
               setCatDropdownOpen(false);
+              setUnitSearchQuery('');
+              setCatSearchQuery('');
               setAddItemModalVisible(true);
             }}
           >
@@ -944,7 +1049,10 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
 
               {/* Dynamic Categories */}
               {visibleCategories.map((cat) => {
-                const count = safeItems.filter((i) => Number(i.categoryId) === Number(cat.id)).length;
+                const count = safeItems.filter((i) => 
+                  Number(i.categoryId) === Number(cat.id) || 
+                  (i.categoryName && i.categoryName.trim().toLowerCase() === (cat.categoryName || '').trim().toLowerCase())
+                ).length;
                 const isSelected = selectedCatId === cat.id;
                 return (
                   <View key={`cat-${cat.id}`} style={styles.catChipContainer}>
@@ -974,13 +1082,6 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
                           activeOpacity={0.7}
                         >
                           <Edit2 size={11} color="#DE8626" />
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={styles.catActionMiniBtn}
-                          onPress={() => handleDeleteCategory(cat)}
-                          activeOpacity={0.7}
-                        >
-                          <Trash2 size={11} color="#DC2626" />
                         </TouchableOpacity>
                       </View>
                     )}
@@ -1051,6 +1152,10 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
                     setItemPrice('');
                     setItemUnitName('');
                     setItemImageUrl('');
+                    setUnitDropdownOpen(false);
+                    setCatDropdownOpen(false);
+                    setUnitSearchQuery('');
+                    setCatSearchQuery('');
                     setAddItemModalVisible(true);
                   }}
                 >
@@ -1299,6 +1404,8 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
                 onPress={() => {
                   setAddCatModalVisible(false);
                   setEditCatModalVisible(false);
+                  setAutofilledFromDb(null);
+                  setShowCatSuggestions(false);
                 }}
                 style={styles.modalCloseBtn}
                 activeOpacity={0.7}
@@ -1307,14 +1414,95 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.inputLabel}>CATEGORY NAME</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="e.g. Starters, Main Course, Beverages"
-              placeholderTextColor="#9CA3AF"
-              value={catName}
-              onChangeText={setCatName}
-            />
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+              <Text style={styles.inputLabel}>CATEGORY NAME</Text>
+              {!editCatModalVisible && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                  <Sparkles size={11} color="#DE8626" />
+                  <Text style={{ fontSize: 10, fontWeight: '700', color: '#DE8626' }}>Searchable DB Autofill</Text>
+                </View>
+              )}
+            </View>
+
+            <View style={{ position: 'relative' }}>
+              <TextInput
+                style={[styles.input, { paddingRight: 36 }]}
+                placeholder="e.g. Starters, Main Course, Beverages"
+                placeholderTextColor="#9CA3AF"
+                value={catName}
+                onFocus={() => { if (!editCatModalVisible) setShowCatSuggestions(true); }}
+                onChangeText={(t) => {
+                  setCatName(t);
+                  setAutofilledFromDb(null);
+                  if (!editCatModalVisible) setShowCatSuggestions(true);
+                }}
+              />
+              <View style={{ position: 'absolute', right: 12, top: 12 }}>
+                {loadingCatSuggestions ? (
+                  <ActivityIndicator size="small" color="#DE8626" />
+                ) : (
+                  <Search size={14} color="#8C7A6B" />
+                )}
+              </View>
+            </View>
+
+            {autofilledFromDb && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'rgba(16, 185, 129, 0.1)', borderWidth: 1, borderColor: 'rgba(16, 185, 129, 0.25)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, marginTop: 4, marginBottom: 8 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <CheckCircle2 size={13} color="#10B981" />
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: '#047857' }}>
+                    Autofilled from DB: {autofilledFromDb}
+                  </Text>
+                </View>
+                <TouchableOpacity onPress={() => setAutofilledFromDb(null)}>
+                  <Text style={{ fontSize: 10, fontWeight: '700', color: '#047857', textDecorationLine: 'underline' }}>Clear</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {showCatSuggestions && !editCatModalVisible && (
+              <View style={[styles.dropdownListBox, { maxHeight: 150, marginTop: 4, marginBottom: 8 }]}>
+                <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                  {loadingCatSuggestions && catSuggestions.length === 0 ? (
+                    <View style={{ paddingVertical: 12, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 }}>
+                      <ActivityIndicator size="small" color="#DE8626" />
+                      <Text style={{ fontSize: 11, color: '#8C7A6B' }}>Searching DB categories...</Text>
+                    </View>
+                  ) : catSuggestions.length > 0 ? (
+                    catSuggestions.map((cat) => (
+                      <TouchableOpacity
+                        key={`sug-${cat.id}-${cat.categoryName}`}
+                        style={styles.dropdownItemRow}
+                        onPress={() => handleSelectCatSuggestion(cat)}
+                        activeOpacity={0.7}
+                      >
+                        <View style={{ flex: 1 }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                            <Text style={[styles.dropdownItemText, { fontWeight: '700' }]}>{cat.categoryName}</Text>
+                            <View style={{ backgroundColor: 'rgba(222, 134, 38, 0.12)', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4 }}>
+                              <Text style={{ fontSize: 9, fontWeight: '800', color: '#DE8626' }}>In DB</Text>
+                            </View>
+                          </View>
+                          {cat.description ? (
+                            <Text style={{ fontSize: 10, color: '#8C7A6B', marginTop: 2 }} numberOfLines={1}>{cat.description}</Text>
+                          ) : null}
+                        </View>
+                        <Text style={{ fontSize: 10, fontWeight: '700', color: '#DE8626' }}>Autofill ↵</Text>
+                      </TouchableOpacity>
+                    ))
+                  ) : catName.trim() ? (
+                    <View style={{ paddingVertical: 10, alignItems: 'center', paddingHorizontal: 8 }}>
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: '#1E2930' }}>&ldquo;{catName.trim()}&rdquo; is not in database</Text>
+                      <Text style={{ fontSize: 10, color: '#8C7A6B', marginTop: 2, textAlign: 'center' }}>Click Save Category to create it in DB.</Text>
+                    </View>
+                  ) : (
+                    <View style={{ paddingVertical: 10, alignItems: 'center' }}>
+                      <Text style={{ fontSize: 11, color: '#8C7A6B' }}>Type to search existing categories in DB</Text>
+                    </View>
+                  )}
+                </ScrollView>
+              </View>
+            )}
 
             <Text style={styles.inputLabel}>DESCRIPTION</Text>
             <TextInput
@@ -1399,12 +1587,17 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
                 style={styles.modalSubmitBtnGradient}
               >
                 {creating ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                    <Text style={styles.modalSubmitBtnText}>
+                      {editCatModalVisible ? 'UPDATING IN DB...' : 'CREATING IN DB...'}
+                    </Text>
+                  </View>
                 ) : (
                   <>
                     <CheckCircle2 size={16} color="#FFFFFF" />
                     <Text style={styles.modalSubmitBtnText}>
-                      {editCatModalVisible ? 'UPDATE CATEGORY' : 'SAVE CATEGORY'}
+                      {editCatModalVisible ? 'UPDATE CATEGORY' : 'CREATE CATEGORY'}
                     </Text>
                   </>
                 )}
@@ -1542,32 +1735,49 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
                 </TouchableOpacity>
               </View>
 
-              <TouchableOpacity style={styles.selectDropdownBtn} onPress={() => setCatDropdownOpen(!catDropdownOpen)} activeOpacity={0.8}>
+              <TouchableOpacity style={styles.selectDropdownBtn} onPress={() => { setCatDropdownOpen(!catDropdownOpen); setCatSearchQuery(''); }} activeOpacity={0.8}>
                 <Text style={[styles.selectDropdownText, !itemCatId && { color: '#7C6F62' }]}>
-                  {itemCatId ? categories.find((c) => c.id === itemCatId)?.categoryName || 'Select Category' : 'Select Category...'}
+                  {itemCatId ? safeCategories.find((c) => c.id === itemCatId)?.categoryName || 'Select Category' : 'Select Category...'}
                 </Text>
                 {catDropdownOpen ? <ChevronUp size={16} color="#DE8626" /> : <ChevronDown size={16} color="#8C7A6B" />}
               </TouchableOpacity>
 
               {catDropdownOpen && (
                 <View style={styles.dropdownListBox}>
+                  <View style={styles.dropdownSearchRow}>
+                    <Search size={13} color="#8C7A6B" />
+                    <TextInput
+                      style={styles.dropdownSearchInput}
+                      placeholder="Filter categories..."
+                      placeholderTextColor="#9CA3AF"
+                      value={catSearchQuery}
+                      onChangeText={setCatSearchQuery}
+                    />
+                  </View>
                   <ScrollView style={{ maxHeight: 140 }} nestedScrollEnabled>
-                    {categories.map((c) => (
-                      <TouchableOpacity
-                        key={`cat-drop-${c.id}`}
-                        style={[styles.dropdownItemRow, itemCatId === c.id && styles.dropdownItemRowActive]}
-                        onPress={() => {
-                          setItemCatId(c.id);
-                          setCatDropdownOpen(false);
-                        }}
-                        activeOpacity={0.7}
-                      >
-                        <Text style={[styles.dropdownItemText, itemCatId === c.id && styles.dropdownItemTextActive]}>
-                          {c.categoryName}
-                        </Text>
-                        {itemCatId === c.id && <Check size={14} color="#DE8626" />}
-                      </TouchableOpacity>
-                    ))}
+                    {filteredCategories.length === 0 ? (
+                      <View style={{ paddingVertical: 12, alignItems: 'center' }}>
+                        <Text style={{ fontSize: 12, color: '#8C7A6B' }}>No categories found</Text>
+                      </View>
+                    ) : (
+                      filteredCategories.map((c) => (
+                        <TouchableOpacity
+                          key={`cat-drop-${c.id}`}
+                          style={[styles.dropdownItemRow, itemCatId === c.id && styles.dropdownItemRowActive]}
+                          onPress={() => {
+                            setItemCatId(c.id);
+                            setCatDropdownOpen(false);
+                            setCatSearchQuery('');
+                          }}
+                          activeOpacity={0.7}
+                        >
+                          <Text style={[styles.dropdownItemText, itemCatId === c.id && styles.dropdownItemTextActive]}>
+                            {c.categoryName}
+                          </Text>
+                          {itemCatId === c.id && <Check size={14} color="#DE8626" />}
+                        </TouchableOpacity>
+                      ))
+                    )}
                   </ScrollView>
                 </View>
               )}

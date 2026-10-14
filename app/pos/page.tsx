@@ -1056,6 +1056,9 @@ export default function PosPage() {
           tenderedAmount: posNumericTendered,
           changeAmount: posChangeToReturn,
           date: new Date().toLocaleString('en-IN'),
+          upiId: (restaurantConfig?.bankerUpiId || (restaurantConfig as any)?.upiId || (activeRestaurant as any)?.bankerUpiId || (activeRestaurant as any)?.upiId || '').trim(),
+          upiPayeeName: restaurantConfig?.bankerAccountHolderName || restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant',
+          showUpiQr: restaurantConfig?.printUpiQrOnReceipts !== false && (activeRestaurant as any)?.printUpiQrOnReceipts !== false,
           footerMessage: customFooter || 'Thank you! Please visit again.',
         };
 
@@ -1207,6 +1210,9 @@ export default function PosPage() {
           tenderedAmount: orderTendered,
           changeAmount: orderChange,
           date: new Date().toLocaleString('en-IN'),
+          upiId: (restaurantConfig?.bankerUpiId || (restaurantConfig as any)?.upiId || (activeRestaurant as any)?.bankerUpiId || (activeRestaurant as any)?.upiId || '').trim(),
+          upiPayeeName: restaurantConfig?.bankerAccountHolderName || restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant',
+          showUpiQr: restaurantConfig?.printUpiQrOnReceipts !== false && (activeRestaurant as any)?.printUpiQrOnReceipts !== false,
           footerMessage: customFooter || 'Thank you! Please visit again.',
         };
 
@@ -1328,6 +1334,10 @@ export default function PosPage() {
       taxAmount: hasGstNumber ? ((activeTableOrder.cgst || 0) + (activeTableOrder.sgst || 0)) : 0,
       grandTotal: payableGrandTotal,
       paymentMode: 'PAY LATER (PROFORMA BILL)',
+      isProforma: true,
+      upiId: (restaurantConfig?.bankerUpiId || (restaurantConfig as any)?.upiId || (activeRestaurant as any)?.bankerUpiId || (activeRestaurant as any)?.upiId || '').trim(),
+      upiPayeeName: restaurantConfig?.bankerAccountHolderName || restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant',
+      showUpiQr: restaurantConfig?.printUpiQrOnReceipts !== false && (activeRestaurant as any)?.printUpiQrOnReceipts !== false,
       date: new Date().toLocaleString('en-IN'),
       footerMessage: customFooter || 'Thank you! Please visit again.',
     };

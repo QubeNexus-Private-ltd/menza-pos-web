@@ -487,6 +487,17 @@ export const OrderNotificationModal: React.FC<OrderNotificationModalProps> = ({
         paymentStatus: targetOrder?.paymentStatus || 'PENDING',
         date: targetOrder?.createdAt ? new Date(targetOrder.createdAt) : new Date(),
         isKot: false,
+        upiId: (
+          (activeRestaurant as any)?.bankerUpiId ||
+          (activeRestaurant as any)?.upiId ||
+          ''
+        ).trim(),
+        upiPayeeName:
+          (activeRestaurant as any)?.bankerAccountHolderName ||
+          activeRestaurant?.restaurantName ||
+          'Menza Restaurant',
+        showUpiQr:
+          (activeRestaurant as any)?.printUpiQrOnReceipts !== false,
       };
 
       await printReceipt(receiptData);

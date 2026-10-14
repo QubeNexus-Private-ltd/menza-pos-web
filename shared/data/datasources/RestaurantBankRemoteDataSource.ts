@@ -9,6 +9,8 @@ export interface RestaurantBankAccountRequest {
   pan?: string;
   email?: string;
   phoneNumber?: string;
+  upiId?: string;
+  printUpiQrOnReceipts?: boolean;
   isRazorpay?: boolean;
   gateway?: string;
 }
@@ -20,6 +22,8 @@ export interface RestaurantBankAccountResponse {
   accountNumberMasked?: string;
   ifsc?: string;
   bankName?: string;
+  upiId?: string;
+  printUpiQrOnReceipts?: boolean;
   status?: string;
   kycStatus?: string;
   isActive: boolean;
@@ -67,24 +71,37 @@ export class RestaurantBankRemoteDataSource {
 
   /**
    * Fetches the registered bank account details for a restaurant.
+   * Calls /RestaurantConfig/${restaurantId}/bank-account with fallback to /CashFreePayment/...
    * Returns null if no bank account has been registered yet (404).
    */
   async getBankAccount(restaurantId: number): Promise<RestaurantBankAccountResponse | null> {
     try {
       const response = await apiClient.get<RestaurantBankAccountResponse>(
-        `/CashFreePayment/restaurants/${restaurantId}/bank-account`
+        `/RestaurantConfig/${restaurantId}/bank-account`
       );
       return response.data;
-    } catch (error: any) {
-      if (error?.response?.status === 404) {
+    } catch (primaryErr: any) {
+      if (primaryErr?.response?.status === 404) {
+        // Fallback to Cashfree payment controller in case of legacy route
+        try {
+          const fallbackRes = await apiClient.get<RestaurantBankAccountResponse>(
+            `/CashFreePayment/restaurants/${restaurantId}/bank-account`
+          );
+          return fallbackRes.data;
+        } catch (fallbackErr: any) {
+          if (fallbackErr?.response?.status === 404) {
+            return null;
+          }
+        }
         return null;
       }
-      throw error;
+      throw primaryErr;
     }
   }
 
   /**
-   * Registers or updates the restaurant owner's bank account for direct payouts.
+   * Registers or updates the restaurant owner's bank account directly in RestaurantConfig.
+   * If isRazorpay is true, validates via Razorpay Fund Account Validation (Penny Drop) and verifies the UPI ID.
    */
   async registerBankAccount(
     restaurantId: number,
@@ -93,12 +110,25 @@ export class RestaurantBankRemoteDataSource {
     const isRzp = data.isRazorpay ?? APP_CONSTANTS.IS_RAZORPAY;
     const gw = data.gateway ?? (isRzp ? 'Razorpay' : 'Cashfree');
 
-    const response = await apiClient.post<{ message: string }>(
-      `/CashFreePayment/restaurants/${restaurantId}/bank-account`,
-      { ...data, isRazorpay: isRzp, gateway: gw },
-      { headers: { 'X-Payment-Gateway': gw } }
-    );
-    return response.data;
+    try {
+      const response = await apiClient.post<{ message: string }>(
+        `/RestaurantConfig/${restaurantId}/bank-account`,
+        { ...data, isRazorpay: isRzp, gateway: gw },
+        { headers: { 'X-Payment-Gateway': gw } }
+      );
+      return response.data;
+    } catch (err: any) {
+      // If RestaurantConfig route returned 404/405, fallback to CashFreePayment endpoint
+      if (err?.response?.status === 404 || err?.response?.status === 405) {
+        const fallbackRes = await apiClient.post<{ message: string }>(
+          `/CashFreePayment/restaurants/${restaurantId}/bank-account`,
+          { ...data, isRazorpay: isRzp, gateway: gw },
+          { headers: { 'X-Payment-Gateway': gw } }
+        );
+        return fallbackRes.data;
+      }
+      throw err;
+    }
   }
 
   /**

@@ -383,7 +383,23 @@ export default function TablesPage() {
       taxAmount: (order.cgst || 0) + (order.sgst || 0),
       grandTotal: Number(order.totalAmount || 0),
       paymentMode: 'PAY LATER (GUEST CHECK)',
+      isProforma: true,
       date: new Date().toLocaleString('en-IN'),
+      upiId: (
+        restaurantConfig?.bankerUpiId ||
+        (restaurantConfig as any)?.upiId ||
+        (activeRestaurant as any)?.bankerUpiId ||
+        (activeRestaurant as any)?.upiId ||
+        ''
+      ).trim(),
+      upiPayeeName:
+        restaurantConfig?.bankerAccountHolderName ||
+        restaurantConfig?.restaurantName ||
+        activeRestaurant?.restaurantName ||
+        'Menza Restaurant',
+      showUpiQr:
+        restaurantConfig?.printUpiQrOnReceipts !== false &&
+        (activeRestaurant as any)?.printUpiQrOnReceipts !== false,
       footerMessage: customFooter || 'Thank you! Please visit again.',
     };
 

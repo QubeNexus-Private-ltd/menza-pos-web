@@ -309,6 +309,17 @@ export const TodayOrdersModal: React.FC<TodayOrdersModalProps> = ({
         taxPercentage: hasGst ? totalGstRate : 0,
         grandTotal: effectiveOrderTotal,
         date: fetchedOrder.createdAt ? new Date(fetchedOrder.createdAt) : new Date(),
+        upiId: (
+          (activeRestaurant as any)?.bankerUpiId ||
+          (activeRestaurant as any)?.upiId ||
+          ''
+        ).trim(),
+        upiPayeeName:
+          (activeRestaurant as any)?.bankerAccountHolderName ||
+          activeRestaurant?.restaurantName ||
+          'Menza Bistro',
+        showUpiQr:
+          (activeRestaurant as any)?.printUpiQrOnReceipts !== false,
       };
 
       // 1. Print Customer Bill ONLY (do not print KOT)

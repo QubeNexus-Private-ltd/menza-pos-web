@@ -40,6 +40,9 @@ import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { usePrinterStore } from '@shared/presentation/state/usePrinterStore';
 import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
 import { TableRemoteDataSource } from '@shared/data/datasources/TableRemoteDataSource';
+import { RestaurantConfigRemoteDataSource } from '@shared/data/datasources/RestaurantConfigRemoteDataSource';
+import { RestaurantConfig } from '@shared/domain/models/RestaurantConfig';
+import { usePosCatalogStore } from '@/stores/usePosCatalogStore';
 import { OrderMaster, OrderItem } from '@shared/domain/models/Order';
 import { WebPrinterService } from '@/services/webPrinterService';
 import { WebWhatsAppService } from '@/services/whatsAppService';
@@ -61,6 +64,7 @@ import {
 
 const orderDataSource = new OrderRemoteDataSource();
 const tableDataSource = new TableRemoteDataSource();
+const configDataSource = new RestaurantConfigRemoteDataSource();
 
 type ActiveTab = 'LIVE' | 'HISTORY';
 
@@ -70,6 +74,21 @@ export default function OrdersPage() {
   const { paperWidth, customFooter } = usePrinterStore();
 
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
+
+  // Restaurant Config for taxes & UPI QR printing
+  const [restaurantConfig, setRestaurantConfig] = useState<RestaurantConfig | null>(() =>
+    usePosCatalogStore.getState().restaurantConfig
+  );
+
+  useEffect(() => {
+    if (!currentRestId) return;
+    configDataSource.getConfig(currentRestId).then((cfg) => {
+      if (cfg) {
+        setRestaurantConfig(cfg);
+        usePosCatalogStore.getState().updateRestaurantConfig(cfg);
+      }
+    }).catch(() => {});
+  }, [currentRestId]);
 
   // Active Tab
   const [activeTab, setActiveTab] = useState<ActiveTab>('LIVE');
@@ -286,6 +305,21 @@ export default function OrdersPage() {
         footerMessage: customFooter || 'Thank you for dining with us! Please visit again.',
         isDuplicate,
         isProforma,
+        upiId: (
+          restaurantConfig?.bankerUpiId ||
+          (restaurantConfig as any)?.upiId ||
+          (activeRestaurant as any)?.bankerUpiId ||
+          (activeRestaurant as any)?.upiId ||
+          ''
+        ).trim(),
+        upiPayeeName:
+          restaurantConfig?.bankerAccountHolderName ||
+          restaurantConfig?.restaurantName ||
+          activeRestaurant?.restaurantName ||
+          'Menza Restaurant',
+        showUpiQr:
+          restaurantConfig?.printUpiQrOnReceipts !== false &&
+          (activeRestaurant as any)?.printUpiQrOnReceipts !== false,
       };
 
       await WebPrinterService.printReceipt(receiptData, paperWidth);

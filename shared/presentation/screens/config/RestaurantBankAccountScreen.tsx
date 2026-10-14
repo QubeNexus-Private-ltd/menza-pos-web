@@ -71,6 +71,8 @@ export const RestaurantBankAccountScreen: React.FC<RestaurantBankAccountScreenPr
   const [pan, setPan] = useState<string>('');
   const [email, setEmail] = useState<string>('');
   const [phoneNumber, setPhoneNumber] = useState<string>('');
+  const [upiId, setUpiId] = useState<string>('');
+  const [printUpiQrOnReceipts, setPrintUpiQrOnReceipts] = useState<boolean>(true);
 
   // Penny Drop Verification State
   const [verifying, setVerifying] = useState<boolean>(false);
@@ -127,6 +129,10 @@ export const RestaurantBankAccountScreen: React.FC<RestaurantBankAccountScreenPr
         setAccountHolder(data.accountHolder || '');
         setIfsc(data.ifsc || '');
         setBankName(data.bankName || '');
+        setUpiId(data.upiId || '');
+        if (data.printUpiQrOnReceipts !== undefined) {
+          setPrintUpiQrOnReceipts(data.printUpiQrOnReceipts);
+        }
         setIsEditing(false);
       } else {
         // Pre-fill email and phone from store profile if first time
@@ -270,6 +276,15 @@ export const RestaurantBankAccountScreen: React.FC<RestaurantBankAccountScreenPr
       return;
     }
 
+    const cleanUpi = upiId.trim().toLowerCase();
+    if (cleanUpi) {
+      const upiRegex = /^[\w.\-_]{2,256}@[a-zA-Z]{2,64}$/;
+      if (!upiRegex.test(cleanUpi)) {
+        showAlert('Invalid UPI ID', 'Please enter a valid UPI ID (e.g. restaurant@icici or 9876543210@paytm).', 'warning');
+        return;
+      }
+    }
+
     try {
       setSaving(true);
       const res = await bankRemoteDataSource.registerBankAccount(currentRestId, {
@@ -280,9 +295,22 @@ export const RestaurantBankAccountScreen: React.FC<RestaurantBankAccountScreenPr
         pan: cleanPan || undefined,
         email: email.trim() || undefined,
         phoneNumber: cleanPhone.slice(-10) || undefined,
+        upiId: cleanUpi || undefined,
+        printUpiQrOnReceipts,
         isRazorpay,
         gateway: gatewayName,
       });
+
+      // Update local activeRestaurant store with banker details
+      const activeRest = useAuthStore.getState().activeRestaurant;
+      if (activeRest) {
+        useAuthStore.getState().setActiveRestaurant({
+          ...activeRest,
+          bankerUpiId: cleanUpi || res?.upiId,
+          bankerAccountHolderName: cleanHolder || res?.accountHolder,
+          printUpiQrOnReceipts,
+        } as any);
+      }
 
       showAlert(
         'Bank Account Saved',
@@ -484,6 +512,28 @@ export const RestaurantBankAccountScreen: React.FC<RestaurantBankAccountScreenPr
                 <Text style={styles.accountDataLabel}>Settlement Schedule</Text>
                 <Text style={[styles.accountDataValue, { color: '#17845A', fontWeight: '700' }]}>
                   T+1 Next-Day Direct Transfer
+                </Text>
+              </View>
+
+              <View style={styles.accountDataRow}>
+                <Text style={styles.accountDataLabel}>Banker UPI ID (VPA)</Text>
+                <Text style={[styles.accountDataValue, !bankData.upiId && { color: '#9CA3AF' }]}>
+                  {bankData.upiId || 'Not Configured'}
+                </Text>
+              </View>
+
+              <View style={styles.accountDataRow}>
+                <Text style={styles.accountDataLabel}>Receipt Dynamic QR</Text>
+                <Text
+                  style={[
+                    styles.accountDataValue,
+                    {
+                      color: bankData.printUpiQrOnReceipts !== false ? '#17845A' : '#6B7280',
+                      fontWeight: '700',
+                    },
+                  ]}
+                >
+                  {bankData.printUpiQrOnReceipts !== false ? 'Enabled (Auto-printed on bills)' : 'Disabled'}
                 </Text>
               </View>
 
@@ -724,6 +774,39 @@ export const RestaurantBankAccountScreen: React.FC<RestaurantBankAccountScreenPr
                   keyboardType="phone-pad"
                   maxLength={10}
                   editable={!cashierRestricted}
+                />
+              </View>
+
+              {/* Banker UPI ID for dynamic bill QR code */}
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>BANKER UPI ID / VPA (FOR RECEIPT QR CODE)</Text>
+                <Text style={styles.fieldHint}>Printed on customer receipts so diners can scan and pay directly via UPI</Text>
+                <TextInput
+                  style={[styles.textInput, cashierRestricted && styles.inputDisabled, { textTransform: 'lowercase' }]}
+                  value={upiId}
+                  onChangeText={(t) => setUpiId(t.toLowerCase().trim())}
+                  placeholder="e.g. menzahospitality@icici or 9876543210@paytm"
+                  placeholderTextColor="#9CA3AF"
+                  editable={!cashierRestricted}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+              </View>
+
+              {/* Dynamic QR on Receipts Switch */}
+              <View style={styles.switchRowContainer}>
+                <View style={{ flex: 1, paddingRight: 10 }}>
+                  <Text style={styles.switchRowTitle}>Print Dynamic UPI QR on Receipts</Text>
+                  <Text style={styles.switchRowSub}>
+                    Automatically prints the dynamic UPI QR code with table, bill number, and amount on customer checks and tax receipts.
+                  </Text>
+                </View>
+                <Switch
+                  value={printUpiQrOnReceipts}
+                  onValueChange={setPrintUpiQrOnReceipts}
+                  disabled={cashierRestricted}
+                  trackColor={{ false: '#D1D5DB', true: '#FBBF24' }}
+                  thumbColor={printUpiQrOnReceipts ? '#DE8626' : '#F4F3F1'}
                 />
               </View>
 
@@ -1297,5 +1380,27 @@ const styles = StyleSheet.create({
     color: '#4B5563',
     fontStyle: 'italic',
     marginTop: 4,
+  },
+  switchRowContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FBF8F4',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#EFE7DC',
+    marginBottom: 16,
+  },
+  switchRowTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginBottom: 2,
+  },
+  switchRowSub: {
+    fontSize: 10,
+    color: '#6B7280',
+    lineHeight: 14,
   },
 });

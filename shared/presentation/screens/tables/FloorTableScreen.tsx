@@ -2962,6 +2962,17 @@ export const FloorTableScreen: React.FC<FloorTableScreenProps> = ({ onClose, onO
                                 totalAmount: (it.unitPrice || 0) * (it.quantity || 1),
                               })),
                               grandTotal: Number(activeTableOrder.totalAmount || 0),
+                              upiId: (
+                                (activeRestaurant as any)?.bankerUpiId ||
+                                (activeRestaurant as any)?.upiId ||
+                                ''
+                              ).trim(),
+                              upiPayeeName:
+                                (activeRestaurant as any)?.bankerAccountHolderName ||
+                                activeRestaurant?.restaurantName ||
+                                'Menza Bistro',
+                              showUpiQr:
+                                (activeRestaurant as any)?.printUpiQrOnReceipts !== false,
                             });
                           }
                         }}

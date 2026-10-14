@@ -285,16 +285,6 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       loadData();
     });
 
-    // Poll fallback every 45s
-    const pollInterval = setInterval(() => {
-      orderDs
-        .getTodayOrders(currentRestId, 'ALL', 1, 20)
-        .then((res) => {
-          if (res?.items) processIncomingOrders(res.items);
-        })
-        .catch(() => {});
-    }, 45000);
-
     return () => {
       isMounted = false;
       unsubCreated();
@@ -307,7 +297,6 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       unsubPayment();
       unsubWalletEvents();
       unsubReconnected();
-      clearInterval(pollInterval);
     };
   }, [currentRestId, isSuperAdmin, handleOrderStatusChanged, processIncomingOrders]);
 
@@ -482,7 +471,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       {/* 3. Main Workspace Area */}
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Top Streamlined Unified Header (Identical to Menza POS Terminal) */}
-        <header className="sticky top-0 z-30 flex h-16 w-full items-center justify-between border-b border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] px-3 sm:px-4 lg:px-6 transition-colors shadow-xs shrink-0">
+        <header className="sticky top-0 z-30 flex h-16 w-full items-center justify-between border-b border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] px-3 sm:px-4 lg:px-6 transition-colors shadow-xs shrink-0 overflow-x-clip gap-2">
           {/* LEFT: Mobile Toggle + Outlet Logo + Outlet Name & Dropdown + Status Pill & Subtitle */}
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             {/* Mobile Sidebar Hamburger Trigger */}
@@ -647,11 +636,15 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             {/* Online Wifi Status Indicator */}
             <div
-              className="hidden md:flex items-center gap-1 px-2.5 py-1 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[11px] font-bold"
+              className="hidden md:flex items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[11px] font-bold"
               title={isLiveConnected ? 'Connected to Menza Live Real-Time Gateway' : 'Connecting to Live Gateway...'}
             >
-              <Wifi className="h-3 w-3" />
-              <span>Online</span>
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+              </span>
+              <Wifi className="h-3.5 w-3.5" />
+              <span className="hidden xl:inline">Online</span>
             </div>
 
             {/* Today's Sales Telemetry Pill */}
@@ -677,7 +670,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                 type="button"
                 onClick={() => openRenewalModal(undefined, 'renew')}
                 title="Subscription & Licensing • Click to Renew or Explore Other Plans"
-                className={`group hidden xl:inline-flex h-[36px] items-center gap-2 rounded-xl border pl-2.5 pr-1.5 text-xs font-extrabold transition-all cursor-pointer shadow-xs active:scale-[0.98] ${
+                className={`group hidden 2xl:inline-flex h-[36px] items-center gap-2 rounded-xl border pl-2.5 pr-1.5 text-xs font-extrabold transition-all cursor-pointer shadow-xs active:scale-[0.98] ${
                   isExpired || lifecycleState === 'EXPIRED'
                     ? 'border-red-500/40 bg-red-500/10 text-red-600 ring-1 ring-red-500/30 animate-pulse'
                     : isInGracePeriod || (daysRemaining > 0 && daysRemaining <= 3)
@@ -851,7 +844,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
               <button
                 type="button"
                 onClick={() => router.push('/pos')}
-                className="hidden lg:inline-flex h-[36px] items-center gap-1.5 rounded-xl bg-gradient-to-r from-[#DE8626] to-[#CB741B] px-3 text-xs font-black text-white shadow-md shadow-[#DE8626]/20 hover:from-[#C4721C] hover:to-[#B66415] transition-all hover:scale-[1.02] active:scale-[0.98]"
+                className="hidden xl:inline-flex h-[36px] items-center gap-1.5 rounded-xl bg-gradient-to-r from-[#DE8626] to-[#CB741B] px-3 text-xs font-black text-white shadow-md shadow-[#DE8626]/20 hover:from-[#C4721C] hover:to-[#B66415] transition-all hover:scale-[1.02] active:scale-[0.98]"
               >
                 <ShoppingBag className="h-3.5 w-3.5 stroke-[2.5]" />
                 <span>POS Terminal</span>
@@ -1040,12 +1033,12 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
         <SubscriptionGraceBanner />
 
         {/* Viewport Content */}
-        <main className="flex-1 overflow-y-auto pb-16 lg:pb-0">
+        <main className={`flex-1 min-h-0 ${pathname === '/pos' ? 'overflow-hidden flex flex-col' : 'overflow-y-auto pb-16 lg:pb-0'}`}>
           {children}
         </main>
 
-        {/* 4. Mobile Bottom Navigation Bar (< 768px) */}
-        <div className="fixed bottom-0 inset-x-0 z-40 flex h-16 items-center justify-around border-t border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] px-2 lg:hidden">
+        {/* 4. Mobile Bottom Navigation Bar (< 1024px) */}
+        <nav className="fixed bottom-0 inset-x-0 z-40 flex h-16 items-center justify-around border-t border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF]/95 dark:bg-[#1B2127]/95 backdrop-blur-md px-2 lg:hidden shadow-lg">
           {mobileNavItems.map((item) => {
             const isActive = pathname === item.href;
             const Icon = item.icon;
@@ -1053,16 +1046,19 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
               <button
                 key={item.href}
                 onClick={() => router.push(item.href)}
-                className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 ${
-                  isActive ? 'text-[#DE8626]' : 'text-[#667085] dark:text-[#94A3B8]'
+                className={`relative flex flex-col items-center justify-center gap-1 flex-1 py-1 transition-colors ${
+                  isActive ? 'text-[#DE8626] font-bold' : 'text-[#667085] dark:text-[#94A3B8] hover:text-[#1E2930]'
                 }`}
               >
-                <Icon className="h-5 w-5" />
-                <span className="text-[10px] font-semibold">{item.label}</span>
+                {isActive && (
+                  <span className="absolute -top-1.5 h-1 w-8 rounded-full bg-[#DE8626]" />
+                )}
+                <Icon className={`h-5 w-5 ${isActive ? 'stroke-[2.5]' : ''}`} />
+                <span className="text-[10px] tracking-tight">{item.label}</span>
               </button>
             );
           })}
-        </div>
+        </nav>
 
         {/* Store Shift / Operating Timings Modal */}
         {shiftModalOpen && (

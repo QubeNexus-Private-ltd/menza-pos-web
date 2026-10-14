@@ -63,6 +63,10 @@ const ParkedCartsModal = dynamic(
   () => import('@/components/pos/ParkedCartsModal').then((mod) => mod.ParkedCartsModal),
   { ssr: false }
 );
+const TablePickerModal = dynamic(
+  () => import('@/components/pos/TablePickerModal').then((mod) => mod.TablePickerModal),
+  { ssr: false }
+);
 const OrderNotificationDrawer = dynamic(
   () => import('@/components/pos/OrderNotificationDrawer').then((mod) => mod.OrderNotificationDrawer),
   { ssr: false }
@@ -81,10 +85,6 @@ const WalletRechargeModal = dynamic(
 );
 const SubscriptionGraceBanner = dynamic(
   () => import('@/components/subscription/SubscriptionGraceBanner').then((mod) => mod.SubscriptionGraceBanner),
-  { ssr: false }
-);
-const SubscriptionBlockerModal = dynamic(
-  () => import('@/components/subscription/SubscriptionBlockerModal').then((mod) => mod.SubscriptionBlockerModal),
   { ssr: false }
 );
 import { GildedAlertModal, GildedAlertConfig } from '@/components/common/GildedAlertModal';
@@ -242,13 +242,6 @@ export default function PosPage() {
   });
   const [loadingActiveTable, setLoadingActiveTable] = useState(false);
   const [showRunningTableDetails, setShowRunningTableDetails] = useState(false);
-  const [dineInPaymentFlow, setDineInPaymentFlow] = useState<'pay_later' | 'pay_now'>(() => {
-    if (typeof window !== 'undefined') {
-      const qTableId = new URLSearchParams(window.location.search).get('tableId');
-      if (qTableId) return 'pay_later';
-    }
-    return 'pay_now';
-  });
 
   // Filters & Search
   const [selectedCategory, setSelectedCategory] = useState<number | null>(null); // null = all
@@ -289,7 +282,6 @@ export default function PosPage() {
   const [walletModalOpen, setWalletModalOpen] = useState(false);
   const [printerModalOpen, setPrinterModalOpen] = useState(false);
   const [notificationDrawerOpen, setNotificationDrawerOpen] = useState(false);
-  const [subscriptionModalOpen, setSubscriptionModalOpen] = useState(false);
   const [customizingItem, setCustomizingItem] = useState<MenuItem | null>(null);
   const [numpadItem, setNumpadItem] = useState<{
     cartKey: string;
@@ -301,6 +293,7 @@ export default function PosPage() {
   } | null>(null);
   const [parkedCarts, setParkedCarts] = useState<ParkedCart[]>([]);
   const [parkedModalOpen, setParkedModalOpen] = useState(false);
+  const [tablePickerModalOpen, setTablePickerModalOpen] = useState(false);
   const [cartDrawerOpen, setCartDrawerOpen] = useState(false); // Mobile / Tablet drawer
   const [orderSuccessData, setOrderSuccessData] = useState<any | null>(null);
 
@@ -366,17 +359,19 @@ export default function PosPage() {
           restaurantId: currentRestId,
           orderTypes: types,
         });
-        if (!selectedTable) {
-          const firstActive = types.find((t) => t.isActive);
-          if (firstActive) {
-            setSelectedOrderType(firstActive.id);
-          }
+        const qTableId = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('tableId') : null;
+        if (!qTableId) {
+          setSelectedOrderType((prev) => {
+            if (prev === 1) return prev;
+            const firstActive = types.find((t) => t.isActive);
+            return firstActive ? firstActive.id : prev;
+          });
         }
       }
     } catch (err) {
       console.warn('Failed to load active order types:', err);
     }
-  }, [currentRestId, selectedTable]);
+  }, [currentRestId]);
 
   useEffect(() => {
     if (!currentRestId) return;
@@ -420,8 +415,7 @@ export default function PosPage() {
               const matched = resolvedTables.find((t) => t.id === Number(qTableId));
               if (matched) {
                 setSelectedOrderType(1); // DINE_IN
-                setSelectedTable(matched);
-                setDineInPaymentFlow('pay_later');
+                setSelectedTable((prev) => (prev?.id === matched.id ? prev : matched));
               }
             }
           }
@@ -526,15 +520,7 @@ export default function PosPage() {
       unsubReconnect();
       unsubWalletEvents();
     };
-  }, [
-    currentRestId,
-    loadOrderTypes,
-    fetchStations,
-    fetchSubscriptionStatus,
-    processIncomingOrders,
-    loadOperatingStatus,
-    loadRestaurantConfig,
-  ]);
+  }, [currentRestId]);
 
   // Track last fetched tableId to prevent duplicate fetches & render loops
   const lastFetchedTableIdRef = useRef<number | null>(null);
@@ -591,15 +577,41 @@ export default function PosPage() {
       }
       lastFetchedTableIdRef.current = tableId;
       loadActiveTableOrder(tableId);
-      setDineInPaymentFlow('pay_later');
-    } else {
+    } else if (selectedOrderType !== 1) {
       lastFetchedTableIdRef.current = null;
       setActiveTableOrder(null);
-      if (selectedOrderType !== 1) {
-        setDineInPaymentFlow('pay_now');
-      }
     }
   }, [selectedOrderType, selectedTable?.id, loadActiveTableOrder]);
+
+  // Open table picker and refresh tables
+  const handleOpenTablePicker = useCallback(async () => {
+    setTablePickerModalOpen(true);
+    if (currentRestId) {
+      try {
+        const refreshed = await tableDataSource.getTables(currentRestId);
+        if (refreshed && Array.isArray(refreshed)) {
+          setTables(refreshed);
+          usePosCatalogStore.getState().setCatalogData({ restaurantId: currentRestId, tables: refreshed });
+        }
+      } catch {}
+    }
+  }, [currentRestId]);
+
+  // Select table from TablePickerModal
+  const handleSelectTableFromModal = useCallback(
+    (tbl: TableMaster) => {
+      setSelectedOrderType(1); // Ensure Dine-In is active
+      setSelectedTable(tbl);
+      if (typeof window !== 'undefined') {
+        const url = new URL(window.location.href);
+        url.searchParams.set('tableId', String(tbl.id));
+        window.history.replaceState({}, '', url.toString());
+      }
+      loadActiveTableOrder(tbl.id, true);
+      setTablePickerModalOpen(false);
+    },
+    [loadActiveTableOrder]
+  );
 
   // 3. Customer Mobile Lookup (10 Digits)
   const handlePhoneChange = (val: string) => {
@@ -637,9 +649,18 @@ export default function PosPage() {
   // 5. Filtered Menu Items
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
-      // 1. Category Filter
-      if (selectedCategory !== null && item.categoryId !== selectedCategory) {
-        return false;
+      // 1. Category Filter (matches by id or category name to handle legacy duplicates)
+      if (selectedCategory !== null) {
+        const selCat = categories.find((c) => c.id === selectedCategory);
+        if (selCat) {
+          const selName = (selCat.categoryName || '').trim().toLowerCase();
+          const itemCatName = (item.categoryName || '').trim().toLowerCase();
+          if (Number(item.categoryId) !== Number(selectedCategory) && itemCatName !== selName) {
+            return false;
+          }
+        } else if (Number(item.categoryId) !== Number(selectedCategory)) {
+          return false;
+        }
       }
       // 2. Veg / Non-Veg Filter
       if (vegFilter === 'VEG' && !item.isVeg) return false;
@@ -654,13 +675,19 @@ export default function PosPage() {
       }
       return true;
     });
-  }, [items, selectedCategory, vegFilter, searchQuery]);
+  }, [items, selectedCategory, vegFilter, searchQuery, categories]);
 
-  // Categories that have items for this restaurant
+  // Categories that have items for this restaurant, deduplicated by name
   const visibleCategories = useMemo(() => {
-    if (items.length === 0) return categories;
+    if (!items || items.length === 0) return [];
     const itemCatIds = new Set(items.map((it) => Number(it.categoryId)));
-    return categories.filter((cat) => itemCatIds.has(Number(cat.id)));
+    const seen = new Set<string>();
+    return categories.filter((cat) => {
+      const norm = (cat.categoryName || '').trim().toLowerCase();
+      if (!itemCatIds.has(Number(cat.id)) || seen.has(norm)) return false;
+      seen.add(norm);
+      return true;
+    });
   }, [categories, items]);
 
   // 6. Cart Management
@@ -935,7 +962,7 @@ export default function PosPage() {
         'danger',
         'Renew Subscription',
         'Cancel',
-        () => setSubscriptionModalOpen(true)
+        openRenewalModal
       );
       return;
     }
@@ -1029,6 +1056,9 @@ export default function PosPage() {
           tenderedAmount: posNumericTendered,
           changeAmount: posChangeToReturn,
           date: new Date().toLocaleString('en-IN'),
+          upiId: (restaurantConfig?.bankerUpiId || (restaurantConfig as any)?.upiId || (activeRestaurant as any)?.bankerUpiId || (activeRestaurant as any)?.upiId || '').trim(),
+          upiPayeeName: restaurantConfig?.bankerAccountHolderName || restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant',
+          showUpiQr: restaurantConfig?.printUpiQrOnReceipts !== false && (activeRestaurant as any)?.printUpiQrOnReceipts !== false,
           footerMessage: customFooter || 'Thank you! Please visit again.',
         };
 
@@ -1052,6 +1082,17 @@ export default function PosPage() {
           date: new Date().toLocaleTimeString(),
           receiptData,
         });
+
+        if (selectedTable?.id) {
+          orderRemoteDataSource.settleTable(selectedTable.id).catch((err) =>
+            console.warn('Settle table session warning:', err)
+          );
+          usePosCatalogStore.getState().freeTableInCatalog(selectedTable.id);
+          setTables((prev) =>
+            prev.map((t) => (t.id === selectedTable.id ? { ...t, status: 'Available', activeOrderId: undefined } : t))
+          );
+          setSelectedTable(null);
+        }
 
         setActiveTableOrder(null);
         clearCart();
@@ -1169,6 +1210,9 @@ export default function PosPage() {
           tenderedAmount: orderTendered,
           changeAmount: orderChange,
           date: new Date().toLocaleString('en-IN'),
+          upiId: (restaurantConfig?.bankerUpiId || (restaurantConfig as any)?.upiId || (activeRestaurant as any)?.bankerUpiId || (activeRestaurant as any)?.upiId || '').trim(),
+          upiPayeeName: restaurantConfig?.bankerAccountHolderName || restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant',
+          showUpiQr: restaurantConfig?.printUpiQrOnReceipts !== false && (activeRestaurant as any)?.printUpiQrOnReceipts !== false,
           footerMessage: customFooter || 'Thank you! Please visit again.',
         };
 
@@ -1188,15 +1232,19 @@ export default function PosPage() {
         }
 
         if (isPostPaid) {
+          clearCart();
+          if (selectedTable?.id) {
+            loadActiveTableOrder(selectedTable.id, true);
+          }
           showAlert(
-            'Sent to Kitchen (Pay Later) 🍳',
-            `Order #${orderId}${pickupToken ? ` (Token #${pickupToken})` : ''} placed for ${effectiveCustomerName}.\nStatus: Active Unsettled Order.`,
+            activeTableOrder ? 'Add-on KOT Sent to Kitchen 🍳' : 'Sent to Kitchen (Pay Later) 🍳',
+            `Order #${orderId}${pickupToken ? ` (Token #${pickupToken})` : ''} placed for ${effectiveCustomerName}.\nStatus: Active Unsettled Order.${
+              activeTableOrder ? '\nDishes appended to running table tab.' : ''
+            }`,
             'success',
             'OK',
             undefined,
             () => {
-              clearCart();
-              setCartDrawerOpen(false);
               if (selectedTable?.id) {
                 loadActiveTableOrder(selectedTable.id, true);
               }
@@ -1219,6 +1267,19 @@ export default function PosPage() {
             date: new Date().toLocaleTimeString(),
             receiptData,
           });
+
+          if (!isPostPaid && selectedTable?.id) {
+            orderRemoteDataSource.settleTable(selectedTable.id).catch((err) =>
+              console.warn('Settle table session warning:', err)
+            );
+            usePosCatalogStore.getState().freeTableInCatalog(selectedTable.id);
+            setTables((prev) =>
+              prev.map((t) => (t.id === selectedTable.id ? { ...t, status: 'Available', activeOrderId: undefined } : t))
+            );
+            setSelectedTable(null);
+            setActiveTableOrder(null);
+          }
+
           clearCart();
           setCartDrawerOpen(false);
         }
@@ -1239,6 +1300,49 @@ export default function PosPage() {
   const handlePrintKot = () => {
     if (!orderSuccessData?.receiptData) return;
     WebPrinterService.printKot(orderSuccessData.receiptData, paperWidth);
+  };
+
+  const handlePrintGuestCheck = () => {
+    if (!activeTableOrder || !selectedTable) return;
+    const receiptData: ReceiptData = {
+      orderId: activeTableOrder.id,
+      orderNumber: String(activeTableOrder.orderNumber || activeTableOrder.id),
+      pickupToken: String(activeTableOrder.pickupToken || activeTableOrder.id),
+      restaurantName: restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant',
+      address: restaurantConfig?.address || activeRestaurant?.address || '',
+      city: restaurantConfig?.city || activeRestaurant?.city || '',
+      state: restaurantConfig?.state || activeRestaurant?.state || '',
+      contactPhone: restaurantConfig?.contactNumber || (activeRestaurant as any)?.contactNumber || activeRestaurant?.ownerMobile || '',
+      gstNumber: hasGstNumber ? (restaurantConfig?.gstNumber || '') : undefined,
+      customerName: activeTableOrder.customerName || 'Dine-In Guest',
+      customerPhone: activeTableOrder.mobileNumber || undefined,
+      orderType: 'DINE_IN',
+      tableName: `Table ${selectedTable.tableNumber}`,
+      sectionName: selectedTable.sectionName || undefined,
+      items: (activeTableOrder.items || []).map((c: any) => ({
+        itemName: c.itemName || 'Dish',
+        quantity: c.quantity || 1,
+        unitPrice: c.unitPrice || c.amount || 0,
+        totalPrice: c.totalPrice || c.totalAmount || (c.quantity * (c.unitPrice || 0)) || 0,
+      })),
+      subtotal: activeTableOrder.subtotal || existingTableTotal,
+      discountAmount: discountAmount || activeTableOrder.discountAmount || 0,
+      cgstPercentage: hasGstNumber ? cgstRate : undefined,
+      cgstAmount: hasGstNumber ? (activeTableOrder.cgst || 0) : undefined,
+      sgstPercentage: hasGstNumber ? sgstRate : undefined,
+      sgstAmount: hasGstNumber ? (activeTableOrder.sgst || 0) : undefined,
+      taxAmount: hasGstNumber ? ((activeTableOrder.cgst || 0) + (activeTableOrder.sgst || 0)) : 0,
+      grandTotal: payableGrandTotal,
+      paymentMode: 'PAY LATER (PROFORMA BILL)',
+      isProforma: true,
+      upiId: (restaurantConfig?.bankerUpiId || (restaurantConfig as any)?.upiId || (activeRestaurant as any)?.bankerUpiId || (activeRestaurant as any)?.upiId || '').trim(),
+      upiPayeeName: restaurantConfig?.bankerAccountHolderName || restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant',
+      showUpiQr: restaurantConfig?.printUpiQrOnReceipts !== false && (activeRestaurant as any)?.printUpiQrOnReceipts !== false,
+      date: new Date().toLocaleString('en-IN'),
+      footerMessage: customFooter || 'Thank you! Please visit again.',
+    };
+    WebPrinterService.printReceipt(receiptData, paperWidth).catch(() => {});
+    showAlert('Guest Check Printed', `Proforma bill for Table T-${selectedTable.tableNumber} sent to printer.`, 'success');
   };
 
   const handleShareWhatsApp = async () => {
@@ -1312,45 +1416,61 @@ export default function PosPage() {
             </div>
           </div>
 
-          {/* Running Table Order Banner */}
+          {/* Running Kitchen Tab (Items Already Sent to Kitchen) */}
           {activeTableOrder && (
-            <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-2.5 space-y-2">
+            <div className="rounded-2xl border border-amber-500/40 bg-gradient-to-br from-amber-500/10 to-orange-500/5 p-3 space-y-2.5 shadow-2xs">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5">
-                  <Utensils className="h-4 w-4 text-[#DE8626] shrink-0" />
+                <div className="flex items-center gap-2">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-xl bg-amber-500/20 text-[#DE8626] shrink-0">
+                    <Utensils className="h-4 w-4" />
+                  </div>
                   <div>
-                    <span className="text-xs font-bold text-[#DE8626] block">
-                      Table #{selectedTable?.tableNumber} • Running Tab #{activeTableOrder.orderNumber || activeTableOrder.id}
-                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-xs font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                        Table T-{selectedTable?.tableNumber} • Running Tab
+                      </span>
+                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-extrabold text-[#DE8626]">
+                        <span className="h-1.5 w-1.5 rounded-full bg-[#DE8626] animate-pulse" />
+                        Kitchen Active
+                      </span>
+                    </div>
                     <span className="text-[10px] text-[#667085] dark:text-[#94A3B8]">
-                      {activeTableOrder.items?.length || 0} active item{(activeTableOrder.items?.length || 0) !== 1 ? 's' : ''} in kitchen
+                      Order #{activeTableOrder.orderNumber || activeTableOrder.id} • {activeTableOrder.items?.length || 0} dishes placed
                     </span>
                   </div>
                 </div>
                 <button
                   type="button"
-                  onClick={() => setShowRunningTableDetails(!showRunningTableDetails)}
-                  className="flex items-center gap-1 text-[11px] font-bold text-[#DE8626] hover:underline"
+                  onClick={handlePrintGuestCheck}
+                  className="flex items-center gap-1 rounded-xl border border-[#DE8626] bg-white dark:bg-[#1B2127] px-2.5 py-1 text-[11px] font-bold text-[#DE8626] hover:bg-amber-500/10 transition-colors shadow-2xs shrink-0"
+                  title="Print Proforma / Guest Check Slip"
                 >
-                  <span>{showRunningTableDetails ? 'Hide' : 'View'}</span>
-                  {showRunningTableDetails ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                  <Printer className="h-3 w-3" />
+                  <span>Bill Slip</span>
                 </button>
               </div>
 
-              {showRunningTableDetails && (
-                <div className="mt-1 pt-1.5 border-t border-amber-500/20 max-h-36 overflow-y-auto space-y-1 text-xs">
-                  {(activeTableOrder.items || []).map((it: any, idx: number) => (
-                    <div key={idx} className="flex justify-between items-center text-[11px] text-[#1E2930] dark:text-[#F3F4F6]">
-                      <span>{it.quantity}x {it.itemName}</span>
-                      <span className="font-semibold">₹{((it.unitPrice || it.amount || 0) * (it.quantity || 1)).toFixed(2)}</span>
-                    </div>
-                  ))}
-                  <div className="flex justify-between font-bold pt-1 border-t border-amber-500/20 text-[#DE8626]">
-                    <span>Previous Tab Total:</span>
-                    <span>₹{existingTableTotal.toFixed(2)}</span>
+              {/* Running Dishes List */}
+              <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+                {(activeTableOrder.items || []).map((it: any, idx: number) => (
+                  <div
+                    key={idx}
+                    className="flex justify-between items-center text-xs py-1 px-2.5 rounded-xl bg-white/70 dark:bg-[#1B2127]/70 border border-[#E7E1DA]/60 dark:border-[#2B3540]/60"
+                  >
+                    <span className="font-semibold text-[#1E2930] dark:text-[#F3F4F6]">
+                      {it.quantity}x {it.itemName}
+                    </span>
+                    <span className="font-bold text-[#DE8626]">
+                      ₹{((it.unitPrice || it.amount || 0) * (it.quantity || 1)).toFixed(2)}
+                    </span>
                   </div>
-                </div>
-              )}
+                ))}
+              </div>
+
+              <div className="flex justify-between items-center font-bold text-xs pt-1.5 border-t border-amber-500/20 text-[#DE8626]">
+                <span>Running Order Total:</span>
+                <span className="text-sm font-black">₹{existingTableTotal.toFixed(2)}</span>
+              </div>
             </div>
           )}
         </div>
@@ -1358,7 +1478,9 @@ export default function PosPage() {
         {/* Cart Items List */}
         <div className="p-3 sm:p-3.5 space-y-2.5 bg-[#FAF7F2]/40 dark:bg-[#111418]/40">
           <div className="flex items-center justify-between text-xs font-bold text-[#667085] dark:text-[#94A3B8] px-0.5">
-            <span>ITEMS IN ORDER ({cartTotalItems})</span>
+            <span>
+              {activeTableOrder ? `NEW ADD-ON DISHES (${cartTotalItems})` : `ITEMS IN ORDER (${cartTotalItems})`}
+            </span>
             {cart.length > 0 && (
               <button
                 type="button"
@@ -1371,96 +1493,97 @@ export default function PosPage() {
           </div>
 
           {cart.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-8 px-4 text-center rounded-2xl border border-dashed border-[#E7E1DA] dark:border-[#2B3540] bg-white/60 dark:bg-[#1B2127]/60">
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-500/10 text-[#DE8626] mb-2 shadow-2xs">
-                <ShoppingBag className="h-5 w-5" />
+            <div className={`flex flex-col items-center justify-center py-6 px-4 text-center rounded-2xl border border-dashed transition-all ${
+              activeTableOrder
+                ? 'border-amber-500/40 bg-amber-500/5'
+                : 'border-[#E7E1DA] dark:border-[#2B3540] bg-white/60 dark:bg-[#1B2127]/60'
+            }`}>
+              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-500/10 text-[#DE8626] mb-2 shadow-2xs">
+                {activeTableOrder ? <Plus className="h-5 w-5 stroke-[2.5]" /> : <ShoppingBag className="h-5 w-5" />}
               </div>
-              <p className="font-extrabold text-xs text-[#1E2930] dark:text-[#F3F4F6]">Your cart is empty</p>
+              <p className="font-extrabold text-xs text-[#1E2930] dark:text-[#F3F4F6]">
+                {activeTableOrder ? 'Ready for Add-on Dishes' : 'Your cart is empty'}
+              </p>
               <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] mt-0.5 max-w-xs">
-                Tap on any dish from the catalog to add items
+                {activeTableOrder
+                  ? `Table T-${selectedTable?.tableNumber} is running. Tap any dish on the menu catalog to add Round 2 items, then send Add-on KOT.`
+                  : 'Tap on any dish from the catalog to add items'}
               </p>
             </div>
           ) : (
             cart.map((item) => (
               <div
                 key={item.cartKey}
-                className="group relative flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-2.5 sm:p-3 shadow-2xs hover:border-[#DE8626]/40 hover:shadow-xs transition-all"
+                className="group relative rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-2.5 sm:p-3 shadow-2xs hover:border-[#DE8626]/50 hover:shadow-xs transition-all space-y-2"
               >
-                {/* Left: Thumbnail + Dish Details */}
-                <div className="flex items-start gap-2.5 min-w-0 flex-1">
-                  {/* Thumbnail Image / Fallback */}
-                  <div className="h-10 w-10 sm:h-11 sm:w-11 relative rounded-xl overflow-hidden bg-amber-500/10 dark:bg-amber-500/5 border border-[#DE8626]/20 shrink-0 flex items-center justify-center">
-                    {item.imageUrl ? (
-                      <Image
-                        src={item.imageUrl}
-                        alt={item.itemName}
-                        fill
-                        className="object-cover"
-                        onError={(e) => {
-                          (e.target as any).style.display = 'none';
-                        }}
-                      />
-                    ) : (
-                      <Utensils className="h-4 w-4 text-[#DE8626]" />
-                    )}
-                  </div>
+                {/* Upper Tier: Dish Name + Diet Indicator + Portions + Line Total */}
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-start gap-2 min-w-0 flex-1">
+                    {/* Small Diet Indicator */}
+                    <span
+                      className={`mt-1 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-xs border ${
+                        item.isVeg ? 'border-emerald-600/40 bg-emerald-500/10' : 'border-rose-600/40 bg-rose-500/10'
+                      }`}
+                      title={item.isVeg ? 'Vegetarian' : 'Non-Vegetarian'}
+                    >
+                      <span className={`h-1.5 w-1.5 rounded-full ${item.isVeg ? 'bg-[#17845A]' : 'bg-[#DC2626]'}`} />
+                    </span>
 
-                  {/* Details */}
-                  <div className="min-w-0 flex-1 space-y-0.5">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span
-                        className={`h-2 w-2 rounded-full shrink-0 ${
-                          item.isVeg ? 'bg-[#17845A]' : 'bg-[#DC2626]'
-                        }`}
-                        title={item.isVeg ? 'Vegetarian' : 'Non-Vegetarian'}
-                      />
-                      <h4 className="font-bold text-xs sm:text-sm text-[#1E2930] dark:text-[#F3F4F6] truncate max-w-[190px] sm:max-w-none">
+                    {/* Name & Portions / Modifiers */}
+                    <div className="min-w-0 flex-1">
+                      <h4 className="font-extrabold text-xs sm:text-[13px] text-[#1E2930] dark:text-[#F3F4F6] leading-snug line-clamp-2">
                         {item.itemName}
                       </h4>
-                    </div>
-
-                    <div className="flex items-center gap-1.5 text-[11px] text-[#78716C] dark:text-[#94A3B8] flex-wrap">
-                      <span className="font-bold text-[#DE8626]">₹{item.price.toFixed(2)}</span>
-                      {item.portionLabel && (
-                        <>
-                          <span>•</span>
-                          <span className="truncate">{item.portionLabel}</span>
-                        </>
-                      )}
-                      {item.stationName && (
-                        <>
-                          <span>•</span>
-                          <span className="text-[10px] bg-black/5 dark:bg-white/5 px-1.5 py-0.2 rounded-md font-medium text-[#667085] truncate">
-                            {item.stationName}
-                          </span>
-                        </>
-                      )}
-                    </div>
-
-                    {item.modifiers && item.modifiers.length > 0 && (
-                      <div className="flex flex-wrap gap-1 pt-0.5">
-                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-500/10 border border-[#DE8626]/30 text-[10px] font-bold text-[#DE8626]">
-                          + {item.modifiers.map((m) => m.modifierName).join(', ')}
-                        </span>
+                      <div className="flex items-center gap-1.5 text-[10px] text-[#667085] dark:text-[#94A3B8] mt-0.5 flex-wrap">
+                        <span className="font-semibold text-[#DE8626]">₹{item.price.toFixed(2)}</span>
+                        {item.portionLabel && (
+                          <>
+                            <span>•</span>
+                            <span className="font-medium text-[#1E2930] dark:text-[#F3F4F6]">{item.portionLabel}</span>
+                          </>
+                        )}
+                        {item.stationName && (
+                          <>
+                            <span>•</span>
+                            <span className="bg-black/5 dark:bg-white/5 px-1 py-0.2 rounded text-[9px]">
+                              {item.stationName}
+                            </span>
+                          </>
+                        )}
                       </div>
-                    )}
 
-                    {item.notes && (
-                      <p className="text-[10px] text-[#8C7A6B] dark:text-[#94A3B8] italic truncate">
-                        "{item.notes}"
-                      </p>
-                    )}
+                      {item.modifiers && item.modifiers.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-amber-500/10 border border-[#DE8626]/20 text-[9px] font-bold text-[#DE8626]">
+                            + {item.modifiers.map((m) => m.modifierName).join(', ')}
+                          </span>
+                        </div>
+                      )}
+
+                      {item.notes && (
+                        <p className="text-[10px] text-[#8C7A6B] dark:text-[#94A3B8] italic mt-0.5 line-clamp-1">
+                          "{item.notes}"
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Line Total Price */}
+                  <div className="text-right shrink-0">
+                    <span className="text-xs sm:text-sm font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                      ₹{(item.price * item.quantity).toFixed(2)}
+                    </span>
                   </div>
                 </div>
 
-                {/* Right: Stepper + Line Total + Trash */}
-                <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0 pt-1.5 sm:pt-0 border-t sm:border-t-0 border-[#E7E1DA]/50 dark:border-[#2B3540]/50">
+                {/* Lower Tier: Stepper Controls + Delete Trash Icon */}
+                <div className="flex items-center justify-between pt-1.5 border-t border-[#E7E1DA]/50 dark:border-[#2B3540]/50">
                   {/* Stepper with Numpad Modal trigger */}
-                  <div className="flex items-center rounded-xl bg-amber-500/10 dark:bg-amber-500/5 border border-[#DE8626]/30 p-0.5 shadow-2xs">
+                  <div className="flex items-center rounded-xl bg-[#FAF7F2] dark:bg-[#151A20] border border-[#E7E1DA] dark:border-[#2B3540] p-0.5 shadow-2xs">
                     <button
                       type="button"
                       onClick={() => updateQuantity(item.cartKey, -1)}
-                      className="h-7 w-7 flex items-center justify-center rounded-lg text-[#DE8626] hover:bg-[#DE8626] hover:text-white active:scale-95 transition-all"
+                      className="h-6 w-6 sm:h-6.5 sm:w-6.5 flex items-center justify-center rounded-lg text-[#667085] hover:bg-[#DE8626] hover:text-white active:scale-95 transition-all"
                       title="Decrease quantity"
                     >
                       <Minus className="h-3 w-3 stroke-[3]" />
@@ -1478,7 +1601,7 @@ export default function PosPage() {
                           description: item.description,
                         })
                       }
-                      className="min-w-[28px] sm:min-w-[32px] h-6 px-1.5 flex items-center justify-center rounded-md bg-white dark:bg-[#1B2127] text-xs font-black text-[#1E2930] dark:text-[#F3F4F6] shadow-2xs border border-[#DE8626]/25 hover:border-[#DE8626] transition-colors"
+                      className="min-w-[28px] sm:min-w-[32px] h-5 sm:h-5.5 px-1.5 flex items-center justify-center rounded-md bg-white dark:bg-[#1B2127] text-xs font-black text-[#1E2930] dark:text-[#F3F4F6] shadow-2xs border border-[#DE8626]/25 hover:border-[#DE8626] transition-colors"
                       title="Click to enter exact quantity via numpad"
                     >
                       {item.quantity}
@@ -1487,28 +1610,22 @@ export default function PosPage() {
                     <button
                       type="button"
                       onClick={() => updateQuantity(item.cartKey, 1)}
-                      className="h-7 w-7 flex items-center justify-center rounded-lg text-[#DE8626] hover:bg-[#DE8626] hover:text-white active:scale-95 transition-all"
+                      className="h-6 w-6 sm:h-6.5 sm:w-6.5 flex items-center justify-center rounded-lg text-[#667085] hover:bg-[#DE8626] hover:text-white active:scale-95 transition-all"
                       title="Increase quantity"
                     >
                       <Plus className="h-3 w-3 stroke-[3]" />
                     </button>
                   </div>
 
-                  {/* Line Total */}
-                  <div className="text-right min-w-[55px]">
-                    <span className="text-xs sm:text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6] block">
-                      ₹{(item.price * item.quantity).toFixed(2)}
-                    </span>
-                  </div>
-
-                  {/* Delete Button */}
+                  {/* Remove Item Button */}
                   <button
                     type="button"
                     onClick={() => updateQuantity(item.cartKey, -item.quantity)}
-                    className="h-7 w-7 flex items-center justify-center rounded-lg text-red-500 hover:text-red-700 hover:bg-red-500/10 active:scale-95 transition-all"
+                    className="flex items-center gap-1 text-[11px] font-semibold text-red-500 hover:text-red-700 hover:bg-red-500/10 px-2 py-1 rounded-lg transition-all"
                     title="Remove item"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
+                    <span>Remove</span>
                   </button>
                 </div>
               </div>
@@ -1526,8 +1643,8 @@ export default function PosPage() {
             </div>
           )}
 
-          {/* Subtotal & Taxes Summary */}
-          <div className="space-y-1 text-xs">
+          {/* Subtotal & Taxes Summary Card */}
+          <div className="space-y-1.5 text-xs bg-[#FAF7F2] dark:bg-[#151A20] p-3 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540]">
             {activeTableOrder && (
               <div className="flex justify-between text-amber-600 dark:text-amber-400 font-semibold">
                 <span>Running Tab Total</span>
@@ -1537,7 +1654,7 @@ export default function PosPage() {
             {cart.length > 0 && (
               <>
                 <div className="flex justify-between text-[#667085] dark:text-[#94A3B8]">
-                  <span>Subtotal (Item Total)</span>
+                  <span>Subtotal ({cartTotalItems} items)</span>
                   <span className="font-semibold text-[#1E2930] dark:text-[#F3F4F6]">₹{subtotal.toFixed(2)}</span>
                 </div>
                 {hasGstNumber ? (
@@ -1554,161 +1671,228 @@ export default function PosPage() {
                 ) : null}
               </>
             )}
-            <div className="flex justify-between text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6] pt-1.5 border-t border-[#E7E1DA] dark:border-[#2B3540]">
+            <div className="flex justify-between items-baseline text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6] pt-2 border-t border-[#E7E1DA] dark:border-[#2B3540]">
               <div>
-                <span>Grand Total</span>
+                <span className="font-black text-xs sm:text-sm">Payable Amount</span>
                 {!hasGstNumber && (
-                  <span className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-normal block">(incl. of all taxes)</span>
+                  <span className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-normal block">(incl. of taxes)</span>
                 )}
               </div>
-              <span className="text-[#DE8626]">₹{payableGrandTotal.toFixed(2)}</span>
+              <span className="text-base sm:text-lg font-black text-[#DE8626]">₹{payableGrandTotal.toFixed(2)}</span>
             </div>
           </div>
 
-          {/* Dynamic Flow: Dine-In Pay Later vs Pay Now */}
-          {selectedOrderType === 1 && selectedTable && dineInPaymentFlow === 'pay_later' ? (
-            <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3 space-y-2">
-              <div className="flex items-center gap-2">
-                <Utensils className="h-4 w-4 text-[#DE8626] shrink-0" />
-                <div className="min-w-0">
-                  <p className="text-xs font-bold text-[#DE8626]">DINE-IN ORDER • PAY LATER</p>
-                  <p className="text-[10px] text-[#667085] dark:text-[#94A3B8] leading-tight">
-                    Dishes will be sent to Kitchen (KOT). Payment mode will be selected at table checkout.
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setDineInPaymentFlow('pay_now')}
-                className="text-[11px] font-bold text-[#DE8626] hover:underline block"
-              >
-                Guest paying upfront? Switch to Pay & Settle Now →
-              </button>
-            </div>
-          ) : (
-            <div className="space-y-2.5 pt-1 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60">
-              {/* Payment Mode Selector */}
-              <div>
-                <span className="text-[10px] font-extrabold text-[#667085] dark:text-[#94A3B8] uppercase block mb-1">
-                  PAYMENT METHOD FOR SETTLEMENT
-                </span>
-                <div className="grid grid-cols-3 gap-1.5">
-                  {[
-                    { key: 'CASH', label: 'Cash' },
-                    { key: 'UPI', label: 'UPI / QR' },
-                    { key: 'CARD', label: 'Card' },
-                  ].map((m) => (
+          <div className="space-y-2.5 pt-1 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60">
+            {/* Payment Mode Selector with Icons */}
+            <div>
+              <span className="text-[10px] font-extrabold text-[#667085] dark:text-[#94A3B8] uppercase tracking-wider block mb-1.5">
+                Payment Method
+              </span>
+              <div className="grid grid-cols-3 gap-1.5">
+                {[
+                  { key: 'CASH', label: 'Cash', icon: IndianRupee },
+                  { key: 'UPI', label: 'UPI / QR', icon: QrCode },
+                  { key: 'CARD', label: 'Card', icon: CreditCard },
+                ].map((m) => {
+                  const Icon = m.icon;
+                  const isSelected = selectedPaymentMode === m.key;
+                  return (
                     <button
                       key={m.key}
                       type="button"
                       onClick={() => setSelectedPaymentMode(m.key)}
-                      className={`py-2 text-xs font-bold rounded-xl border transition-all ${
-                        selectedPaymentMode === m.key
-                          ? 'border-[#DE8626] bg-[#DE8626] text-white shadow-xs'
+                      className={`flex items-center justify-center gap-1.5 py-2 px-1 text-xs font-bold rounded-xl border transition-all ${
+                        isSelected
+                          ? 'border-[#DE8626] bg-[#DE8626] text-white shadow-sm shadow-[#DE8626]/20'
                           : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#1E2930] dark:text-[#F3F4F6] hover:border-[#DE8626]/50'
                       }`}
                     >
-                      {m.label}
+                      <Icon className="h-3.5 w-3.5 shrink-0" />
+                      <span>{m.label}</span>
                     </button>
-                  ))}
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Cash Tendered & Change Return */}
+            {selectedPaymentMode === 'CASH' && (
+              <div className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-2.5 space-y-2">
+                <div className="flex items-center justify-between text-xs font-semibold">
+                  <span className="text-[#667085] dark:text-[#94A3B8]">Cash Received</span>
+                  {posNumericTendered > 0 && (
+                    <span
+                      className={`text-[11px] font-black px-2 py-0.5 rounded-full ${
+                        posNumericTendered >= payableGrandTotal
+                          ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30'
+                          : 'bg-red-500/15 text-red-700 dark:text-red-400 border border-red-500/30'
+                      }`}
+                    >
+                      {posNumericTendered >= payableGrandTotal
+                        ? `Change: ₹${posChangeToReturn.toFixed(2)}`
+                        : `Short: ₹${(payableGrandTotal - posNumericTendered).toFixed(2)}`}
+                    </span>
+                  )}
+                </div>
+
+                <div className="relative">
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 font-extrabold text-xs text-[#DE8626]">₹</span>
+                  <input
+                    type="number"
+                    value={posTenderedText}
+                    onChange={(e) => setPosTenderedText(e.target.value)}
+                    placeholder={payableGrandTotal.toFixed(0)}
+                    className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] pl-7 pr-3 py-1.5 text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
+                  />
+                </div>
+
+                {/* Preset Chips */}
+                <div className="flex flex-wrap gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setPosTenderedText(payableGrandTotal.toFixed(0))}
+                    className="rounded-lg border border-[#DE8626] bg-amber-500/10 px-2.5 py-1 text-[10px] font-extrabold text-[#DE8626] hover:bg-[#DE8626] hover:text-white transition-colors"
+                  >
+                    Exact (₹{payableGrandTotal.toFixed(0)})
+                  </button>
+                  {[
+                    Math.ceil((payableGrandTotal + 1) / 50) * 50,
+                    Math.ceil((payableGrandTotal + 1) / 100) * 100,
+                    500,
+                  ]
+                    .filter((val, idx, arr) => val > payableGrandTotal && arr.indexOf(val) === idx)
+                    .slice(0, 2)
+                    .map((val) => (
+                      <button
+                        key={`pill-${val}`}
+                        type="button"
+                        onClick={() => setPosTenderedText(val.toString())}
+                        className="rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-2.5 py-1 text-[10px] font-semibold text-[#1E2930] dark:text-[#F3F4F6] hover:border-[#DE8626] transition-colors"
+                      >
+                        ₹{val}
+                      </button>
+                    ))}
                 </div>
               </div>
-
-              {/* Cash Tendered & Change Return */}
-              {selectedPaymentMode === 'CASH' && (
-                <div className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-2.5 space-y-2">
-                  <div className="flex items-center justify-between text-xs font-semibold">
-                    <span className="text-[#667085]">Cash Tendered</span>
-                    {posNumericTendered > 0 && (
-                      <span
-                        className={`text-[11px] font-extrabold px-2 py-0.5 rounded-full ${
-                          posNumericTendered >= payableGrandTotal
-                            ? 'bg-emerald-500/10 text-emerald-600'
-                            : 'bg-red-500/10 text-red-600'
-                        }`}
-                      >
-                        {posNumericTendered >= payableGrandTotal
-                          ? `Change: ₹${posChangeToReturn.toFixed(2)}`
-                          : `Short: ₹${(payableGrandTotal - posNumericTendered).toFixed(2)}`}
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="relative">
-                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 font-bold text-xs text-[#DE8626]">₹</span>
-                    <input
-                      type="number"
-                      value={posTenderedText}
-                      onChange={(e) => setPosTenderedText(e.target.value)}
-                      placeholder={payableGrandTotal.toFixed(0)}
-                      className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] pl-7 pr-3 py-1.5 text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6] outline-none"
-                    />
-                  </div>
-
-                  {/* Preset Chips */}
-                  <div className="flex flex-wrap gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setPosTenderedText(payableGrandTotal.toFixed(0))}
-                      className="rounded-lg border border-[#DE8626] bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-[#DE8626]"
-                    >
-                      Exact
-                    </button>
-                    {[
-                      Math.ceil((payableGrandTotal + 1) / 50) * 50,
-                      Math.ceil((payableGrandTotal + 1) / 100) * 100,
-                      500,
-                    ]
-                      .filter((val, idx, arr) => val > payableGrandTotal && arr.indexOf(val) === idx)
-                      .slice(0, 2)
-                      .map((val) => (
-                        <button
-                          key={`pill-${val}`}
-                          type="button"
-                          onClick={() => setPosTenderedText(val.toString())}
-                          className="rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-2 py-0.5 text-[10px] font-semibold"
-                        >
-                          ₹{val}
-                        </button>
-                      ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Switch back link for Dine-in */}
-              {selectedOrderType === 1 && selectedTable && (
-                <button
-                  type="button"
-                  onClick={() => setDineInPaymentFlow('pay_later')}
-                  className="text-[11px] font-bold text-[#DE8626] hover:underline block"
-                >
-                  ← Switch back to Pay Later (Send KOT)
-                </button>
-              )}
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
 
       {/* 2. STICKY ACTION BUTTONS PINNED AT BOTTOM */}
       <div className="shrink-0 p-3 sm:p-3.5 border-t border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] shadow-lg space-y-2">
-        {selectedOrderType === 1 && selectedTable && dineInPaymentFlow === 'pay_later' ? (
-          /* Dine-In Primary Full-Width Action: Send to Kitchen */
-          <button
-            type="button"
-            disabled={cart.length === 0 || isKotLoading || isSettling}
-            onClick={() => handleCheckout(PosCheckoutModes.KOT_PAY_LATER)}
-            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-amber-500 via-[#DE8626] to-[#CB741B] py-3.5 text-xs font-bold text-white shadow-md shadow-[#DE8626]/20 hover:brightness-105 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-          >
-            {isKotLoading ? (
-              <span>Sending to Kitchen...</span>
-            ) : (
-              <>
-                <Printer className="h-4 w-4" />
-                <span>Send to Kitchen (KOT) 🍳 [F3]</span>
-              </>
-            )}
-          </button>
+        {selectedOrderType === 1 && selectedTable ? (
+          /* ==================================================== */
+          /* DINE-IN TABLE ORDER ACTIONS                          */
+          /* ==================================================== */
+          activeTableOrder && cart.length === 0 ? (
+            /* Scenario A: Table is running, no new cart items staged */
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-[11px] font-bold px-2.5 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[#DE8626]">
+                <span className="flex items-center gap-1.5">
+                  <Utensils className="h-3.5 w-3.5 shrink-0" />
+                  <span>Tap dishes on menu to send Add-on KOT</span>
+                </span>
+                <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md bg-[#DE8626] text-white">
+                  Multi-Round KOT
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={handlePrintGuestCheck}
+                  className="flex items-center justify-center gap-1.5 rounded-2xl border border-[#DE8626] bg-amber-500/10 py-3.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-all shadow-xs"
+                  title="Print Guest Check / Proforma Slip"
+                >
+                  <Printer className="h-4 w-4" />
+                  <span>Print Bill Slip</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={isSettling}
+                  onClick={() => handleCheckout(PosCheckoutModes.PAY_AND_SETTLE)}
+                  className="flex items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-emerald-600 via-emerald-700 to-emerald-800 py-3.5 text-xs font-bold text-white shadow-md shadow-emerald-600/20 hover:brightness-105 disabled:opacity-40 transition-all"
+                >
+                  {isSettling ? (
+                    <span>Settling...</span>
+                  ) : (
+                    <>
+                      <Receipt className="h-4 w-4" />
+                      <span>Settle Bill ₹{payableGrandTotal.toFixed(2)} [F2]</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          ) : activeTableOrder && cart.length > 0 ? (
+            /* Scenario B: Table is running AND cashier has staged new add-on dishes */
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                disabled={isKotLoading || isSettling}
+                onClick={() => handleCheckout(PosCheckoutModes.KOT_PAY_LATER)}
+                className="flex items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-amber-500 via-[#DE8626] to-[#CB741B] py-3.5 text-xs font-bold text-white shadow-md shadow-[#DE8626]/20 hover:brightness-105 disabled:opacity-40 transition-all"
+              >
+                {isKotLoading ? (
+                  <span>Sending...</span>
+                ) : (
+                  <>
+                    <Printer className="h-4 w-4" />
+                    <span>Send Add-on KOT 🍳 [F3]</span>
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                disabled={isSettling}
+                onClick={() => handleCheckout(PosCheckoutModes.PAY_AND_SETTLE)}
+                className="flex items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-emerald-600 via-emerald-700 to-emerald-800 py-3.5 text-xs font-bold text-white shadow-md shadow-emerald-600/20 hover:brightness-105 disabled:opacity-40 transition-all"
+              >
+                {isSettling ? (
+                  <span>Settling...</span>
+                ) : (
+                  <>
+                    <Receipt className="h-4 w-4" />
+                    <span>Settle All ₹{payableGrandTotal.toFixed(2)} [F2]</span>
+                  </>
+                )}
+              </button>
+            </div>
+          ) : (
+            /* Scenario C: Fresh table seating (first round) */
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                disabled={cart.length === 0 || isKotLoading || isSettling}
+                onClick={() => handleCheckout(PosCheckoutModes.KOT_PAY_LATER)}
+                className="flex items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-amber-500 via-[#DE8626] to-[#CB741B] py-3.5 text-xs font-bold text-white shadow-md shadow-[#DE8626]/20 hover:brightness-105 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              >
+                {isKotLoading ? (
+                  <span>Sending...</span>
+                ) : (
+                  <>
+                    <Utensils className="h-4 w-4" />
+                    <span>Send to Kitchen (KOT) 🍳 [F3]</span>
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                disabled={cart.length === 0 || isSettling}
+                onClick={() => handleCheckout(PosCheckoutModes.PAY_AND_SETTLE)}
+                className="flex items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-emerald-600 via-emerald-700 to-emerald-800 py-3.5 text-xs font-bold text-white shadow-md shadow-emerald-600/20 hover:brightness-105 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              >
+                {isSettling ? (
+                  <span>Settling...</span>
+                ) : (
+                  <>
+                    <IndianRupee className="h-4 w-4" />
+                    <span>Pay & Settle ₹{payableGrandTotal.toFixed(2)} [F2]</span>
+                  </>
+                )}
+              </button>
+            </div>
+          )
         ) : (
           /* Standard Counter / Upfront Settle Actions */
           <>
@@ -1765,13 +1949,13 @@ export default function PosPage() {
   return (
     <AuthGuard>
       <AppShell>
-        <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden bg-[#FAF7F2] dark:bg-[#111418]">
+        <div className="flex flex-1 h-full min-h-0 flex-col overflow-hidden bg-[#FAF7F2] dark:bg-[#111418]">
           {/* ======================================================== */}
           {/* 1. WARNING BANNERS (GRACE, EXHAUSTED WALLET, INACTIVE)   */}
           {/* ======================================================== */}
           <div className="shrink-0 px-3 pt-1.5 space-y-1">
             {/* Subscription Grace Banner */}
-            <SubscriptionGraceBanner onRenewPress={() => setSubscriptionModalOpen(true)} />
+            <SubscriptionGraceBanner onRenewPress={openRenewalModal} />
 
             {/* Prepaid Wallet Exhausted Banner */}
             {((restaurantConfig?.walletBalance !== undefined && restaurantConfig.walletBalance <= 0) ||
@@ -1851,11 +2035,20 @@ export default function PosPage() {
                         <Utensils className="h-4 w-4" />
                       </div>
                       <div className="min-w-0">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <span className="text-xs font-black text-[#DE8626] uppercase">DINE-IN ORDER</span>
                           <span className="rounded-md bg-[#DE8626] px-1.5 py-0.5 text-[10px] font-extrabold text-white">
                             Table {selectedTable.tableNumber}
                           </span>
+                          {activeTableOrder ? (
+                            <span className="rounded-md bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30 px-1.5 py-0.5 text-[10px] font-bold">
+                              Active KOT (Order #{activeTableOrder.id})
+                            </span>
+                          ) : (
+                            <span className="rounded-md bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 px-1.5 py-0.5 text-[10px] font-bold">
+                              Fresh Seating
+                            </span>
+                          )}
                         </div>
                         <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] truncate">
                           Section: <strong className="text-[#1E2930] dark:text-[#F3F4F6]">{selectedTable.sectionName || 'Main Hall'}</strong> • Printed on Bill & KOT
@@ -1863,95 +2056,133 @@ export default function PosPage() {
                       </div>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedTable(null);
-                        setActiveTableOrder(null);
-                        if (typeof window !== 'undefined') {
-                          const url = new URL(window.location.href);
-                          url.searchParams.delete('tableId');
-                          window.history.replaceState({}, '', url.toString());
-                        }
-                        const firstActive = orderTypes.find((t) => t.isActive)?.id || 4;
-                        setSelectedOrderType(firstActive);
-                      }}
-                      className="rounded-xl border border-[#DE8626] bg-white dark:bg-[#1B2127] px-3 py-1 text-xs font-bold text-[#DE8626] hover:bg-amber-500/10 transition-colors shadow-xs shrink-0"
-                      title="Clear table lock and return to standard POS"
-                    >
-                      Change
-                    </button>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={handleOpenTablePicker}
+                        className="rounded-xl border border-[#DE8626] bg-white dark:bg-[#1B2127] px-2.5 py-1 text-xs font-bold text-[#DE8626] hover:bg-amber-500/10 transition-colors shadow-xs flex items-center gap-1"
+                        title="Switch to another table or view active orders"
+                      >
+                        <span>Switch Table 🪑</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedTable(null);
+                          setActiveTableOrder(null);
+                          if (typeof window !== 'undefined') {
+                            const url = new URL(window.location.href);
+                            url.searchParams.delete('tableId');
+                            window.history.replaceState({}, '', url.toString());
+                          }
+                          const firstActive = orderTypes.find((t) => t.isActive && t.id !== 1)?.id || 4;
+                          setSelectedOrderType(firstActive);
+                        }}
+                        className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-2.5 py-1 text-xs font-bold text-[#667085] hover:text-red-500 transition-colors shadow-xs"
+                        title="Clear table lock and return to standard POS"
+                      >
+                        Exit
+                      </button>
+                    </div>
                   </div>
                 ) : (
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    {/* Dynamic Order Type Selector Chips */}
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {orderTypes.map((ot) => {
-                        const isSelected = selectedOrderType === ot.id;
-                        const isAllowed = ot.isAllowedByPlan;
-                        const isStoreEnabled = ot.isEnabledByStore;
-                        const isAvailable = ot.isActive;
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      {/* Dynamic Order Type Selector Chips */}
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {orderTypes.map((ot) => {
+                          const isSelected = selectedOrderType === ot.id;
+                          const isAllowed = ot.isAllowedByPlan;
+                          const isStoreEnabled = ot.isEnabledByStore;
+                          const isAvailable = ot.isActive;
 
-                        const renderIcon = () => {
-                          switch (ot.code) {
-                            case 'COUNTER':
-                              return <Store className="h-3.5 w-3.5" />;
-                            case 'DINE_IN':
-                              return <Utensils className="h-3.5 w-3.5" />;
-                            case 'TAKEAWAY':
-                              return <ShoppingBag className="h-3.5 w-3.5" />;
-                            case 'DELIVERY':
-                              return <Truck className="h-3.5 w-3.5" />;
-                            default:
-                              return <Store className="h-3.5 w-3.5" />;
-                          }
-                        };
+                          const renderIcon = () => {
+                            switch (ot.code) {
+                              case 'COUNTER':
+                                return <Store className="h-3.5 w-3.5" />;
+                              case 'DINE_IN':
+                                return <Utensils className="h-3.5 w-3.5" />;
+                              case 'TAKEAWAY':
+                                return <ShoppingBag className="h-3.5 w-3.5" />;
+                              case 'DELIVERY':
+                                return <Truck className="h-3.5 w-3.5" />;
+                              default:
+                                return <Store className="h-3.5 w-3.5" />;
+                            }
+                          };
 
-                        return (
-                          <button
-                            key={`order-type-${ot.id}`}
-                            type="button"
-                            onClick={() => {
-                              if (!isAllowed) {
-                                showAlert(
-                                  'Feature Locked 🔒',
-                                  `${ot.typeName} ordering is not included in your active subscription plan. Please upgrade to unlock this channel.`,
-                                  'warning',
-                                  'Upgrade Plan',
-                                  'Cancel',
-                                  openRenewalModal
-                                );
-                                return;
-                              }
-                              if (!isStoreEnabled) {
-                                showAlert(
-                                  'Channel Disabled ⚙️',
-                                  `${ot.typeName} ordering is currently disabled in your Store Settings. Enable it under Order Configuration.`,
-                                  'warning'
-                                );
-                                return;
-                              }
-                              setSelectedOrderType(ot.id);
-                            }}
-                            className={`flex items-center gap-1.5 rounded-xl px-2.5 sm:px-3 py-1.5 text-xs font-bold transition-all ${
-                              isSelected
-                                ? 'bg-gradient-to-r from-amber-500 to-[#DE8626] text-white shadow-xs shadow-[#DE8626]/20'
-                                : 'border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#667085] dark:text-[#94A3B8] hover:border-[#DE8626]'
-                            } ${!isAvailable ? 'opacity-60' : ''}`}
-                          >
-                            {renderIcon()}
-                            <span>{ot.typeName}</span>
-                            {!isAllowed && <Lock className="h-2.5 w-2.5 text-red-500" />}
-                          </button>
-                        );
-                      })}
+                          return (
+                            <button
+                              key={`order-type-${ot.id}`}
+                              type="button"
+                              onClick={() => {
+                                if (!isAllowed) {
+                                  showAlert(
+                                    'Feature Locked 🔒',
+                                    `${ot.typeName} ordering is not included in your active subscription plan. Please upgrade to unlock this channel.`,
+                                    'warning',
+                                    'Upgrade Plan',
+                                    'Cancel',
+                                    openRenewalModal
+                                  );
+                                  return;
+                                }
+                                if (!isStoreEnabled) {
+                                  showAlert(
+                                    'Channel Disabled ⚙️',
+                                    `${ot.typeName} ordering is currently disabled in your Store Settings. Enable it under Order Configuration.`,
+                                    'warning'
+                                  );
+                                  return;
+                                }
+                                setSelectedOrderType(ot.id);
+                                if ((ot.id === 1 || ot.code === 'DINE_IN') && !selectedTable) {
+                                  handleOpenTablePicker();
+                                }
+                              }}
+                              className={`flex items-center gap-1.5 rounded-xl px-2.5 sm:px-3 py-1.5 text-xs font-bold transition-all ${
+                                isSelected
+                                  ? 'bg-gradient-to-r from-amber-500 to-[#DE8626] text-white shadow-xs shadow-[#DE8626]/20'
+                                  : 'border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#667085] dark:text-[#94A3B8] hover:border-[#DE8626]'
+                              } ${!isAvailable ? 'opacity-60' : ''}`}
+                            >
+                              {renderIcon()}
+                              <span>{ot.typeName}</span>
+                              {!isAllowed && <Lock className="h-2.5 w-2.5 text-red-500" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Keyboard Shortcuts Hint */}
+                      <div className="hidden xl:flex items-center gap-1.5 text-[10px] text-[#667085] bg-[#FAF7F2] dark:bg-[#151A20] px-2.5 py-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540]">
+                        <Keyboard className="h-3.5 w-3.5 text-[#DE8626]" />
+                        <span>F1: Search • F2: Settle • F3: KOT • F4: Clear</span>
+                      </div>
                     </div>
 
-                    {/* Keyboard Shortcuts Hint */}
-                    <div className="hidden xl:flex items-center gap-1.5 text-[10px] text-[#667085] bg-[#FAF7F2] dark:bg-[#151A20] px-2.5 py-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540]">
-                      <Keyboard className="h-3.5 w-3.5 text-[#DE8626]" />
-                      <span>F1: Search • F2: Settle • F3: KOT • F4: Clear</span>
-                    </div>
+                    {/* Dine-In Table Picker Banner Prompt if Dine-In selected without a table */}
+                    {selectedOrderType === 1 && !selectedTable && (
+                      <div
+                        onClick={handleOpenTablePicker}
+                        className="flex items-center justify-between p-2.5 rounded-2xl border border-dashed border-[#DE8626] bg-amber-500/5 hover:bg-amber-500/10 cursor-pointer transition-all shadow-2xs"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-[#DE8626] text-white shadow-xs shrink-0">
+                            <Utensils className="h-4 w-4" />
+                          </div>
+                          <div>
+                            <p className="text-xs font-black text-[#DE8626]">No Table Selected for Dine-In</p>
+                            <p className="text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                              Click here to select an active table to add dishes, or seat guests at an available table
+                            </p>
+                          </div>
+                        </div>
+                        <span className="text-xs font-extrabold text-[#DE8626] px-3 py-1 rounded-xl bg-white dark:bg-[#1B2127] border border-[#DE8626]/30 shadow-2xs hover:bg-[#DE8626] hover:text-white transition-all shrink-0">
+                          Select Table 🪑
+                        </span>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -2036,7 +2267,7 @@ export default function PosPage() {
               </div>
 
               {/* Category Horizontal Scrolling Tabs */}
-              <div className="flex items-center gap-2 overflow-x-auto border-b border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] px-3 sm:px-4 py-2 shrink-0">
+              <div className="flex items-center gap-2 overflow-x-auto scrollbar-none border-b border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] px-3 sm:px-4 py-2 shrink-0">
                 <button
                   type="button"
                   onClick={() => setSelectedCategory(null)}
@@ -2112,7 +2343,7 @@ export default function PosPage() {
                           } ${!isAvailable ? 'opacity-60 cursor-not-allowed' : ''}`}
                         >
                           {/* Dish Image Banner */}
-                          <div className="relative h-28 sm:h-32 w-full overflow-hidden bg-amber-500/5 dark:bg-amber-500/5">
+                          <div className="relative h-24 sm:h-28 w-full overflow-hidden bg-amber-500/5 dark:bg-amber-500/5">
                             <DishImage
                               src={dish.imageUrl}
                               alt={dish.itemName}
@@ -2268,28 +2499,40 @@ export default function PosPage() {
             </div>
 
             {/* RIGHT SIDE: Pinned Desktop Checkout Drawer Panel (>= 1024px) */}
-            <div className="hidden lg:flex w-[360px] xl:w-[410px] 2xl:w-[440px] flex-col border-l border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] h-full overflow-hidden shrink-0">
+            <div className="hidden lg:flex w-[320px] xl:w-[360px] 2xl:w-[400px] flex-col border-l border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] h-full overflow-hidden shrink-0">
               {/* Drawer Header */}
               <div className="flex items-center justify-between border-b border-[#E7E1DA] dark:border-[#2B3540] px-3.5 py-2.5 sm:px-4 sm:py-3 bg-[#FAF7F2] dark:bg-[#151A20] shrink-0">
                 <div className="flex items-center gap-2">
-                  <ShoppingBag className="h-4 w-4 text-[#DE8626]" />
-                  <h3 className="text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6]">
-                    Order Cart ({cartTotalItems} items)
-                  </h3>
+                  <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-500/15 text-[#DE8626] shrink-0">
+                    <ShoppingBag className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <h3 className="text-xs sm:text-sm font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                        Order Cart
+                      </h3>
+                      <span className="rounded-full bg-[#DE8626] px-1.5 py-0.2 text-[10px] font-black text-white">
+                        {cartTotalItems}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-[#667085] dark:text-[#94A3B8]">
+                      {selectedTable ? `Table T-${selectedTable.tableNumber}` : 'Counter Quick Sale'}
+                    </p>
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5">
                   <button
                     type="button"
                     onClick={() => setParkedModalOpen(true)}
-                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-extrabold transition-all ${
+                    className={`flex items-center gap-1 px-2 py-1 rounded-xl text-[11px] font-extrabold border transition-all ${
                       parkedCarts.length > 0
-                        ? 'bg-amber-500/10 text-[#DE8626] border border-[#DE8626]/40 hover:bg-amber-500/20'
-                        : 'bg-black/5 dark:bg-white/5 text-[#667085] hover:text-[#1E2930]'
+                        ? 'bg-amber-500/10 text-[#DE8626] border-[#DE8626]/40 hover:bg-amber-500/20'
+                        : 'bg-black/5 dark:bg-white/5 border-transparent text-[#667085] hover:text-[#1E2930]'
                     }`}
                     title="View Held / Parked Carts"
                   >
-                    <Clock className="h-3.5 w-3.5" />
+                    <Clock className="h-3 w-3" />
                     <span>Held ({parkedCarts.length})</span>
                   </button>
 
@@ -2297,9 +2540,10 @@ export default function PosPage() {
                     <button
                       type="button"
                       onClick={clearCart}
-                      className="flex items-center gap-1 text-[11px] font-semibold text-red-500 hover:underline"
+                      className="flex items-center gap-1 text-[11px] font-bold text-red-500 hover:text-red-700 hover:bg-red-500/10 px-2 py-1 rounded-lg transition-colors"
+                      title="Clear Cart"
                     >
-                      <Trash2 className="h-3.5 w-3.5" />
+                      <Trash2 className="h-3 w-3" />
                       <span>Clear</span>
                     </button>
                   )}
@@ -2315,7 +2559,7 @@ export default function PosPage() {
           {/* 4. RESPONSIVE FLOATING CART STICKY BANNER (MOBILE/TABLET)*/}
           {/* ======================================================== */}
           {cart.length > 0 && (
-            <div className="lg:hidden fixed bottom-[74px] left-3 right-3 z-40">
+            <div className="lg:hidden fixed bottom-20 left-3 right-3 max-w-lg mx-auto z-40">
               <button
                 type="button"
                 onClick={() => setCartDrawerOpen(true)}
@@ -2359,32 +2603,46 @@ export default function PosPage() {
                 </div>
 
                 {/* Header */}
-                <div className="flex items-center justify-between px-4 py-2 border-b border-[#E7E1DA] dark:border-[#2B3540] shrink-0">
+                <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#E7E1DA] dark:border-[#2B3540] shrink-0 bg-[#FAF7F2] dark:bg-[#151A20]">
                   <div className="flex items-center gap-2">
-                    <ShoppingBag className="h-4 w-4 text-[#DE8626]" />
-                    <h3 className="text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6]">
-                      Order Cart ({cartTotalItems} items)
-                    </h3>
+                    <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-500/15 text-[#DE8626] shrink-0">
+                      <ShoppingBag className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <h3 className="text-xs sm:text-sm font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                          Order Cart
+                        </h3>
+                        <span className="rounded-full bg-[#DE8626] px-1.5 py-0.2 text-[10px] font-black text-white">
+                          {cartTotalItems}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-[#667085] dark:text-[#94A3B8]">
+                        {selectedTable ? `Table T-${selectedTable.tableNumber}` : 'Counter Quick Sale'}
+                      </p>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
                     <button
                       type="button"
                       onClick={() => setParkedModalOpen(true)}
-                      className="text-[11px] font-bold text-[#DE8626] bg-amber-500/10 px-2.5 py-0.5 rounded-full"
+                      className="text-[11px] font-bold text-[#DE8626] bg-amber-500/10 px-2.5 py-1 rounded-xl border border-amber-500/20"
                     >
                       Held ({parkedCarts.length})
                     </button>
-                    <button
-                      type="button"
-                      onClick={clearCart}
-                      className="text-xs font-bold text-red-500 hover:underline"
-                    >
-                      Clear
-                    </button>
+                    {cart.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={clearCart}
+                        className="text-xs font-bold text-red-500 hover:text-red-700 px-1.5"
+                      >
+                        Clear
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => setCartDrawerOpen(false)}
-                      className="rounded-lg p-1 text-[#8C7A6B]"
+                      className="rounded-xl p-1.5 text-[#667085] hover:bg-black/5 dark:hover:bg-white/5"
                     >
                       <X className="h-4 w-4" />
                     </button>
@@ -2513,6 +2771,16 @@ export default function PosPage() {
             onDiscard={handleDiscardParkedCart}
           />
 
+          {/* Dine-In Table Picker & Active Order Selector Modal */}
+          <TablePickerModal
+            isOpen={tablePickerModalOpen}
+            onClose={() => setTablePickerModalOpen(false)}
+            tables={tables}
+            currentSelectedTableId={selectedTable?.id}
+            onSelectTable={handleSelectTableFromModal}
+            onOpenFloorView={() => router.push('/tables')}
+          />
+
           {/* Store Operating Status Controls Modal */}
           <StoreOperatingStatusModal
             isOpen={operatingModalOpen}
@@ -2538,8 +2806,6 @@ export default function PosPage() {
             }}
           />
 
-          {/* Subscription Blocker / Renewal Modal */}
-          <SubscriptionBlockerModal />
 
           {/* Order Notification Drawer */}
           <OrderNotificationDrawer
@@ -2551,6 +2817,7 @@ export default function PosPage() {
                 if (matched) {
                   setSelectedTable(matched);
                   setSelectedOrderType(1);
+                  loadActiveTableOrder(tableId, true);
                 }
               }
               setNotificationDrawerOpen(false);

@@ -37,6 +37,7 @@ interface PosCatalogState {
   setActiveTableOrder: (tableId: number, order: OrderMaster | null) => void;
   getActiveTableOrder: (tableId: number, maxAgeMs?: number) => OrderMaster | null | undefined;
   invalidateActiveTableOrder: (tableId: number) => void;
+  freeTableInCatalog: (tableId: number) => void;
   invalidateCatalog: () => void;
 }
 
@@ -89,6 +90,18 @@ export const usePosCatalogStore = create<PosCatalogState>((set, get) => ({
       const copy = { ...state.activeTableOrders };
       delete copy[tableId];
       return { activeTableOrders: copy };
+    }),
+
+  freeTableInCatalog: (tableId) =>
+    set((state) => {
+      const copy = { ...state.activeTableOrders };
+      delete copy[tableId];
+      return {
+        tables: state.tables.map((t) =>
+          t.id === tableId ? { ...t, status: 'Available', activeOrderId: undefined } : t
+        ),
+        activeTableOrders: copy,
+      };
     }),
 
   invalidateCatalog: () => set({ hasLoaded: false, lastFetchedAt: 0, activeTableOrders: {} }),

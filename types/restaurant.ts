@@ -39,6 +39,9 @@ export interface RestaurantConfig {
   isSmsNotificationsEnabled?: boolean;
   isAutoKotPrintEnabled?: boolean;
   isAutoReceiptPrintEnabled?: boolean;
+  bankerUpiId?: string;
+  bankerAccountHolderName?: string;
+  printUpiQrOnReceipts?: boolean;
   operatingStatus?: StoreOperatingStatus;
 }
 

@@ -11,6 +11,8 @@ import {
   Check,
 } from 'lucide-react';
 import { usePrinterStore } from '@shared/presentation/state/usePrinterStore';
+import { useAuthStore } from '@shared/presentation/state/useAuthStore';
+import { usePosCatalogStore } from '@/stores/usePosCatalogStore';
 import { WebPrinterService } from '@/services/webPrinterService';
 
 interface WebPrinterModalProps {
@@ -58,6 +60,15 @@ export const WebPrinterModal: React.FC<WebPrinterModalProps> = ({
           grandTotal: 120,
           paymentMode: 'CASH',
           date: new Date().toLocaleString('en-IN'),
+          upiId: (
+            usePosCatalogStore.getState().restaurantConfig?.bankerUpiId ||
+            (useAuthStore.getState().activeRestaurant as any)?.bankerUpiId ||
+            'menzahospitality@icici'
+          ).trim(),
+          upiPayeeName:
+            usePosCatalogStore.getState().restaurantConfig?.bankerAccountHolderName ||
+            restaurantName,
+          showUpiQr: true,
           footerMessage: footerText,
         },
         paperWidth

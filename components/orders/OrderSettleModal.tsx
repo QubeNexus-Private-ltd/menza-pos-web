@@ -24,6 +24,7 @@ import { WebPrinterService } from '@/services/webPrinterService';
 import { WebWhatsAppService } from '@/services/whatsAppService';
 import { usePrinterStore } from '@shared/presentation/state/usePrinterStore';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
+import { usePosCatalogStore } from '@/stores/usePosCatalogStore';
 import { ReceiptData } from '@shared/core/printer/EscPosBuilder';
 
 interface OrderSettleModalProps {
@@ -202,6 +203,21 @@ export function OrderSettleModal({
       tenderedAmount: paymentMode === 'CASH' ? numericTendered : undefined,
       changeAmount: paymentMode === 'CASH' ? changeToReturn : undefined,
       date: new Date().toLocaleString('en-IN'),
+      upiId: (
+        usePosCatalogStore.getState().restaurantConfig?.bankerUpiId ||
+        (usePosCatalogStore.getState().restaurantConfig as any)?.upiId ||
+        (activeRestaurant as any)?.bankerUpiId ||
+        (activeRestaurant as any)?.upiId ||
+        ''
+      ).trim(),
+      upiPayeeName:
+        usePosCatalogStore.getState().restaurantConfig?.bankerAccountHolderName ||
+        usePosCatalogStore.getState().restaurantConfig?.restaurantName ||
+        activeRestaurant?.restaurantName ||
+        'Menza Restaurant',
+      showUpiQr:
+        usePosCatalogStore.getState().restaurantConfig?.printUpiQrOnReceipts !== false &&
+        (activeRestaurant as any)?.printUpiQrOnReceipts !== false,
       footerMessage: customFooter || 'Thank you! Please visit again.',
     };
   };

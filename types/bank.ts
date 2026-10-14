@@ -6,6 +6,10 @@ export interface RestaurantBankAccountRequest {
   pan?: string;
   email?: string;
   phoneNumber?: string;
+  upiId?: string;
+  printUpiQrOnReceipts?: boolean;
+  isRazorpay?: boolean;
+  gateway?: string;
 }
 
 export interface RestaurantBankAccountResponse {
@@ -15,9 +19,13 @@ export interface RestaurantBankAccountResponse {
   accountNumberMasked?: string;
   ifsc?: string;
   bankName?: string;
+  upiId?: string;
+  printUpiQrOnReceipts?: boolean;
   status?: string;
   kycStatus?: string;
   isActive: boolean;
+  gateway?: string;
+  isRazorpay?: boolean;
 }
 
 export interface VerifyBankAccountRequest {
@@ -25,6 +33,9 @@ export interface VerifyBankAccountRequest {
   ifsc: string;
   accountHolder?: string;
   phoneNumber?: string;
+  restaurantId?: number;
+  isRazorpay?: boolean;
+  gateway?: string;
 }
 
 export interface VerifyBankAccountResponse {
@@ -39,4 +50,6 @@ export interface VerifyBankAccountResponse {
   utr?: string;
   referenceId?: string;
   message: string;
+  gateway?: string;
+  isRazorpay?: boolean;
 }

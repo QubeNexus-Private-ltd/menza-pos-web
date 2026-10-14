@@ -549,80 +549,80 @@ export default function OrdersPage() {
           </div>
 
           {/* Quick Metrics Bar */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
             {/* KPI 1: Served & Ready for Bill */}
-            <div className="rounded-2xl border border-amber-300 dark:border-amber-500/30 bg-gradient-to-br from-amber-50 to-white dark:from-amber-950/20 dark:to-[#1B2127] p-5 shadow-xs">
+            <div className="rounded-2xl border border-amber-300 dark:border-amber-500/30 bg-gradient-to-br from-amber-50 to-white dark:from-amber-950/20 dark:to-[#1B2127] p-4 sm:p-4.5 shadow-xs transition-all hover:shadow-sm">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-amber-700 dark:text-amber-400 uppercase tracking-wider">
+                <span className="text-[11px] font-bold text-amber-700 dark:text-amber-400 uppercase tracking-wider">
                   Served • Ready to Settle
                 </span>
-                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-500/20 text-[#DE8626]">
-                  <Receipt className="h-4 w-4" />
+                <span className="flex h-7 w-7 items-center justify-center rounded-xl bg-amber-500/20 text-[#DE8626]">
+                  <Receipt className="h-3.5 w-3.5" />
                 </span>
               </div>
               <div className="mt-2 flex items-baseline gap-2">
-                <span className="text-2xl font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                <span className="text-xl sm:text-2xl font-black text-[#1E2930] dark:text-[#F3F4F6]">
                   {servedAwaitingCount} Orders
                 </span>
-                <span className="text-sm font-extrabold text-[#DE8626]">
+                <span className="text-xs sm:text-sm font-extrabold text-[#DE8626]">
                   (₹{servedAwaitingAmount.toLocaleString('en-IN')})
                 </span>
               </div>
-              <p className="mt-1 text-[11px] text-[#667085] dark:text-[#94A3B8]">
-                Dishes served by waitstaff / Menza Serve awaiting cashier payment
+              <p className="mt-1 text-[11px] text-[#667085] dark:text-[#94A3B8] truncate">
+                Dishes served awaiting cashier payment
               </p>
             </div>
 
             {/* KPI 2: Live In-Progress Queue */}
-            <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-5 shadow-xs">
+            <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-4 sm:p-4.5 shadow-xs transition-all hover:shadow-sm">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-[#667085] dark:text-[#94A3B8] uppercase tracking-wider">
+                <span className="text-[11px] font-bold text-[#667085] dark:text-[#94A3B8] uppercase tracking-wider">
                   Total Active Queue
                 </span>
-                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-blue-500/10 text-blue-600">
-                  <Clock className="h-4 w-4" />
+                <span className="flex h-7 w-7 items-center justify-center rounded-xl bg-blue-500/10 text-blue-600">
+                  <Clock className="h-3.5 w-3.5" />
                 </span>
               </div>
               <div className="mt-2 flex items-baseline gap-2">
-                <span className="text-2xl font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                <span className="text-xl sm:text-2xl font-black text-[#1E2930] dark:text-[#F3F4F6]">
                   {liveOrders.length}
                 </span>
                 <span className="text-xs text-[#667085]">tickets running</span>
               </div>
-              <p className="mt-1 text-[11px] text-[#667085] dark:text-[#94A3B8]">
-                Kitchen, takeaway & dine-in orders currently open
+              <p className="mt-1 text-[11px] text-[#667085] dark:text-[#94A3B8] truncate">
+                Kitchen, takeaway & dine-in orders open
               </p>
             </div>
 
             {/* KPI 3: Settled Today */}
-            <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-5 shadow-xs">
+            <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-4 sm:p-4.5 shadow-xs transition-all hover:shadow-sm">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-[#667085] dark:text-[#94A3B8] uppercase tracking-wider">
+                <span className="text-[11px] font-bold text-[#667085] dark:text-[#94A3B8] uppercase tracking-wider">
                   Settled Today
                 </span>
-                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-600">
-                  <CheckCircle2 className="h-4 w-4" />
+                <span className="flex h-7 w-7 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-600">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
                 </span>
               </div>
               <div className="mt-2 flex items-baseline gap-2">
-                <span className="text-2xl font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                <span className="text-xl sm:text-2xl font-black text-[#1E2930] dark:text-[#F3F4F6]">
                   ₹{totalSettledTodayAmount.toLocaleString('en-IN')}
                 </span>
                 <span className="text-xs text-emerald-600 font-bold">
                   ({historyOrders.filter((o) => isOrderSettled(o)).length} bills)
                 </span>
               </div>
-              <p className="mt-1 text-[11px] text-[#667085] dark:text-[#94A3B8]">
-                Completed payments collected across all terminals
+              <p className="mt-1 text-[11px] text-[#667085] dark:text-[#94A3B8] truncate">
+                Completed payments collected today
               </p>
             </div>
           </div>
 
           {/* Tab Navigation */}
-          <div className="flex border-b border-[#E7E1DA] dark:border-[#2B3540] gap-4">
+          <div className="flex border-b border-[#E7E1DA] dark:border-[#2B3540] gap-4 overflow-x-auto scrollbar-none">
             <button
               onClick={() => setActiveTab('LIVE')}
-              className={`flex items-center gap-2 border-b-2 py-3 px-1 text-sm font-bold transition-colors ${
+              className={`shrink-0 flex items-center gap-2 border-b-2 py-3 px-1 text-sm font-bold transition-colors ${
                 activeTab === 'LIVE'
                   ? 'border-[#DE8626] text-[#DE8626]'
                   : 'border-transparent text-[#667085] hover:text-[#1E2930] dark:hover:text-[#F3F4F6]'
@@ -637,7 +637,7 @@ export default function OrdersPage() {
 
             <button
               onClick={() => setActiveTab('HISTORY')}
-              className={`flex items-center gap-2 border-b-2 py-3 px-1 text-sm font-bold transition-colors ${
+              className={`shrink-0 flex items-center gap-2 border-b-2 py-3 px-1 text-sm font-bold transition-colors ${
                 activeTab === 'HISTORY'
                   ? 'border-[#DE8626] text-[#DE8626]'
                   : 'border-transparent text-[#667085] hover:text-[#1E2930] dark:hover:text-[#F3F4F6]'
@@ -677,7 +677,7 @@ export default function OrdersPage() {
                 </div>
 
                 {/* Status Pills */}
-                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+                <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none pb-1 sm:pb-0">
                   {[
                     { id: 'ALL', label: 'All Active' },
                     { id: 'SERVED', label: 'Served (Needs Bill)', highlight: true },
@@ -689,7 +689,7 @@ export default function OrdersPage() {
                     <button
                       key={filter.id}
                       onClick={() => setLiveStatusFilter(filter.id)}
-                      className={`rounded-xl px-3 py-1.5 text-xs font-bold whitespace-nowrap transition-colors ${
+                      className={`rounded-xl px-3 py-1.5 text-xs font-bold whitespace-nowrap transition-colors shrink-0 ${
                         liveStatusFilter === filter.id
                           ? filter.highlight
                             ? 'bg-amber-500 text-white shadow-xs'
@@ -727,7 +727,7 @@ export default function OrdersPage() {
                   No active orders match your search or filter criteria.
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3.5 sm:gap-4">
                   {filteredLiveOrders.map((order) => {
                     const isServed = order.status?.toUpperCase() === 'SERVED';
                     const items = Array.isArray(order.items) ? order.items : [];

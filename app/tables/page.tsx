@@ -571,12 +571,12 @@ export default function TablesPage() {
           </div>
 
           {/* Section Filter Tabs */}
-          <div className="flex items-center gap-2 overflow-x-auto pb-1">
+          <div className="flex items-center gap-2 overflow-x-auto scrollbar-none pb-1">
             {sections.map((sec) => (
               <button
                 key={sec}
                 onClick={() => setSelectedSection(sec)}
-                className={`shrink-0 rounded-xl px-4 py-2 text-xs font-bold transition-all ${
+                className={`shrink-0 rounded-xl px-3.5 sm:px-4 py-2 text-xs font-bold transition-all ${
                   selectedSection === sec
                     ? 'bg-[#DE8626] text-white shadow-sm shadow-[#DE8626]/20'
                     : 'border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#667085] dark:text-[#94A3B8] hover:border-[#DE8626]'
@@ -589,20 +589,20 @@ export default function TablesPage() {
 
           {/* Tables Grid */}
           {loading ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2.5 sm:gap-3.5 md:gap-4">
               {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((n) => (
                 <div
                   key={n}
-                  className="h-40 rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] animate-pulse"
+                  className="h-36 sm:h-40 rounded-2xl sm:rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] animate-pulse"
                 />
               ))}
             </div>
           ) : filteredTables.length === 0 ? (
-            <div className="rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-16 text-center text-xs text-[#667085]">
+            <div className="rounded-2xl sm:rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-12 sm:p-16 text-center text-xs text-[#667085]">
               No tables configured in this section. Click "Add Table" to set up your floor plan.
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2.5 sm:gap-3.5 md:gap-4">
               {filteredTables.map((tbl) => {
                 const activeOrder = getOrderForTable(tbl);
                 const statusUpper = (tbl.status || '').toUpperCase();
@@ -622,20 +622,20 @@ export default function TablesPage() {
                   <div
                     key={tbl.id}
                     onClick={() => handleSelectTable(tbl)}
-                    className={`group relative flex flex-col justify-between rounded-3xl border p-4 shadow-sm transition-all cursor-pointer select-none ${
+                    className={`group relative flex flex-col justify-between rounded-2xl sm:rounded-3xl border p-3 sm:p-4 shadow-2xs hover:shadow-md transition-all cursor-pointer select-none ${
                       hasBillRequest
-                        ? 'border-rose-500 ring-2 ring-rose-500/30 bg-rose-500/[0.03] hover:shadow-md'
+                        ? 'border-rose-500 ring-2 ring-rose-500/30 bg-rose-500/[0.03]'
                         : hasWaterRequest
-                        ? 'border-sky-500 ring-2 ring-sky-500/30 bg-sky-500/[0.03] hover:shadow-md'
+                        ? 'border-sky-500 ring-2 ring-sky-500/30 bg-sky-500/[0.03]'
                         : hasWaiterCall
-                        ? 'border-amber-500 ring-2 ring-amber-500/30 bg-amber-500/[0.03] hover:shadow-md'
+                        ? 'border-amber-500 ring-2 ring-amber-500/30 bg-amber-500/[0.03]'
                         : isOccupied
-                        ? 'border-amber-400/80 bg-gradient-to-br from-amber-500/10 to-[#FFFFFF] dark:to-[#1B2127] hover:border-[#DE8626] hover:shadow-md'
+                        ? 'border-amber-400/80 bg-gradient-to-br from-amber-500/10 to-[#FFFFFF] dark:to-[#1B2127] hover:border-[#DE8626]'
                         : isBilled
-                        ? 'border-amber-500/80 bg-amber-500/5 hover:border-amber-500 hover:shadow-md'
+                        ? 'border-amber-500/80 bg-amber-500/5 hover:border-amber-500'
                         : isCleaning
-                        ? 'border-blue-400/80 bg-blue-500/5 hover:border-blue-500 hover:shadow-md'
-                        : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] hover:border-[#DE8626] hover:shadow-md'
+                        ? 'border-blue-400/80 bg-blue-500/5 hover:border-blue-500'
+                        : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] hover:border-[#DE8626]'
                     }`}
                   >
                     <div>

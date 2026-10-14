@@ -1514,83 +1514,76 @@ export default function PosPage() {
             cart.map((item) => (
               <div
                 key={item.cartKey}
-                className="group relative flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-2.5 sm:p-3 shadow-2xs hover:border-[#DE8626]/40 hover:shadow-xs transition-all"
+                className="group relative rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-2.5 sm:p-3 shadow-2xs hover:border-[#DE8626]/50 hover:shadow-xs transition-all space-y-2"
               >
-                {/* Left: Thumbnail + Dish Details */}
-                <div className="flex items-start gap-2.5 min-w-0 flex-1">
-                  {/* Thumbnail Image / Fallback */}
-                  <div className="h-10 w-10 sm:h-11 sm:w-11 relative rounded-xl overflow-hidden bg-amber-500/10 dark:bg-amber-500/5 border border-[#DE8626]/20 shrink-0 flex items-center justify-center">
-                    {item.imageUrl ? (
-                      <Image
-                        src={item.imageUrl}
-                        alt={item.itemName}
-                        fill
-                        className="object-cover"
-                        onError={(e) => {
-                          (e.target as any).style.display = 'none';
-                        }}
-                      />
-                    ) : (
-                      <Utensils className="h-4 w-4 text-[#DE8626]" />
-                    )}
-                  </div>
+                {/* Upper Tier: Dish Name + Diet Indicator + Portions + Line Total */}
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-start gap-2 min-w-0 flex-1">
+                    {/* Small Diet Indicator */}
+                    <span
+                      className={`mt-1 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-xs border ${
+                        item.isVeg ? 'border-emerald-600/40 bg-emerald-500/10' : 'border-rose-600/40 bg-rose-500/10'
+                      }`}
+                      title={item.isVeg ? 'Vegetarian' : 'Non-Vegetarian'}
+                    >
+                      <span className={`h-1.5 w-1.5 rounded-full ${item.isVeg ? 'bg-[#17845A]' : 'bg-[#DC2626]'}`} />
+                    </span>
 
-                  {/* Details */}
-                  <div className="min-w-0 flex-1 space-y-0.5">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span
-                        className={`h-2 w-2 rounded-full shrink-0 ${
-                          item.isVeg ? 'bg-[#17845A]' : 'bg-[#DC2626]'
-                        }`}
-                        title={item.isVeg ? 'Vegetarian' : 'Non-Vegetarian'}
-                      />
-                      <h4 className="font-bold text-xs sm:text-sm text-[#1E2930] dark:text-[#F3F4F6] truncate max-w-[190px] sm:max-w-none">
+                    {/* Name & Portions / Modifiers */}
+                    <div className="min-w-0 flex-1">
+                      <h4 className="font-extrabold text-xs sm:text-[13px] text-[#1E2930] dark:text-[#F3F4F6] leading-snug line-clamp-2">
                         {item.itemName}
                       </h4>
-                    </div>
-
-                    <div className="flex items-center gap-1.5 text-[11px] text-[#78716C] dark:text-[#94A3B8] flex-wrap">
-                      <span className="font-bold text-[#DE8626]">₹{item.price.toFixed(2)}</span>
-                      {item.portionLabel && (
-                        <>
-                          <span>•</span>
-                          <span className="truncate">{item.portionLabel}</span>
-                        </>
-                      )}
-                      {item.stationName && (
-                        <>
-                          <span>•</span>
-                          <span className="text-[10px] bg-black/5 dark:bg-white/5 px-1.5 py-0.2 rounded-md font-medium text-[#667085] truncate">
-                            {item.stationName}
-                          </span>
-                        </>
-                      )}
-                    </div>
-
-                    {item.modifiers && item.modifiers.length > 0 && (
-                      <div className="flex flex-wrap gap-1 pt-0.5">
-                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-500/10 border border-[#DE8626]/30 text-[10px] font-bold text-[#DE8626]">
-                          + {item.modifiers.map((m) => m.modifierName).join(', ')}
-                        </span>
+                      <div className="flex items-center gap-1.5 text-[10px] text-[#667085] dark:text-[#94A3B8] mt-0.5 flex-wrap">
+                        <span className="font-semibold text-[#DE8626]">₹{item.price.toFixed(2)}</span>
+                        {item.portionLabel && (
+                          <>
+                            <span>•</span>
+                            <span className="font-medium text-[#1E2930] dark:text-[#F3F4F6]">{item.portionLabel}</span>
+                          </>
+                        )}
+                        {item.stationName && (
+                          <>
+                            <span>•</span>
+                            <span className="bg-black/5 dark:bg-white/5 px-1 py-0.2 rounded text-[9px]">
+                              {item.stationName}
+                            </span>
+                          </>
+                        )}
                       </div>
-                    )}
 
-                    {item.notes && (
-                      <p className="text-[10px] text-[#8C7A6B] dark:text-[#94A3B8] italic truncate">
-                        "{item.notes}"
-                      </p>
-                    )}
+                      {item.modifiers && item.modifiers.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-amber-500/10 border border-[#DE8626]/20 text-[9px] font-bold text-[#DE8626]">
+                            + {item.modifiers.map((m) => m.modifierName).join(', ')}
+                          </span>
+                        </div>
+                      )}
+
+                      {item.notes && (
+                        <p className="text-[10px] text-[#8C7A6B] dark:text-[#94A3B8] italic mt-0.5 line-clamp-1">
+                          "{item.notes}"
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Line Total Price */}
+                  <div className="text-right shrink-0">
+                    <span className="text-xs sm:text-sm font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                      ₹{(item.price * item.quantity).toFixed(2)}
+                    </span>
                   </div>
                 </div>
 
-                {/* Right: Stepper + Line Total + Trash */}
-                <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0 pt-1.5 sm:pt-0 border-t sm:border-t-0 border-[#E7E1DA]/50 dark:border-[#2B3540]/50">
+                {/* Lower Tier: Stepper Controls + Delete Trash Icon */}
+                <div className="flex items-center justify-between pt-1.5 border-t border-[#E7E1DA]/50 dark:border-[#2B3540]/50">
                   {/* Stepper with Numpad Modal trigger */}
-                  <div className="flex items-center rounded-xl bg-amber-500/10 dark:bg-amber-500/5 border border-[#DE8626]/30 p-0.5 shadow-2xs">
+                  <div className="flex items-center rounded-xl bg-[#FAF7F2] dark:bg-[#151A20] border border-[#E7E1DA] dark:border-[#2B3540] p-0.5 shadow-2xs">
                     <button
                       type="button"
                       onClick={() => updateQuantity(item.cartKey, -1)}
-                      className="h-7 w-7 flex items-center justify-center rounded-lg text-[#DE8626] hover:bg-[#DE8626] hover:text-white active:scale-95 transition-all"
+                      className="h-6 w-6 sm:h-6.5 sm:w-6.5 flex items-center justify-center rounded-lg text-[#667085] hover:bg-[#DE8626] hover:text-white active:scale-95 transition-all"
                       title="Decrease quantity"
                     >
                       <Minus className="h-3 w-3 stroke-[3]" />
@@ -1608,7 +1601,7 @@ export default function PosPage() {
                           description: item.description,
                         })
                       }
-                      className="min-w-[28px] sm:min-w-[32px] h-6 px-1.5 flex items-center justify-center rounded-md bg-white dark:bg-[#1B2127] text-xs font-black text-[#1E2930] dark:text-[#F3F4F6] shadow-2xs border border-[#DE8626]/25 hover:border-[#DE8626] transition-colors"
+                      className="min-w-[28px] sm:min-w-[32px] h-5 sm:h-5.5 px-1.5 flex items-center justify-center rounded-md bg-white dark:bg-[#1B2127] text-xs font-black text-[#1E2930] dark:text-[#F3F4F6] shadow-2xs border border-[#DE8626]/25 hover:border-[#DE8626] transition-colors"
                       title="Click to enter exact quantity via numpad"
                     >
                       {item.quantity}
@@ -1617,28 +1610,22 @@ export default function PosPage() {
                     <button
                       type="button"
                       onClick={() => updateQuantity(item.cartKey, 1)}
-                      className="h-7 w-7 flex items-center justify-center rounded-lg text-[#DE8626] hover:bg-[#DE8626] hover:text-white active:scale-95 transition-all"
+                      className="h-6 w-6 sm:h-6.5 sm:w-6.5 flex items-center justify-center rounded-lg text-[#667085] hover:bg-[#DE8626] hover:text-white active:scale-95 transition-all"
                       title="Increase quantity"
                     >
                       <Plus className="h-3 w-3 stroke-[3]" />
                     </button>
                   </div>
 
-                  {/* Line Total */}
-                  <div className="text-right min-w-[55px]">
-                    <span className="text-xs sm:text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6] block">
-                      ₹{(item.price * item.quantity).toFixed(2)}
-                    </span>
-                  </div>
-
-                  {/* Delete Button */}
+                  {/* Remove Item Button */}
                   <button
                     type="button"
                     onClick={() => updateQuantity(item.cartKey, -item.quantity)}
-                    className="h-7 w-7 flex items-center justify-center rounded-lg text-red-500 hover:text-red-700 hover:bg-red-500/10 active:scale-95 transition-all"
+                    className="flex items-center gap-1 text-[11px] font-semibold text-red-500 hover:text-red-700 hover:bg-red-500/10 px-2 py-1 rounded-lg transition-all"
                     title="Remove item"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
+                    <span>Remove</span>
                   </button>
                 </div>
               </div>
@@ -1656,8 +1643,8 @@ export default function PosPage() {
             </div>
           )}
 
-          {/* Subtotal & Taxes Summary */}
-          <div className="space-y-1 text-xs">
+          {/* Subtotal & Taxes Summary Card */}
+          <div className="space-y-1.5 text-xs bg-[#FAF7F2] dark:bg-[#151A20] p-3 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540]">
             {activeTableOrder && (
               <div className="flex justify-between text-amber-600 dark:text-amber-400 font-semibold">
                 <span>Running Tab Total</span>
@@ -1667,7 +1654,7 @@ export default function PosPage() {
             {cart.length > 0 && (
               <>
                 <div className="flex justify-between text-[#667085] dark:text-[#94A3B8]">
-                  <span>Subtotal (Item Total)</span>
+                  <span>Subtotal ({cartTotalItems} items)</span>
                   <span className="font-semibold text-[#1E2930] dark:text-[#F3F4F6]">₹{subtotal.toFixed(2)}</span>
                 </div>
                 {hasGstNumber ? (
@@ -1684,106 +1671,110 @@ export default function PosPage() {
                 ) : null}
               </>
             )}
-            <div className="flex justify-between text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6] pt-1.5 border-t border-[#E7E1DA] dark:border-[#2B3540]">
+            <div className="flex justify-between items-baseline text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6] pt-2 border-t border-[#E7E1DA] dark:border-[#2B3540]">
               <div>
-                <span>Grand Total</span>
+                <span className="font-black text-xs sm:text-sm">Payable Amount</span>
                 {!hasGstNumber && (
-                  <span className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-normal block">(incl. of all taxes)</span>
+                  <span className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-normal block">(incl. of taxes)</span>
                 )}
               </div>
-              <span className="text-[#DE8626]">₹{payableGrandTotal.toFixed(2)}</span>
+              <span className="text-base sm:text-lg font-black text-[#DE8626]">₹{payableGrandTotal.toFixed(2)}</span>
             </div>
           </div>
 
           <div className="space-y-2.5 pt-1 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60">
-              {/* Payment Mode Selector */}
-              <div>
-                <span className="text-[10px] font-extrabold text-[#667085] dark:text-[#94A3B8] uppercase block mb-1">
-                  PAYMENT METHOD FOR SETTLEMENT
-                </span>
-                <div className="grid grid-cols-3 gap-1.5">
-                  {[
-                    { key: 'CASH', label: 'Cash' },
-                    { key: 'UPI', label: 'UPI / QR' },
-                    { key: 'CARD', label: 'Card' },
-                  ].map((m) => (
+            {/* Payment Mode Selector with Icons */}
+            <div>
+              <span className="text-[10px] font-extrabold text-[#667085] dark:text-[#94A3B8] uppercase tracking-wider block mb-1.5">
+                Payment Method
+              </span>
+              <div className="grid grid-cols-3 gap-1.5">
+                {[
+                  { key: 'CASH', label: 'Cash', icon: IndianRupee },
+                  { key: 'UPI', label: 'UPI / QR', icon: QrCode },
+                  { key: 'CARD', label: 'Card', icon: CreditCard },
+                ].map((m) => {
+                  const Icon = m.icon;
+                  const isSelected = selectedPaymentMode === m.key;
+                  return (
                     <button
                       key={m.key}
                       type="button"
                       onClick={() => setSelectedPaymentMode(m.key)}
-                      className={`py-2 text-xs font-bold rounded-xl border transition-all ${
-                        selectedPaymentMode === m.key
-                          ? 'border-[#DE8626] bg-[#DE8626] text-white shadow-xs'
+                      className={`flex items-center justify-center gap-1.5 py-2 px-1 text-xs font-bold rounded-xl border transition-all ${
+                        isSelected
+                          ? 'border-[#DE8626] bg-[#DE8626] text-white shadow-sm shadow-[#DE8626]/20'
                           : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#1E2930] dark:text-[#F3F4F6] hover:border-[#DE8626]/50'
                       }`}
                     >
-                      {m.label}
+                      <Icon className="h-3.5 w-3.5 shrink-0" />
+                      <span>{m.label}</span>
                     </button>
-                  ))}
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Cash Tendered & Change Return */}
+            {selectedPaymentMode === 'CASH' && (
+              <div className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-2.5 space-y-2">
+                <div className="flex items-center justify-between text-xs font-semibold">
+                  <span className="text-[#667085] dark:text-[#94A3B8]">Cash Received</span>
+                  {posNumericTendered > 0 && (
+                    <span
+                      className={`text-[11px] font-black px-2 py-0.5 rounded-full ${
+                        posNumericTendered >= payableGrandTotal
+                          ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30'
+                          : 'bg-red-500/15 text-red-700 dark:text-red-400 border border-red-500/30'
+                      }`}
+                    >
+                      {posNumericTendered >= payableGrandTotal
+                        ? `Change: ₹${posChangeToReturn.toFixed(2)}`
+                        : `Short: ₹${(payableGrandTotal - posNumericTendered).toFixed(2)}`}
+                    </span>
+                  )}
+                </div>
+
+                <div className="relative">
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 font-extrabold text-xs text-[#DE8626]">₹</span>
+                  <input
+                    type="number"
+                    value={posTenderedText}
+                    onChange={(e) => setPosTenderedText(e.target.value)}
+                    placeholder={payableGrandTotal.toFixed(0)}
+                    className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] pl-7 pr-3 py-1.5 text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
+                  />
+                </div>
+
+                {/* Preset Chips */}
+                <div className="flex flex-wrap gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setPosTenderedText(payableGrandTotal.toFixed(0))}
+                    className="rounded-lg border border-[#DE8626] bg-amber-500/10 px-2.5 py-1 text-[10px] font-extrabold text-[#DE8626] hover:bg-[#DE8626] hover:text-white transition-colors"
+                  >
+                    Exact (₹{payableGrandTotal.toFixed(0)})
+                  </button>
+                  {[
+                    Math.ceil((payableGrandTotal + 1) / 50) * 50,
+                    Math.ceil((payableGrandTotal + 1) / 100) * 100,
+                    500,
+                  ]
+                    .filter((val, idx, arr) => val > payableGrandTotal && arr.indexOf(val) === idx)
+                    .slice(0, 2)
+                    .map((val) => (
+                      <button
+                        key={`pill-${val}`}
+                        type="button"
+                        onClick={() => setPosTenderedText(val.toString())}
+                        className="rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-2.5 py-1 text-[10px] font-semibold text-[#1E2930] dark:text-[#F3F4F6] hover:border-[#DE8626] transition-colors"
+                      >
+                        ₹{val}
+                      </button>
+                    ))}
                 </div>
               </div>
-
-              {/* Cash Tendered & Change Return */}
-              {selectedPaymentMode === 'CASH' && (
-                <div className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-2.5 space-y-2">
-                  <div className="flex items-center justify-between text-xs font-semibold">
-                    <span className="text-[#667085]">Cash Tendered</span>
-                    {posNumericTendered > 0 && (
-                      <span
-                        className={`text-[11px] font-extrabold px-2 py-0.5 rounded-full ${
-                          posNumericTendered >= payableGrandTotal
-                            ? 'bg-emerald-500/10 text-emerald-600'
-                            : 'bg-red-500/10 text-red-600'
-                        }`}
-                      >
-                        {posNumericTendered >= payableGrandTotal
-                          ? `Change: ₹${posChangeToReturn.toFixed(2)}`
-                          : `Short: ₹${(payableGrandTotal - posNumericTendered).toFixed(2)}`}
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="relative">
-                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 font-bold text-xs text-[#DE8626]">₹</span>
-                    <input
-                      type="number"
-                      value={posTenderedText}
-                      onChange={(e) => setPosTenderedText(e.target.value)}
-                      placeholder={payableGrandTotal.toFixed(0)}
-                      className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] pl-7 pr-3 py-1.5 text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6] outline-none"
-                    />
-                  </div>
-
-                  {/* Preset Chips */}
-                  <div className="flex flex-wrap gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setPosTenderedText(payableGrandTotal.toFixed(0))}
-                      className="rounded-lg border border-[#DE8626] bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-[#DE8626]"
-                    >
-                      Exact
-                    </button>
-                    {[
-                      Math.ceil((payableGrandTotal + 1) / 50) * 50,
-                      Math.ceil((payableGrandTotal + 1) / 100) * 100,
-                      500,
-                    ]
-                      .filter((val, idx, arr) => val > payableGrandTotal && arr.indexOf(val) === idx)
-                      .slice(0, 2)
-                      .map((val) => (
-                        <button
-                          key={`pill-${val}`}
-                          type="button"
-                          onClick={() => setPosTenderedText(val.toString())}
-                          className="rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-2 py-0.5 text-[10px] font-semibold"
-                        >
-                          ₹{val}
-                        </button>
-                      ))}
-                  </div>
-                </div>
-              )}
-
+            )}
           </div>
         </div>
       </div>
@@ -1958,7 +1949,7 @@ export default function PosPage() {
   return (
     <AuthGuard>
       <AppShell>
-        <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden bg-[#FAF7F2] dark:bg-[#111418]">
+        <div className="flex flex-1 h-full min-h-0 flex-col overflow-hidden bg-[#FAF7F2] dark:bg-[#111418]">
           {/* ======================================================== */}
           {/* 1. WARNING BANNERS (GRACE, EXHAUSTED WALLET, INACTIVE)   */}
           {/* ======================================================== */}
@@ -2276,7 +2267,7 @@ export default function PosPage() {
               </div>
 
               {/* Category Horizontal Scrolling Tabs */}
-              <div className="flex items-center gap-2 overflow-x-auto border-b border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] px-3 sm:px-4 py-2 shrink-0">
+              <div className="flex items-center gap-2 overflow-x-auto scrollbar-none border-b border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] px-3 sm:px-4 py-2 shrink-0">
                 <button
                   type="button"
                   onClick={() => setSelectedCategory(null)}
@@ -2352,7 +2343,7 @@ export default function PosPage() {
                           } ${!isAvailable ? 'opacity-60 cursor-not-allowed' : ''}`}
                         >
                           {/* Dish Image Banner */}
-                          <div className="relative h-28 sm:h-32 w-full overflow-hidden bg-amber-500/5 dark:bg-amber-500/5">
+                          <div className="relative h-24 sm:h-28 w-full overflow-hidden bg-amber-500/5 dark:bg-amber-500/5">
                             <DishImage
                               src={dish.imageUrl}
                               alt={dish.itemName}
@@ -2508,28 +2499,40 @@ export default function PosPage() {
             </div>
 
             {/* RIGHT SIDE: Pinned Desktop Checkout Drawer Panel (>= 1024px) */}
-            <div className="hidden lg:flex w-[360px] xl:w-[410px] 2xl:w-[440px] flex-col border-l border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] h-full overflow-hidden shrink-0">
+            <div className="hidden lg:flex w-[320px] xl:w-[360px] 2xl:w-[400px] flex-col border-l border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] h-full overflow-hidden shrink-0">
               {/* Drawer Header */}
               <div className="flex items-center justify-between border-b border-[#E7E1DA] dark:border-[#2B3540] px-3.5 py-2.5 sm:px-4 sm:py-3 bg-[#FAF7F2] dark:bg-[#151A20] shrink-0">
                 <div className="flex items-center gap-2">
-                  <ShoppingBag className="h-4 w-4 text-[#DE8626]" />
-                  <h3 className="text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6]">
-                    Order Cart ({cartTotalItems} items)
-                  </h3>
+                  <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-500/15 text-[#DE8626] shrink-0">
+                    <ShoppingBag className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <h3 className="text-xs sm:text-sm font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                        Order Cart
+                      </h3>
+                      <span className="rounded-full bg-[#DE8626] px-1.5 py-0.2 text-[10px] font-black text-white">
+                        {cartTotalItems}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-[#667085] dark:text-[#94A3B8]">
+                      {selectedTable ? `Table T-${selectedTable.tableNumber}` : 'Counter Quick Sale'}
+                    </p>
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5">
                   <button
                     type="button"
                     onClick={() => setParkedModalOpen(true)}
-                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-extrabold transition-all ${
+                    className={`flex items-center gap-1 px-2 py-1 rounded-xl text-[11px] font-extrabold border transition-all ${
                       parkedCarts.length > 0
-                        ? 'bg-amber-500/10 text-[#DE8626] border border-[#DE8626]/40 hover:bg-amber-500/20'
-                        : 'bg-black/5 dark:bg-white/5 text-[#667085] hover:text-[#1E2930]'
+                        ? 'bg-amber-500/10 text-[#DE8626] border-[#DE8626]/40 hover:bg-amber-500/20'
+                        : 'bg-black/5 dark:bg-white/5 border-transparent text-[#667085] hover:text-[#1E2930]'
                     }`}
                     title="View Held / Parked Carts"
                   >
-                    <Clock className="h-3.5 w-3.5" />
+                    <Clock className="h-3 w-3" />
                     <span>Held ({parkedCarts.length})</span>
                   </button>
 
@@ -2537,9 +2540,10 @@ export default function PosPage() {
                     <button
                       type="button"
                       onClick={clearCart}
-                      className="flex items-center gap-1 text-[11px] font-semibold text-red-500 hover:underline"
+                      className="flex items-center gap-1 text-[11px] font-bold text-red-500 hover:text-red-700 hover:bg-red-500/10 px-2 py-1 rounded-lg transition-colors"
+                      title="Clear Cart"
                     >
-                      <Trash2 className="h-3.5 w-3.5" />
+                      <Trash2 className="h-3 w-3" />
                       <span>Clear</span>
                     </button>
                   )}
@@ -2555,7 +2559,7 @@ export default function PosPage() {
           {/* 4. RESPONSIVE FLOATING CART STICKY BANNER (MOBILE/TABLET)*/}
           {/* ======================================================== */}
           {cart.length > 0 && (
-            <div className="lg:hidden fixed bottom-[74px] left-3 right-3 z-40">
+            <div className="lg:hidden fixed bottom-20 left-3 right-3 max-w-lg mx-auto z-40">
               <button
                 type="button"
                 onClick={() => setCartDrawerOpen(true)}
@@ -2599,32 +2603,46 @@ export default function PosPage() {
                 </div>
 
                 {/* Header */}
-                <div className="flex items-center justify-between px-4 py-2 border-b border-[#E7E1DA] dark:border-[#2B3540] shrink-0">
+                <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#E7E1DA] dark:border-[#2B3540] shrink-0 bg-[#FAF7F2] dark:bg-[#151A20]">
                   <div className="flex items-center gap-2">
-                    <ShoppingBag className="h-4 w-4 text-[#DE8626]" />
-                    <h3 className="text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6]">
-                      Order Cart ({cartTotalItems} items)
-                    </h3>
+                    <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-500/15 text-[#DE8626] shrink-0">
+                      <ShoppingBag className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <h3 className="text-xs sm:text-sm font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                          Order Cart
+                        </h3>
+                        <span className="rounded-full bg-[#DE8626] px-1.5 py-0.2 text-[10px] font-black text-white">
+                          {cartTotalItems}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-[#667085] dark:text-[#94A3B8]">
+                        {selectedTable ? `Table T-${selectedTable.tableNumber}` : 'Counter Quick Sale'}
+                      </p>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
                     <button
                       type="button"
                       onClick={() => setParkedModalOpen(true)}
-                      className="text-[11px] font-bold text-[#DE8626] bg-amber-500/10 px-2.5 py-0.5 rounded-full"
+                      className="text-[11px] font-bold text-[#DE8626] bg-amber-500/10 px-2.5 py-1 rounded-xl border border-amber-500/20"
                     >
                       Held ({parkedCarts.length})
                     </button>
-                    <button
-                      type="button"
-                      onClick={clearCart}
-                      className="text-xs font-bold text-red-500 hover:underline"
-                    >
-                      Clear
-                    </button>
+                    {cart.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={clearCart}
+                        className="text-xs font-bold text-red-500 hover:text-red-700 px-1.5"
+                      >
+                        Clear
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => setCartDrawerOpen(false)}
-                      className="rounded-lg p-1 text-[#8C7A6B]"
+                      className="rounded-xl p-1.5 text-[#667085] hover:bg-black/5 dark:hover:bg-white/5"
                     >
                       <X className="h-4 w-4" />
                     </button>

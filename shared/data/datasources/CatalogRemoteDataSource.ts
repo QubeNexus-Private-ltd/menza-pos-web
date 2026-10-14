@@ -34,6 +34,31 @@ export class CatalogRemoteDataSource {
     }
   }
 
+  async getCategorySuggestions(query?: string): Promise<Category[]> {
+    try {
+      const q = (query || '').trim();
+      const url = q ? `/CategoryMaster/suggestions?q=${encodeURIComponent(q)}` : '/CategoryMaster/suggestions';
+      const response = await apiClient.get(url);
+      const data = response?.data;
+      let list: any[] = [];
+      if (Array.isArray(data)) list = data;
+      else if (data && Array.isArray(data.items)) list = data.items;
+      else if (data && Array.isArray(data.data)) list = data.data;
+
+      return list.map((cat: any) => ({
+        id: Number(cat.id ?? cat.Id ?? 0),
+        categoryName: String(cat.categoryName ?? cat.CategoryName ?? 'Category'),
+        description: cat.categoryDescription ?? cat.description ?? cat.Description ?? undefined,
+        imageUrl: cat.imageUrl ?? cat.ImageUrl ?? undefined,
+        kitchenStationId: cat.kitchenStationId ?? cat.KitchenStationId ?? undefined,
+        kitchenStationName: cat.kitchenStationName ?? cat.KitchenStationName ?? undefined,
+      }));
+    } catch (err) {
+      console.warn('❌ [API ERROR] getCategorySuggestions:', err);
+      return [];
+    }
+  }
+
   async createCategory(categoryName: string, categoryDescription: string, restaurantId: number, imageUrl?: string, kitchenStationId?: number): Promise<{ success: boolean; message?: string }> {
     try {
       const response = await apiClient.post('/CategoryMaster', {

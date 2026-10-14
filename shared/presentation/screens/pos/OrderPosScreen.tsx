@@ -770,6 +770,21 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
         tenderedAmount: orderTendered,
         changeAmount: orderChange,
         date: fetchedOrder?.createdAt ? new Date(fetchedOrder.createdAt) : new Date(),
+        upiId: (
+          restaurantConfig?.bankerUpiId ||
+          (restaurantConfig as any)?.upiId ||
+          (activeRestaurant as any)?.bankerUpiId ||
+          (activeRestaurant as any)?.upiId ||
+          ''
+        ).trim(),
+        upiPayeeName:
+          restaurantConfig?.bankerAccountHolderName ||
+          restaurantConfig?.restaurantName ||
+          activeRestaurant?.restaurantName ||
+          'Menza Restaurant',
+        showUpiQr:
+          restaurantConfig?.printUpiQrOnReceipts !== false &&
+          (activeRestaurant as any)?.printUpiQrOnReceipts !== false,
       };
 
       let printStatusNote = '';

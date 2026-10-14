@@ -54,6 +54,9 @@ export interface ReceiptData {
   isKot?: boolean;
   isDuplicate?: boolean;
   isProforma?: boolean;
+  upiId?: string;
+  upiPayeeName?: string;
+  showUpiQr?: boolean;
 }
 
 export type PaperWidth = '58mm' | '80mm';
@@ -249,6 +252,39 @@ export class EscPosBuilder {
     // ESC/POS GS v 0 m xL xH yL yH d1...dk (Standard Raster Bit Image)
     this.bytes.push(0x1D, 0x76, 0x30, 0x00, xL, xH, yL, yH, ...bytes);
     this.feed(1);
+    return this;
+  }
+
+  /**
+   * Adds an ESC/POS Model 2 QR Code to the print buffer
+   * @param text The UPI deep link or text string to encode
+   * @param moduleSize Dot size per module (default: 5 dots, range 3-8)
+   */
+  qrCode(text: string, moduleSize: number = 5): this {
+    if (!text) return this;
+    const cleanText = String(text);
+    const dataBytes = Array.from(new TextEncoder().encode(cleanText));
+    const len = dataBytes.length + 3;
+    const pL = len % 256;
+    const pH = Math.floor(len / 256);
+
+    // 1. Set QR Code Model: Model 2 (0x32)
+    this.bytes.push(0x1D, 0x28, 0x6B, 0x04, 0x00, 0x31, 0x41, 0x32, 0x00);
+
+    // 2. Set QR Code Module Size (3-8 dots)
+    const size = Math.max(3, Math.min(8, moduleSize));
+    this.bytes.push(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x43, size);
+
+    // 3. Set Error Correction Level: M (0x31 = 15% error recovery)
+    this.bytes.push(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x45, 0x31);
+
+    // 4. Store Data in QR Symbol Storage Area
+    this.bytes.push(0x1D, 0x28, 0x6B, pL, pH, 0x31, 0x50, 0x30, ...dataBytes);
+
+    // 5. Print the QR Code
+    this.bytes.push(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x51, 0x30);
+    this.feed(1);
+
     return this;
   }
 
@@ -534,6 +570,27 @@ export class EscPosBuilder {
     }
 
     builder.separator('-');
+
+    // 7.5 UPI QR Code for instant direct customer payment
+    if (data.upiId && data.upiId.trim().length > 0 && data.showUpiQr !== false) {
+      const cleanUpi = data.upiId.trim();
+      builder.feed(1);
+      builder.align('center');
+      builder.bold(true);
+      builder.textLine('SCAN & PAY WITH ANY UPI APP');
+      builder.bold(false);
+
+      const payee = encodeURIComponent(data.upiPayeeName || data.restaurantName || 'Menza Restaurant');
+      const amount = grandTotalNum.toFixed(2);
+      const note = encodeURIComponent(`Bill #${data.orderNumber || data.orderId}`);
+      const upiUri = `upi://pay?pa=${encodeURIComponent(cleanUpi)}&pn=${payee}&am=${amount}&tn=${note}&cu=INR`;
+
+      builder.qrCode(upiUri, paperWidth === '80mm' ? 6 : 4);
+      builder.align('center');
+      builder.textLine(`UPI ID: ${cleanUpi}`);
+      builder.textLine('Google Pay | PhonePe | Paytm | BHIM');
+      builder.separator('-');
+    }
 
     // 8. Footer Greeting & Menza Branding
     builder.align('center');
@@ -860,6 +917,9 @@ export class EscPosBuilder {
       paymentMode: 'CASH',
       paymentStatus: 'PAID',
       date: new Date(),
+      upiId: 'menzahospitality@icici',
+      upiPayeeName: restaurantName,
+      showUpiQr: true,
       footerMessage: 'Thank you for dining with us! Please visit again.',
     };
 

@@ -12,6 +12,12 @@ export interface RestaurantConfig {
   sgstPercentage?: number;
   cgstPercentage?: number;
   totalGstPercentage?: number;
+  bankerUpiId?: string;
+  bankerAccountHolderName?: string;
+  bankerAccountNumber?: string;
+  bankerIfscCode?: string;
+  bankerBankName?: string;
+  printUpiQrOnReceipts?: boolean;
   currencySymbol?: string;
   taxPercentage?: number;
   walletBalance?: number;

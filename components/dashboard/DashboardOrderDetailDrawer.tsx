@@ -34,6 +34,7 @@ import { WebPrinterService } from '@/services/webPrinterService';
 import { WebWhatsAppService } from '@/services/whatsAppService';
 import { usePrinterStore } from '@shared/presentation/state/usePrinterStore';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
+import { usePosCatalogStore } from '@/stores/usePosCatalogStore';
 import { ReceiptData } from '@shared/core/printer/EscPosBuilder';
 
 interface DashboardOrderDetailDrawerProps {
@@ -167,6 +168,21 @@ export const DashboardOrderDetailDrawer: React.FC<DashboardOrderDetailDrawerProp
         paymentMode: order.paymentMode || 'CASH',
         tenderedAmount: Number(order.tenderedAmount || 0),
         changeAmount: Number(order.changeAmount || 0),
+        upiId: (
+          usePosCatalogStore.getState().restaurantConfig?.bankerUpiId ||
+          (usePosCatalogStore.getState().restaurantConfig as any)?.upiId ||
+          (activeRestaurant as any)?.bankerUpiId ||
+          (activeRestaurant as any)?.upiId ||
+          ''
+        ).trim(),
+        upiPayeeName:
+          usePosCatalogStore.getState().restaurantConfig?.bankerAccountHolderName ||
+          usePosCatalogStore.getState().restaurantConfig?.restaurantName ||
+          activeRestaurant?.restaurantName ||
+          'Menza Restaurant',
+        showUpiQr:
+          usePosCatalogStore.getState().restaurantConfig?.printUpiQrOnReceipts !== false &&
+          (activeRestaurant as any)?.printUpiQrOnReceipts !== false,
       };
 
       await WebPrinterService.printReceipt(receiptData, paperWidth);

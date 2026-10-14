@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Table as TableIcon,
@@ -66,10 +66,19 @@ export default function TablesPage() {
   const { paperWidth, customFooter } = usePrinterStore();
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
-  const [tables, setTables] = useState<TableMaster[]>([]);
+  const cachedCatalog = usePosCatalogStore.getState();
+  const hasCachedTables = Boolean(
+    cachedCatalog.restaurantId === currentRestId && cachedCatalog.tables.length > 0
+  );
+
+  const [tables, setTables] = useState<TableMaster[]>(() =>
+    hasCachedTables ? cachedCatalog.tables : []
+  );
   const [activeOrders, setActiveOrders] = useState<OrderMaster[]>([]);
-  const [restaurantConfig, setRestaurantConfig] = useState<RestaurantConfig | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [restaurantConfig, setRestaurantConfig] = useState<RestaurantConfig | null>(() =>
+    cachedCatalog.restaurantId === currentRestId ? cachedCatalog.restaurantConfig : null
+  );
+  const [loading, setLoading] = useState(!hasCachedTables);
   const [selectedSection, setSelectedSection] = useState<string>('ALL');
 
   // Add Table Modal
@@ -122,10 +131,23 @@ export default function TablesPage() {
     );
   };
 
-  const loadData = useCallback(async () => {
+  const inFlightRef = useRef(false);
+  const queuedRefreshRef = useRef(false);
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const loadData = useCallback(async (showLoading = false) => {
     if (!currentRestId) return;
+
+    if (inFlightRef.current) {
+      queuedRefreshRef.current = true;
+      return;
+    }
+    inFlightRef.current = true;
+
     try {
-      setLoading(true);
+      if (showLoading) {
+        setLoading(true);
+      }
       const [tablesRes, ordersRes, cfgRes] = await Promise.allSettled([
         tableDataSource.getTables(currentRestId),
         orderDataSource.getTodayOrders(currentRestId, 'ALL', 1, 50),
@@ -145,20 +167,37 @@ export default function TablesPage() {
     } catch (err) {
       console.warn('Failed to load table floor', err);
     } finally {
-      setLoading(false);
+      if (showLoading) {
+        setLoading(false);
+      }
+      inFlightRef.current = false;
+      if (queuedRefreshRef.current) {
+        queuedRefreshRef.current = false;
+        loadData(false);
+      }
     }
   }, [currentRestId]);
 
+  // Debounced refresh for real-time SignalR notifications (collapses rapid-fire events into 1 fetch)
+  const triggerRefresh = useCallback(() => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+    debounceTimerRef.current = setTimeout(() => {
+      loadData(false);
+    }, 400);
+  }, [loadData]);
+
   useEffect(() => {
-    loadData();
+    loadData(tables.length === 0);
 
     if (currentRestId) {
       startPosSignalRConnection(currentRestId).catch(() => {});
-      const unsub1 = onPosOrderCreated(() => loadData());
-      const unsub2 = onPosOrderStatusChanged(() => loadData());
-      const unsub3 = onPosOrderSettled(() => loadData());
-      const unsub4 = onPosTableStatusChanged(() => loadData());
-      const unsub5 = onSignalRReconnected(() => loadData());
+      const unsub1 = onPosOrderCreated(triggerRefresh);
+      const unsub2 = onPosOrderStatusChanged(triggerRefresh);
+      const unsub3 = onPosOrderSettled(triggerRefresh);
+      const unsub4 = onPosTableStatusChanged(triggerRefresh);
+      const unsub5 = onSignalRReconnected(triggerRefresh);
 
       const unsub6 = onServiceRequestCreated((req) => {
         const tableId = Number(req?.tableId || req?.TableId || 0);
@@ -184,7 +223,7 @@ export default function TablesPage() {
           const filtered = prev.filter((r) => !(r.tableId === tableId && r.requestType === typeNormalized));
           return [newItem, ...filtered];
         });
-        loadData();
+        triggerRefresh();
       });
 
       const unsub7 = onServiceRequestResolved((res) => {
@@ -199,9 +238,21 @@ export default function TablesPage() {
         );
       });
 
-      const interval = setInterval(loadData, 20000);
+      // Window tab visibility sync: refreshes once when staff switch back to the browser tab
+      const handleVisibilityChange = () => {
+        if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+          triggerRefresh();
+        }
+      };
+      if (typeof document !== 'undefined') {
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+      }
+
       return () => {
-        clearInterval(interval);
+        if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+        if (typeof document !== 'undefined') {
+          document.removeEventListener('visibilitychange', handleVisibilityChange);
+        }
         unsub1();
         unsub2();
         unsub3();
@@ -211,7 +262,7 @@ export default function TablesPage() {
         unsub7();
       };
     }
-  }, [currentRestId, loadData]);
+  }, [currentRestId, loadData, triggerRefresh]);
 
   // Unique sections list
   const sections = useMemo(() => {
@@ -249,22 +300,40 @@ export default function TablesPage() {
     }
   };
 
+  // Set of terminal (inactive) order statuses
+  const TERMINAL_ORDER_STATUSES = useMemo(
+    () => new Set(['COMPLETED', 'SETTLED', 'CANCELLED', 'REJECTED', 'VOID', 'PAID']),
+    []
+  );
+
   // Find active order for table
-  const getOrderForTable = (table: TableMaster) => {
-    return activeOrders.find(
-      (o) =>
-        (o.tableId === table.id || o.tableName === table.tableNumber || o.tableName === table.tableName) &&
-        o.status !== 'SETTLED' &&
-        o.status !== 'CANCELLED'
-    );
-  };
+  const getOrderForTable = useCallback(
+    (table: TableMaster) => {
+      const tableStatus = (table.status || '').toUpperCase();
+      // An available table by definition has no active running order
+      if (tableStatus === 'AVAILABLE') {
+        return undefined;
+      }
+      return activeOrders.find((o) => {
+        const matchTable =
+          (table.id && o.tableId === table.id) ||
+          (table.tableNumber && (o.tableName === table.tableNumber || o.tableName === `T-${table.tableNumber}`)) ||
+          (table.tableName && (o.tableName === table.tableName || o.tableName === `T-${table.tableName}`));
+        if (!matchTable) return false;
+        const statusUpper = (o.status || '').trim().toUpperCase();
+        return !TERMINAL_ORDER_STATUSES.has(statusUpper);
+      });
+    },
+    [activeOrders, TERMINAL_ORDER_STATUSES]
+  );
 
   const handleSelectTable = async (tbl: TableMaster) => {
     setActionTable(tbl);
     setActiveTableOrder(null);
     const existingOrder = getOrderForTable(tbl);
     const statusUpper = (tbl.status || '').toUpperCase();
-    const isOccupied = statusUpper === 'OCCUPIED' || statusUpper === 'BILLED' || Boolean(tbl.activeOrderId) || Boolean(existingOrder);
+    const isAvailable = statusUpper === 'AVAILABLE';
+    const isOccupied = !isAvailable && (statusUpper === 'OCCUPIED' || statusUpper === 'BILLED' || Boolean(tbl.activeOrderId) || Boolean(existingOrder));
     if (isOccupied) {
       try {
         setLoadingActiveOrder(true);
@@ -314,7 +383,23 @@ export default function TablesPage() {
       taxAmount: (order.cgst || 0) + (order.sgst || 0),
       grandTotal: Number(order.totalAmount || 0),
       paymentMode: 'PAY LATER (GUEST CHECK)',
+      isProforma: true,
       date: new Date().toLocaleString('en-IN'),
+      upiId: (
+        restaurantConfig?.bankerUpiId ||
+        (restaurantConfig as any)?.upiId ||
+        (activeRestaurant as any)?.bankerUpiId ||
+        (activeRestaurant as any)?.upiId ||
+        ''
+      ).trim(),
+      upiPayeeName:
+        restaurantConfig?.bankerAccountHolderName ||
+        restaurantConfig?.restaurantName ||
+        activeRestaurant?.restaurantName ||
+        'Menza Restaurant',
+      showUpiQr:
+        restaurantConfig?.printUpiQrOnReceipts !== false &&
+        (activeRestaurant as any)?.printUpiQrOnReceipts !== false,
       footerMessage: customFooter || 'Thank you! Please visit again.',
     };
 
@@ -340,21 +425,28 @@ export default function TablesPage() {
     setTables((prev) =>
       prev.map((t) =>
         t.id === tableId
-          ? { ...t, status: newStatus, activeOrderId: undefined }
+          ? {
+              ...t,
+              status: newStatus,
+              activeOrderId: undefined,
+              currentOrderId: undefined,
+              occupiedSince: undefined,
+            }
           : t
       )
     );
     setActionTable(null);
     setActiveTableOrder(null);
-    usePosCatalogStore.getState().invalidateActiveTableOrder(tableId);
+    setActiveOrders((prev) => prev.filter((o) => o.tableId !== tableId));
+    usePosCatalogStore.getState().freeTableInCatalog(tableId);
     try {
       await tableDataSource.freeTable(tableId, {
         restaurantId: currentRestId,
         transitionToCleaning,
-        settleActiveOrder: false,
+        settleActiveOrder: true,
         releasedByRole: 'STAFF',
       });
-      loadData();
+      await loadData();
     } catch (e) {
       console.warn('Free table error:', e);
     }
@@ -460,7 +552,7 @@ export default function TablesPage() {
               </button>
 
               <button
-                onClick={loadData}
+                onClick={() => loadData(true)}
                 disabled={loading}
                 className="flex items-center gap-2 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-3.5 py-2 text-xs font-semibold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5"
               >
@@ -479,12 +571,12 @@ export default function TablesPage() {
           </div>
 
           {/* Section Filter Tabs */}
-          <div className="flex items-center gap-2 overflow-x-auto pb-1">
+          <div className="flex items-center gap-2 overflow-x-auto scrollbar-none pb-1">
             {sections.map((sec) => (
               <button
                 key={sec}
                 onClick={() => setSelectedSection(sec)}
-                className={`shrink-0 rounded-xl px-4 py-2 text-xs font-bold transition-all ${
+                className={`shrink-0 rounded-xl px-3.5 sm:px-4 py-2 text-xs font-bold transition-all ${
                   selectedSection === sec
                     ? 'bg-[#DE8626] text-white shadow-sm shadow-[#DE8626]/20'
                     : 'border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#667085] dark:text-[#94A3B8] hover:border-[#DE8626]'
@@ -497,26 +589,27 @@ export default function TablesPage() {
 
           {/* Tables Grid */}
           {loading ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2.5 sm:gap-3.5 md:gap-4">
               {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((n) => (
                 <div
                   key={n}
-                  className="h-40 rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] animate-pulse"
+                  className="h-36 sm:h-40 rounded-2xl sm:rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] animate-pulse"
                 />
               ))}
             </div>
           ) : filteredTables.length === 0 ? (
-            <div className="rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-16 text-center text-xs text-[#667085]">
+            <div className="rounded-2xl sm:rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-12 sm:p-16 text-center text-xs text-[#667085]">
               No tables configured in this section. Click "Add Table" to set up your floor plan.
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2.5 sm:gap-3.5 md:gap-4">
               {filteredTables.map((tbl) => {
                 const activeOrder = getOrderForTable(tbl);
                 const statusUpper = (tbl.status || '').toUpperCase();
-                const isBilled = statusUpper === 'BILLED';
-                const isCleaning = statusUpper === 'CLEANING';
-                const isOccupied = statusUpper === 'OCCUPIED' || Boolean(tbl.activeOrderId) || Boolean(activeOrder);
+                const isAvailable = statusUpper === 'AVAILABLE';
+                const isBilled = !isAvailable && statusUpper === 'BILLED';
+                const isCleaning = !isAvailable && statusUpper === 'CLEANING';
+                const isOccupied = !isAvailable && (statusUpper === 'OCCUPIED' || Boolean(tbl.activeOrderId) || Boolean(activeOrder));
 
                 const activeServiceReq = serviceRequests.find(
                   (r) => r.tableId === tbl.id || r.tableName === tbl.tableNumber || r.tableName === tbl.tableName
@@ -529,20 +622,20 @@ export default function TablesPage() {
                   <div
                     key={tbl.id}
                     onClick={() => handleSelectTable(tbl)}
-                    className={`group relative flex flex-col justify-between rounded-3xl border p-4 shadow-sm transition-all cursor-pointer select-none ${
+                    className={`group relative flex flex-col justify-between rounded-2xl sm:rounded-3xl border p-3 sm:p-4 shadow-2xs hover:shadow-md transition-all cursor-pointer select-none ${
                       hasBillRequest
-                        ? 'border-rose-500 ring-2 ring-rose-500/30 bg-rose-500/[0.03] hover:shadow-md'
+                        ? 'border-rose-500 ring-2 ring-rose-500/30 bg-rose-500/[0.03]'
                         : hasWaterRequest
-                        ? 'border-sky-500 ring-2 ring-sky-500/30 bg-sky-500/[0.03] hover:shadow-md'
+                        ? 'border-sky-500 ring-2 ring-sky-500/30 bg-sky-500/[0.03]'
                         : hasWaiterCall
-                        ? 'border-amber-500 ring-2 ring-amber-500/30 bg-amber-500/[0.03] hover:shadow-md'
+                        ? 'border-amber-500 ring-2 ring-amber-500/30 bg-amber-500/[0.03]'
                         : isOccupied
-                        ? 'border-amber-400/80 bg-gradient-to-br from-amber-500/10 to-[#FFFFFF] dark:to-[#1B2127] hover:border-[#DE8626] hover:shadow-md'
+                        ? 'border-amber-400/80 bg-gradient-to-br from-amber-500/10 to-[#FFFFFF] dark:to-[#1B2127] hover:border-[#DE8626]'
                         : isBilled
-                        ? 'border-amber-500/80 bg-amber-500/5 hover:border-amber-500 hover:shadow-md'
+                        ? 'border-amber-500/80 bg-amber-500/5 hover:border-amber-500'
                         : isCleaning
-                        ? 'border-blue-400/80 bg-blue-500/5 hover:border-blue-500 hover:shadow-md'
-                        : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] hover:border-[#DE8626] hover:shadow-md'
+                        ? 'border-blue-400/80 bg-blue-500/5 hover:border-blue-500'
+                        : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] hover:border-[#DE8626]'
                     }`}
                   >
                     <div>
@@ -689,9 +782,10 @@ export default function TablesPage() {
           const existingOrder = getOrderForTable(actionTable);
           const activeOrder = activeTableOrder || existingOrder;
           const statusUpper = (actionTable.status || '').toUpperCase();
-          const isOccupied = statusUpper === 'OCCUPIED' || Boolean(actionTable.activeOrderId) || Boolean(activeOrder);
-          const isBilled = statusUpper === 'BILLED';
-          const isCleaning = statusUpper === 'CLEANING';
+          const isAvailable = statusUpper === 'AVAILABLE';
+          const isBilled = !isAvailable && statusUpper === 'BILLED';
+          const isCleaning = !isAvailable && statusUpper === 'CLEANING';
+          const isOccupied = !isAvailable && (statusUpper === 'OCCUPIED' || Boolean(actionTable.activeOrderId) || Boolean(activeOrder));
 
           return (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
@@ -877,9 +971,13 @@ export default function TablesPage() {
                     )}
 
                     <button
-                      onClick={() => {
-                        if (!useSubscriptionStore.getState().canTakeOrders()) {
-                          useSubscriptionStore.getState().openRenewalModal();
+                      onClick={async () => {
+                        const subStore = useSubscriptionStore.getState();
+                        if (!subStore.hasLoaded && currentRestId) {
+                          await subStore.fetchSubscriptionStatus(currentRestId);
+                        }
+                        if (subStore.hasLoaded && !subStore.canTakeOrders()) {
+                          subStore.openRenewalModal();
                           return;
                         }
                         const targetId = actionTable.id;
@@ -887,9 +985,9 @@ export default function TablesPage() {
                         setActionTable(null);
                         router.push(`/pos?tableId=${targetId}${activeId ? `&orderId=${activeId}` : ''}`);
                       }}
-                      className={`flex items-center justify-center gap-1.5 rounded-2xl py-2.5 text-xs font-bold transition-colors ${
+                      className={`flex items-center justify-center gap-1.5 rounded-2xl py-2.5 text-xs font-bold transition-all ${
                         activeOrder
-                          ? 'border border-[#E7E1DA] dark:border-[#2B3540] text-[#1E2930] dark:text-[#F3F4F6] hover:border-[#DE8626]'
+                          ? 'border border-[#DE8626] bg-amber-500/10 text-[#DE8626] hover:bg-[#DE8626] hover:text-white shadow-xs font-extrabold'
                           : 'col-span-2 bg-[#DE8626] text-white shadow-md hover:bg-[#C4721C]'
                       }`}
                     >
@@ -1118,6 +1216,19 @@ export default function TablesPage() {
             onClose={() => setSettlingOrder(null)}
             order={settlingOrder}
             onSettled={async () => {
+              if (settlingOrder?.tableId) {
+                usePosCatalogStore.getState().freeTableInCatalog(settlingOrder.tableId);
+                setTables((prev) =>
+                  prev.map((t) =>
+                    t.id === settlingOrder.tableId
+                      ? { ...t, status: 'Available', activeOrderId: undefined, currentOrderId: undefined, occupiedSince: undefined }
+                      : t
+                  )
+                );
+                setActiveOrders((prev) =>
+                  prev.filter((o) => o.tableId !== settlingOrder.tableId && o.id !== settlingOrder.id)
+                );
+              }
               await loadData();
               setSettlingOrder(null);
             }}

@@ -171,11 +171,13 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
 
       return updatedSub;
     } catch (err: any) {
-      set({
+      const isTransient = err?.response?.status === 429 || err?.status === 429 || !err?.response;
+      set((state) => ({
         error: err?.message || 'Failed to fetch subscription status',
         isLoading: false,
-        hasLoaded: true,
-      });
+        hasLoaded: state.subscription ? true : !isTransient,
+        isNoSubscription: state.subscription ? false : !isTransient,
+      }));
       return null;
     }
   },
@@ -274,8 +276,12 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
   },
 
   canTakeOrders: () => {
-    const { subscription, lifecycleState, isExpired, isNoSubscription } = get();
-    // Block if no active subscription or expired beyond grace period
+    const { subscription, lifecycleState, isExpired, isNoSubscription, hasLoaded } = get();
+    // If not loaded yet, allow flow to proceed rather than prematurely blocking
+    if (!hasLoaded) {
+      return true;
+    }
+    // Block if verified no active subscription or expired beyond grace period
     if (isNoSubscription || !subscription || lifecycleState === 'NONE' || lifecycleState === 'EXPIRED' || isExpired) {
       return false;
     }
@@ -283,13 +289,18 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
   },
 
   hasEntitlement: (configKey: string): boolean => {
-    const { subscription, lifecycleState, isExpired, isNoSubscription } = get();
+    const { subscription, lifecycleState, isExpired, isNoSubscription, hasLoaded } = get();
+    if (!hasLoaded) {
+      return true;
+    }
     if (isNoSubscription || !subscription || lifecycleState === 'NONE' || lifecycleState === 'EXPIRED' || isExpired) {
       return false;
     }
     const entitlements = subscription.entitlements || [];
-    const item = entitlements.find((e) => (e.configKey || '').toLowerCase() === configKey.toLowerCase());
-    return item ? Boolean(item.isAllowed) : true;
+    const item = entitlements.find(
+      (e: any) => (e.configKey || e.ConfigKey || '').toLowerCase() === configKey.toLowerCase()
+    );
+    return item ? Boolean(item.isAllowed ?? (item as any).IsAllowed) : true;
   },
 
   reset: () => {

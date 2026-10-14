@@ -1,4 +1,5 @@
 import { PaperWidth, ReceiptData, EscPosBuilder } from '@shared/core/printer/EscPosBuilder';
+import QRCode from 'qrcode';
 
 export interface PrintOptions {
   paperWidth?: PaperWidth;
@@ -25,7 +26,7 @@ export class WebPrinterService {
         console.warn('Direct serial print failed, falling back to print spooler:', err);
       }
     }
-    const html = this.generateReceiptHtml(data, paperWidth);
+    const html = await this.generateReceiptHtml(data, paperWidth);
     return this.dispatchPrint(html, paperWidth, `Receipt-#${data.orderNumber || data.orderId}`);
   }
 
@@ -156,6 +157,9 @@ export class WebPrinterService {
       tenderedAmount: 600,
       changeAmount: 64.5,
       date: new Date().toLocaleString('en-IN'),
+      upiId: 'menzabistro@icici',
+      upiPayeeName: restaurantName,
+      showUpiQr: true,
       footerMessage: 'Hardware Verified! Thank you for using Menza.',
     };
 
@@ -307,23 +311,40 @@ export class WebPrinterService {
 
         const triggerFramePrint = () => {
           try {
-            iframe.contentWindow?.focus();
-            iframe.contentWindow?.print();
-            resolve(true);
-            setTimeout(() => {
-              try {
-                if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
-              } catch {}
-            }, 3000);
+            const images = frameDoc.querySelectorAll('img');
+            const imgPromises = Array.from(images).map((img) => {
+              if (img.complete) return Promise.resolve();
+              return new Promise((r) => {
+                img.onload = () => r(null);
+                img.onerror = () => r(null);
+              });
+            });
+
+            Promise.all(imgPromises).then(() => {
+              setTimeout(() => {
+                try {
+                  iframe.contentWindow?.focus();
+                  iframe.contentWindow?.print();
+                  resolve(true);
+                  setTimeout(() => {
+                    try {
+                      if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+                    } catch {}
+                  }, 3000);
+                } catch {
+                  this.fallbackDomPrint(html).then(resolve);
+                }
+              }, 120);
+            });
           } catch {
             this.fallbackDomPrint(html).then(resolve);
           }
         };
 
         if (iframe.contentWindow?.document.readyState === 'complete') {
-          setTimeout(triggerFramePrint, 150);
+          setTimeout(triggerFramePrint, 100);
         } else {
-          iframe.onload = () => setTimeout(triggerFramePrint, 150);
+          iframe.onload = () => setTimeout(triggerFramePrint, 100);
           setTimeout(triggerFramePrint, 450);
         }
       } catch {
@@ -369,7 +390,7 @@ export class WebPrinterService {
   /**
    * Generates formatted, responsive thermal receipt HTML
    */
-  static generateReceiptHtml(data: ReceiptData, paperWidth: PaperWidth = '58mm'): string {
+  static async generateReceiptHtml(data: ReceiptData, paperWidth: PaperWidth = '58mm'): Promise<string> {
     const is80mm = paperWidth === '80mm';
     const printWidth = is80mm ? '72mm' : '48mm';
     const containerWidth = is80mm ? '280px' : '200px';
@@ -388,6 +409,44 @@ export class WebPrinterService {
     const cgst = data.cgstAmount ? Number(data.cgstAmount) : 0;
     const sgst = data.sgstAmount ? Number(data.sgstAmount) : 0;
     const grandTotal = Number(data.grandTotal || 0);
+
+    let upiQrHtml = '';
+    if (data.upiId && data.upiId.trim().length > 0 && data.showUpiQr !== false) {
+      try {
+        const cleanUpi = data.upiId.trim();
+        const payee = encodeURIComponent(data.upiPayeeName || data.restaurantName || 'Menza Restaurant');
+        const amount = grandTotal.toFixed(2);
+        const note = encodeURIComponent(`Bill #${data.orderNumber || data.orderId}`);
+        const upiUri = `upi://pay?pa=${encodeURIComponent(cleanUpi)}&pn=${payee}&am=${amount}&tn=${note}&cu=INR`;
+
+        const qrDataUrl = await QRCode.toDataURL(upiUri, {
+          margin: 1,
+          width: is80mm ? 160 : 130,
+          errorCorrectionLevel: 'M',
+          color: {
+            dark: '#000000',
+            light: '#FFFFFF'
+          }
+        });
+
+        upiQrHtml = `
+    <div class="divider-dashed"></div>
+    <div class="center" style="margin: 6px 0;">
+      <div style="font-size: ${is80mm ? '11px' : '9.5px'}; font-weight: 900; letter-spacing: 0.5px; margin-bottom: 3px;">
+        SCAN &amp; PAY WITH ANY UPI APP
+      </div>
+      <img src="${qrDataUrl}" alt="UPI QR Code" style="width: ${is80mm ? '145px' : '120px'}; height: ${is80mm ? '145px' : '120px'}; margin: 0 auto; display: block; image-rendering: pixelated;" />
+      <div style="font-size: ${is80mm ? '9.5px' : '8.5px'}; font-weight: bold; margin-top: 3px;">
+        UPI ID: ${this.escape(cleanUpi)}
+      </div>
+      <div style="font-size: ${is80mm ? '8.5px' : '7.5px'}; opacity: 0.8; margin-top: 2px;">
+        Google Pay • PhonePe • Paytm • BHIM • Cred
+      </div>
+    </div>`;
+      } catch (qrErr) {
+        console.warn('Failed to generate receipt UPI QR code:', qrErr);
+      }
+    }
 
     return `<!DOCTYPE html>
 <html>
@@ -594,6 +653,8 @@ export class WebPrinterService {
       <span>Change Return:</span>
       <span>₹${Number(data.changeAmount ?? 0).toFixed(2)}</span>
     </div>` : ''}
+
+    ${upiQrHtml}
 
     <div class="divider-solid"></div>
 

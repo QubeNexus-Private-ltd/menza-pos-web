@@ -7,36 +7,79 @@ import {
 } from '@/types/bank';
 
 export class BankService {
+  /**
+   * Fetches registered bank account for a restaurant from RestaurantConfig with legacy fallback.
+   */
   static async getBankAccount(restaurantId: number): Promise<RestaurantBankAccountResponse | null> {
     try {
       const response = await apiClient.get<RestaurantBankAccountResponse>(
-        `/CashFreePayment/restaurants/${restaurantId}/bank-account`
+        `/RestaurantConfig/${restaurantId}/bank-account`
       );
       return response.data;
-    } catch (error: any) {
-      if (error?.response?.status === 404) {
+    } catch (primaryErr: any) {
+      if (primaryErr?.response?.status === 404) {
+        try {
+          const fallbackRes = await apiClient.get<RestaurantBankAccountResponse>(
+            `/CashFreePayment/restaurants/${restaurantId}/bank-account`
+          );
+          return fallbackRes.data;
+        } catch (fallbackErr: any) {
+          if (fallbackErr?.response?.status === 404) {
+            return null;
+          }
+        }
         return null;
       }
-      throw error;
+      throw primaryErr;
     }
   }
 
+  /**
+   * Registers bank account directly into RestaurantConfig table with Razorpay penny drop verification if enabled.
+   */
   static async registerBankAccount(
     restaurantId: number,
     data: RestaurantBankAccountRequest
   ): Promise<{ message: string }> {
-    const response = await apiClient.post<{ message: string }>(
-      `/CashFreePayment/restaurants/${restaurantId}/bank-account`,
-      data
-    );
-    return response.data;
+    const isRzp = data.isRazorpay ?? (process.env.NEXT_PUBLIC_IS_RAZORPAY === 'true');
+    const gw = data.gateway ?? (isRzp ? 'Razorpay' : 'Cashfree');
+
+    try {
+      const response = await apiClient.post<{ message: string }>(
+        `/RestaurantConfig/${restaurantId}/bank-account`,
+        { ...data, isRazorpay: isRzp, gateway: gw },
+        { headers: { 'X-Payment-Gateway': gw } }
+      );
+      return response.data;
+    } catch (err: any) {
+      if (err?.response?.status === 404 || err?.response?.status === 405) {
+        const fallbackRes = await apiClient.post<{ message: string }>(
+          `/CashFreePayment/restaurants/${restaurantId}/bank-account`,
+          { ...data, isRazorpay: isRzp, gateway: gw },
+          { headers: { 'X-Payment-Gateway': gw } }
+        );
+        return fallbackRes.data;
+      }
+      throw err;
+    }
   }
 
+  /**
+   * Verifies bank account via Penny Drop (Razorpay Fund Account Validation or Cashfree).
+   */
   static async verifyBankAccount(data: VerifyBankAccountRequest): Promise<VerifyBankAccountResponse> {
+    const isRzp = data.isRazorpay ?? (process.env.NEXT_PUBLIC_IS_RAZORPAY === 'true');
+    const gw = data.gateway ?? (isRzp ? 'Razorpay' : 'Cashfree');
+
+    const endpoint = data.restaurantId
+      ? `/CashFreePayment/restaurants/${data.restaurantId}/bank-account/verify`
+      : '/CashFreePayment/bank-account/verify';
+
     try {
       const response = await apiClient.post<VerifyBankAccountResponse>(
-        '/CashFreePayment/bank-account/verify',
-        data
+        endpoint,
+        { ...data, isRazorpay: isRzp, gateway: gw },
+        { headers: { 'X-Payment-Gateway': gw } }
       );
       return response.data;
     } catch (error: any) {
@@ -53,9 +96,11 @@ export class BankService {
             nameMatchScore: 100,
             nameMatchResult: 'DIRECT_MATCH',
             bankName,
-            utr: `SB${Date.now().toString().slice(-10)}`,
-            referenceId: `REF_SB_${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
-            message: `Account routing and IFSC confirmed for ${bankName} (${cleanIfsc}).`,
+            utr: `${isRzp ? 'RZP' : 'SB'}${Date.now().toString().slice(-10)}`,
+            referenceId: `REF_${isRzp ? 'RZP' : 'SB'}_${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
+            message: `[${gw} Sandbox Verified] Account routing and IFSC confirmed for ${bankName} (${cleanIfsc}).`,
+            gateway: gw,
+            isRazorpay: isRzp,
           };
         } else {
           return {
@@ -63,6 +108,8 @@ export class BankService {
             accountStatus: 'INVALID',
             bankName,
             message: 'Invalid bank account number or IFSC code format.',
+            gateway: gw,
+            isRazorpay: isRzp,
           };
         }
       }

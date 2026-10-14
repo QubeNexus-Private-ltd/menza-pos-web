@@ -22,6 +22,26 @@ export class RestaurantConfigRemoteDataSource {
       const cgst = Number(item.cgstPercentage ?? item.CgstPercentage ?? 2.5);
       const totalGst = Number(item.totalGstPercentage ?? item.TotalGstPercentage ?? (sgst + cgst));
 
+      let bankerUpiId = item.bankerUpiId || item.BankerUpiId || item.upiId || item.UpiId || undefined;
+      let bankerAccountHolderName = item.bankerAccountHolderName || item.BankerAccountHolderName || undefined;
+      let printUpiQrOnReceipts = item.printUpiQrOnReceipts ?? item.PrintUpiQrOnReceipts ?? true;
+
+      const effectiveRestId = Number(restaurantId || item.id || item.Id || activeRest?.restaurantId || 0);
+
+      // If bankerUpiId is not present in general config, fetch from dedicated bank account endpoint
+      if (!bankerUpiId && effectiveRestId > 0) {
+        try {
+          const bankRes = await apiClient.get(`/RestaurantConfig/${effectiveRestId}/bank-account`);
+          if (bankRes.data?.upiId) {
+            bankerUpiId = bankRes.data.upiId;
+            if (bankRes.data.accountHolder) bankerAccountHolderName = bankRes.data.accountHolder;
+            if (bankRes.data.printUpiQrOnReceipts !== undefined) printUpiQrOnReceipts = bankRes.data.printUpiQrOnReceipts;
+          }
+        } catch {
+          // If bank endpoint returned 404, fallback silently
+        }
+      }
+
       return {
         id: Number(item.id || item.Id || restaurantId || activeRest?.restaurantId || 1),
         restaurantName: String(item.restName || item.restaurantName || item.RestName || item.RestaurantName || activeRest?.restaurantName || 'Menza Restaurant'),
@@ -39,6 +59,12 @@ export class RestaurantConfigRemoteDataSource {
         currencySymbol: '₹',
         taxPercentage: totalGst,
         walletBalance: Number(item.walletBalance || item.WalletBalance || 0),
+        bankerUpiId,
+        bankerAccountHolderName,
+        printUpiQrOnReceipts,
+        bankerAccountNumber: item.bankerAccountNumber || item.BankerAccountNumber || undefined,
+        bankerIfscCode: item.bankerIfscCode || item.BankerIfscCode || undefined,
+        bankerBankName: item.bankerBankName || item.BankerBankName || undefined,
         businessProfile: (item.businessProfile || item.BusinessProfile || 'HYBRID') as any,
         kitchenMode: (item.kitchenMode || item.KitchenMode || 'SINGLE_KITCHEN') as any,
         isKitchenActive: Boolean(item.isKitchenActive ?? item.IsKitchenActive ?? true),
@@ -65,6 +91,9 @@ export class RestaurantConfigRemoteDataSource {
         currencySymbol: '₹',
         taxPercentage: 5,
         walletBalance: 0,
+        bankerUpiId: (activeRest as any)?.bankerUpiId || undefined,
+        bankerAccountHolderName: (activeRest as any)?.bankerAccountHolderName || activeRest?.restaurantName || undefined,
+        printUpiQrOnReceipts: (activeRest as any)?.printUpiQrOnReceipts ?? true,
         businessProfile: 'HYBRID',
         kitchenMode: 'SINGLE_KITCHEN',
         isKitchenActive: true,

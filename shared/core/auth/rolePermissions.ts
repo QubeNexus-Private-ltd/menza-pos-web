@@ -22,6 +22,7 @@ export const extractUserRoles = (
           if (r === 4) rolesSet.add('cashier');
           if (r === 5) rolesSet.add('waiter');
           if (r === 6) rolesSet.add('chef');
+          if (r === 8) rolesSet.add('salesperson');
         } else if (typeof r === 'object' && r !== null) {
           const name = (r as any).roleName || (r as any).name || (r as any).role;
           if (typeof name === 'string' && name.trim()) {
@@ -47,6 +48,7 @@ export const extractUserRoles = (
       if (id === 4) rolesSet.add('cashier');
       if (id === 5) rolesSet.add('waiter');
       if (id === 6) rolesSet.add('chef');
+      if (id === 8) rolesSet.add('salesperson');
     }
   }
 
@@ -65,10 +67,20 @@ export const extractUserRoles = (
       if (id === 4) rolesSet.add('cashier');
       if (id === 5) rolesSet.add('waiter');
       if (id === 6) rolesSet.add('chef');
+      if (id === 8) rolesSet.add('salesperson');
     }
   }
 
   return Array.from(rolesSet);
+};
+
+export const isSalesPersonUser = (
+  user: User | null,
+  activeRestaurant?: RestaurantDetail | null
+): boolean => {
+  if (!user && !activeRestaurant) return false;
+  const roles = extractUserRoles(user, activeRestaurant || null);
+  return roles.some((r) => r.includes('salesperson') || r.includes('sales') || r.includes('salespartner') || r.includes('partner'));
 };
 
 /**

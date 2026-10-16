@@ -4,6 +4,7 @@ import React, { useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { isOwnerUser, isSuperAdminUser } from '@shared/core/auth/rolePermissions';
+import { isSalesPersonUser } from '@/lib/auth/permissions';
 import { Loader2 } from 'lucide-react';
 
 export const AuthGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -25,6 +26,20 @@ export const AuthGuard: React.FC<{ children: React.ReactNode }> = ({ children })
     if (isSuperAdmin) {
       if (!isAuthenticated && pathname !== '/login') {
         router.replace('/login');
+      }
+      return;
+    }
+
+    // SalesPerson exemption & routing: Sales persons go to earnings dashboard, exempt from store onboarding & owner T&C
+    const isSalesPerson = isSalesPersonUser(user?.roles);
+    if (isSalesPerson) {
+      if (!isAuthenticated && pathname !== '/login') {
+        router.replace('/login');
+        return;
+      }
+      if (pathname === '/dashboard' || pathname === '/') {
+        router.replace('/sales/earnings');
+        return;
       }
       return;
     }

@@ -54,7 +54,7 @@ export default function GlobalRouteErrorBoundary({
           </button>
           <button
             type="button"
-            onClick={() => router.push('/dashboard')}
+            onClick={() => router.push('/')}
             className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-xs border border-[#E7E1DA] dark:border-[#2B3540] hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
           >
             <Home className="h-3.5 w-3.5" />

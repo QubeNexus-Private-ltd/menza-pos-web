@@ -33,6 +33,7 @@ import {
   PrivacySection,
 } from '@shared/core/constants/privacyPolicyData';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
+import { isSalesPersonUser } from '@/lib/auth/permissions';
 
 const ICON_MAP: Record<string, React.ElementType> = {
   Shield: ShieldCheck,
@@ -49,7 +50,7 @@ const ICON_MAP: Record<string, React.ElementType> = {
 
 export default function PrivacyPolicyPage() {
   const router = useRouter();
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, user } = useAuthStore();
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
@@ -84,7 +85,7 @@ export default function PrivacyPolicyPage() {
           <div className="flex items-center gap-3">
             <button
               type="button"
-              onClick={() => router.push(isAuthenticated ? '/dashboard' : '/login')}
+              onClick={() => router.push(!isAuthenticated ? '/login' : isSalesPersonUser(user?.roles) ? '/sales/earnings' : '/dashboard')}
               className="p-2 rounded-xl text-[#667085] hover:text-[#1E2930] dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
               title="Return"
             >

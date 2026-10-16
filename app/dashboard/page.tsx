@@ -62,6 +62,7 @@ import {
 } from '@/lib/utils/orderStatusEngine';
 import { Crown, Building2, Globe, ShieldCheck } from 'lucide-react';
 import { extractUserRoles } from '@shared/core/auth/rolePermissions';
+import { isSalesPersonUser } from '@/lib/auth/permissions';
 import { SubscriptionRemoteDataSource } from '@shared/data/datasources/SubscriptionRemoteDataSource';
 import { RestaurantDetail } from '@shared/domain/models/Restaurant';
 import {
@@ -86,6 +87,20 @@ export default function DashboardPage() {
       ['SUPERADMIN', 'SUPER_ADMIN', 'SUPERADMINONLY'].includes(r.toUpperCase().replace(/[^A-Z]/g, ''))
     ) ||
     (typeof user?.roles?.[0] === 'string' && user.roles[0].toLowerCase().includes('superadmin'));
+
+  const isSalesPerson =
+    isSalesPersonUser(user?.roles) ||
+    extractedRoles.some((r) => r.includes('sales') || r.includes('partner'));
+
+  useEffect(() => {
+    if (isSalesPerson) {
+      router.replace('/sales/earnings');
+    }
+  }, [isSalesPerson, router]);
+
+  if (isSalesPerson) {
+    return null;
+  }
   const roleName = isSuperAdmin ? 'SuperAdmin' : (typeof user?.roles?.[0] === 'string' ? user.roles[0] : extractedRoles[0] || 'Owner');
 
   const orderRemoteDataSource = useMemo(() => new OrderRemoteDataSource(), []);

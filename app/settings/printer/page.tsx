@@ -6,7 +6,7 @@ import {
   Printer,
   ArrowLeft,
   Check,
-  Receipt,
+  ReceiptIndianRupee as Receipt,
   UtensilsCrossed,
   Info,
   Laptop,
@@ -19,12 +19,22 @@ import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
 import { usePrinterStore } from '@shared/presentation/state/usePrinterStore';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
+import { usePosCatalogStore } from '@/stores/usePosCatalogStore';
+import { RestaurantConfigRemoteDataSource } from '@shared/data/datasources/RestaurantConfigRemoteDataSource';
 import { PaperWidth } from '@shared/core/printer/EscPosBuilder';
 import { WebPrinterService } from '@/services/webPrinterService';
 
 export default function PrinterSettingsPage() {
   const router = useRouter();
-  const { activeRestaurant } = useAuthStore();
+  const { activeRestaurant, restaurants } = useAuthStore();
+  const restaurantConfig = usePosCatalogStore((state) => state.restaurantConfig);
+  const previewLogoUrl = (
+    restaurantConfig?.logoUrl ||
+    activeRestaurant?.logoUrl ||
+    restaurantConfig?.imageUrl ||
+    activeRestaurant?.imageUrl ||
+    ''
+  ).trim();
   const {
     paperWidth,
     autoPrintReceipt,
@@ -42,10 +52,42 @@ export default function PrinterSettingsPage() {
   const [isPrintingReceipt, setIsPrintingReceipt] = useState(false);
   const [isPrintingKot, setIsPrintingKot] = useState(false);
   const [previewTab, setPreviewTab] = useState<'receipt' | 'kot'>('receipt');
+  const [processedLogoUrl, setProcessedLogoUrl] = useState<string>('');
 
   useEffect(() => {
     setFooterText(customFooter);
   }, [customFooter]);
+
+  useEffect(() => {
+    if (!previewLogoUrl) {
+      setProcessedLogoUrl('');
+      return;
+    }
+    let active = true;
+    WebPrinterService.resolveLogoDataUrl(previewLogoUrl, paperWidth)
+      .then((url) => {
+        if (active) setProcessedLogoUrl(url || previewLogoUrl);
+      })
+      .catch(() => {
+        if (active) setProcessedLogoUrl(previewLogoUrl);
+      });
+    return () => {
+      active = false;
+    };
+  }, [previewLogoUrl, paperWidth]);
+
+  useEffect(() => {
+    const restId = activeRestaurant?.restaurantId || restaurants?.[0]?.restaurantId || 0;
+    if (!restId) return;
+    new RestaurantConfigRemoteDataSource()
+      .getConfig(restId)
+      .then((cfg) => {
+        if (cfg) {
+          usePosCatalogStore.getState().updateRestaurantConfig(cfg);
+        }
+      })
+      .catch(() => {});
+  }, [activeRestaurant?.restaurantId, restaurants]);
 
   const handleSaveFooter = async () => {
     try {
@@ -491,14 +533,28 @@ export default function PrinterSettingsPage() {
                   {previewTab === 'receipt' ? (
                     /* Receipt Simulation */
                     <div className="space-y-1.5">
+                      {(processedLogoUrl || previewLogoUrl) && (
+                        <div className="flex justify-center pb-1.5">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={processedLogoUrl || previewLogoUrl}
+                            alt="Store Logo"
+                            style={{
+                              maxWidth: paperWidth === '80mm' ? '200px' : '160px',
+                              maxHeight: paperWidth === '80mm' ? '180px' : '145px',
+                            }}
+                            className="object-contain mx-auto block"
+                          />
+                        </div>
+                      )}
                       <div className="text-center font-black text-xs uppercase tracking-wide">
-                        {activeRestaurant?.restaurantName || 'Menza Restaurant'}
+                        {restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant'}
                       </div>
                       <div className="text-center text-[10px] text-gray-700">
-                        {activeRestaurant?.address || '100 Feet Road, Indiranagar'}
+                        {restaurantConfig?.address || activeRestaurant?.address || '100 Feet Road, Indiranagar'}
                       </div>
                       <div className="text-center text-[10px] text-gray-700">
-                        GSTIN: 29ABCDE1234F1Z5
+                        GSTIN: {restaurantConfig?.gstNumber || '29ABCDE1234F1Z5'}
                       </div>
 
                       <div className="border-t border-black my-1" />

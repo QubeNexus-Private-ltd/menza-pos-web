@@ -7,7 +7,7 @@ import {
   ChefHat,
   CheckCircle2,
   UtensilsCrossed,
-  Receipt,
+  ReceiptIndianRupee as Receipt,
   Clock,
   ArrowRight,
   TrendingUp,

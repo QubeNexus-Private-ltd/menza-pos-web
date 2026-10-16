@@ -19,12 +19,13 @@ import { AuthRemoteDataSource } from '@shared/data/datasources/AuthRemoteDataSou
 import { AuthRepositoryImpl } from '@shared/data/repositories/AuthRepositoryImpl';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { RestaurantDetail } from '@shared/domain/models/Restaurant';
+import { isSalesPersonUser } from '@/lib/auth/permissions';
 
 const authRepository = new AuthRepositoryImpl(new AuthRemoteDataSource());
 
 export default function LoginPage() {
   const router = useRouter();
-  const { setAuthData, isAuthenticated } = useAuthStore();
+  const { setAuthData, isAuthenticated, user } = useAuthStore();
 
   const [mobile, setMobile] = useState('');
   const [otpCode, setOtpCode] = useState('');
@@ -45,9 +46,13 @@ export default function LoginPage() {
   // Redirect if already authenticated
   useEffect(() => {
     if (isAuthenticated) {
-      router.replace('/dashboard');
+      if (isSalesPersonUser(user?.roles)) {
+        router.replace('/sales/earnings');
+      } else {
+        router.replace('/dashboard');
+      }
     }
-  }, [isAuthenticated, router]);
+  }, [isAuthenticated, user?.roles, router]);
 
   // Resend OTP countdown timer
   useEffect(() => {
@@ -183,6 +188,12 @@ export default function LoginPage() {
 
       const res = await authRepository.loginWithOtp(mobile, codeToVerify);
 
+      // If user is a sales person, bypass outlet selection and go straight to earnings
+      if (isSalesPersonUser(res.roles)) {
+        completeLogin(res);
+        return;
+      }
+
       // If user is assigned to multiple outlets, prompt outlet selection
       if (res.restaurants && res.restaurants.length > 1) {
         setPendingAuthResponse(res);
@@ -216,7 +227,11 @@ export default function LoginPage() {
       activeRestId,
       res.isTermConditionChecked
     );
-    router.replace('/dashboard');
+    if (isSalesPersonUser(res.roles)) {
+      router.replace('/sales/earnings');
+    } else {
+      router.replace('/dashboard');
+    }
   };
 
   const handleBackToMobile = () => {

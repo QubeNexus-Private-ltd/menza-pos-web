@@ -22,7 +22,7 @@ import {
   AlertCircle,
   QrCode,
   ArrowRight,
-  Receipt,
+  ReceiptIndianRupee as Receipt,
   User,
   Phone,
   Sparkles,
@@ -1028,6 +1028,7 @@ export default function PosPage() {
           orderNumber: String(activeTableOrder.orderNumber || activeTableOrder.id),
           pickupToken: String(activeTableOrder.pickupToken || activeTableOrder.id),
           restaurantName: restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant',
+          logoUrl: restaurantConfig?.logoUrl || activeRestaurant?.logoUrl || undefined,
           address: restaurantConfig?.address || activeRestaurant?.address || '',
           city: restaurantConfig?.city || activeRestaurant?.city || '',
           state: restaurantConfig?.state || activeRestaurant?.state || '',
@@ -1179,6 +1180,7 @@ export default function PosPage() {
           orderNumber: String(fetchedOrder?.orderNumber || orderId),
           pickupToken: pickupToken || String(fetchedOrder?.orderNumber || orderId),
           restaurantName: restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant',
+          logoUrl: restaurantConfig?.logoUrl || activeRestaurant?.logoUrl || undefined,
           address: restaurantConfig?.address || activeRestaurant?.address || '',
           city: restaurantConfig?.city || activeRestaurant?.city || '',
           state: restaurantConfig?.state || activeRestaurant?.state || '',
@@ -1309,6 +1311,7 @@ export default function PosPage() {
       orderNumber: String(activeTableOrder.orderNumber || activeTableOrder.id),
       pickupToken: String(activeTableOrder.pickupToken || activeTableOrder.id),
       restaurantName: restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant',
+      logoUrl: restaurantConfig?.logoUrl || activeRestaurant?.logoUrl || undefined,
       address: restaurantConfig?.address || activeRestaurant?.address || '',
       city: restaurantConfig?.city || activeRestaurant?.city || '',
       state: restaurantConfig?.state || activeRestaurant?.state || '',
@@ -2680,8 +2683,24 @@ export default function PosPage() {
                 {/* Printable Receipt Preview Area */}
                 <div
                   id="thermal-print-area"
-                  className="rounded-2xl border border-dashed border-[#E7E1DA] dark:border-[#2B3540] p-3.5 sm:p-4 text-xs font-mono bg-[#FAF7F2] dark:bg-[#151A20] mb-4 sm:mb-5 max-h-56 overflow-y-auto"
+                  className="rounded-2xl border border-dashed border-[#E7E1DA] dark:border-[#2B3540] p-3.5 sm:p-4 text-xs font-mono bg-[#FAF7F2] dark:bg-[#151A20] mb-4 sm:mb-5 max-h-64 overflow-y-auto"
                 >
+                  {(orderSuccessData.receiptData?.logoUrl ||
+                    restaurantConfig?.logoUrl ||
+                    (activeRestaurant as any)?.logoUrl) && (
+                    <div className="flex justify-center pb-2">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={
+                          orderSuccessData.receiptData?.logoUrl ||
+                          restaurantConfig?.logoUrl ||
+                          (activeRestaurant as any)?.logoUrl
+                        }
+                        alt="Store Logo"
+                        className="max-h-28 max-w-[140px] object-contain mx-auto"
+                      />
+                    </div>
+                  )}
                   <div className="text-center font-bold pb-2 border-b border-dashed border-gray-400">
                     {storeDisplayName}
                   </div>

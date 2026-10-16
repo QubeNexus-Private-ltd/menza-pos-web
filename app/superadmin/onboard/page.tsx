@@ -34,6 +34,8 @@ import { MasterDataRepositoryImpl } from '@shared/data/repositories/MasterDataRe
 import { RoleRemoteDataSource } from '@shared/data/datasources/RoleRemoteDataSource';
 import { RoleRepositoryImpl } from '@shared/data/repositories/RoleRepositoryImpl';
 import { apiClient } from '@shared/core/network/apiClient';
+import { useAuthStore } from '@shared/presentation/state/useAuthStore';
+import { isSalesPersonUser } from '@/lib/auth/permissions';
 
 const superAdminRepository = new SuperAdminRepositoryImpl(new SuperAdminRemoteDataSource());
 const masterDataRepository = new MasterDataRepositoryImpl(new MasterDataRemoteDataSource());
@@ -91,6 +93,8 @@ const DEFAULT_ROLES: RoleMaster[] = [
 
 export default function SuperAdminOnboardPage() {
   const router = useRouter();
+  const { user } = useAuthStore();
+  const isSalesPerson = isSalesPersonUser(user?.roles);
 
   // Workflow Step State (1, 2, or 3)
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
@@ -100,7 +104,7 @@ export default function SuperAdminOnboardPage() {
     restaurantName: '',
     address: '',
     city: '',
-    state: 'Karnataka',
+    state: 'KA',
     contactNumber: '',
     gstNumber: '',
     imageUrl: '',
@@ -149,7 +153,7 @@ export default function SuperAdminOnboardPage() {
           setStates(stateList);
           setForm((prev) => ({
             ...prev,
-            state: prev.state || stateList[0].stateDesc,
+            state: prev.state || stateList[0].stateCode,
           }));
         }
       } catch {
@@ -205,9 +209,9 @@ export default function SuperAdminOnboardPage() {
         const data = res.data;
         if (data && (data.id || data.Id || data.userId)) {
           const id = Number(data.id ?? data.Id ?? data.userId ?? 0);
-          const name = String(data.name ?? data.Name ?? '');
+          const name = String(data.name ?? data.Name ?? data.fullName ?? data.FullName ?? '');
           setExistingOwner({ id, name });
-          if (name && !form.ownerName.trim()) {
+          if (name) {
             setForm((prev) => ({ ...prev, ownerName: name }));
           }
         } else {
@@ -350,6 +354,7 @@ export default function SuperAdminOnboardPage() {
   // Step 3 Completion (Exact parity with F:\Menza handleCompleteAssignRole)
   const handleCompleteAssignRole = async (e: React.FormEvent) => {
     e.preventDefault();
+
     if (!createdRestaurantId || createdRestaurantId <= 0) {
       alert('Invalid Restaurant ID. Please complete Step 1 first.');
       return;
@@ -391,7 +396,7 @@ export default function SuperAdminOnboardPage() {
       restaurantName: '',
       address: '',
       city: '',
-      state: 'Karnataka',
+      state: states[0]?.stateCode || 'KA',
       contactNumber: '',
       gstNumber: '',
       imageUrl: '',
@@ -419,18 +424,18 @@ export default function SuperAdminOnboardPage() {
               </div>
               <div>
                 <h1 className="text-base sm:text-lg font-extrabold text-[#1E2930] dark:text-[#F3F4F6] tracking-tight">
-                  Menza Master
+                  {isSalesPerson ? 'Partner Store Onboarding' : 'Menza Master'}
                 </h1>
                 <p className="text-xs text-[#667085] dark:text-[#94A3B8]">
-                  Super Admin • Onboard New Store
+                  {isSalesPerson ? 'Sales Partner • Onboard New Store' : 'Super Admin • Onboard New Store'}
                 </p>
               </div>
             </div>
 
             <button
-              onClick={() => router.push('/superadmin/directory')}
+              onClick={() => router.push(isSalesPerson ? '/sales/earnings' : '/superadmin/directory')}
               className="flex h-8 w-8 items-center justify-center rounded-full border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#667085] hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-              title="Close and return to Directory"
+              title={isSalesPerson ? 'Close and return to Earnings' : 'Close and return to Directory'}
             >
               <X className="h-4 w-4" />
             </button>
@@ -813,7 +818,7 @@ export default function SuperAdminOnboardPage() {
                 <div className="flex items-center gap-2 text-[#1E2930] dark:text-[#F3F4F6]">
                   <Building className="h-4 w-4 text-[#DE8626]" />
                   <span>
-                    <strong className="font-extrabold">Store:</strong> {form.restaurantName} (ID: #{createdRestaurantId || 101})
+                    <strong className="font-extrabold">Store:</strong> {form.restaurantName} {createdRestaurantId ? `(ID: #${createdRestaurantId})` : ''}
                   </span>
                 </div>
                 <div className="flex items-center gap-2 text-[#1E2930] dark:text-[#F3F4F6]">
@@ -831,7 +836,9 @@ export default function SuperAdminOnboardPage() {
                 </label>
 
                 <div className="space-y-2.5">
-                  {availableRoles.map((roleObj) => {
+                  {availableRoles
+                    .filter((r) => !isSalesPerson || (r.id !== 1 && r.roleName.toLowerCase() !== 'superadmin'))
+                    .map((roleObj) => {
                     const isSelected = roleObj.id === selectedRoleId;
                     return (
                       <div
@@ -970,7 +977,7 @@ export default function SuperAdminOnboardPage() {
                         key={st.stateCode}
                         type="button"
                         onClick={() => {
-                          setForm({ ...form, state: st.stateDesc });
+                          setForm({ ...form, state: st.stateCode });
                           setStateModalVisible(false);
                         }}
                         className={`w-full flex items-center justify-between p-2.5 rounded-xl text-xs transition-colors ${
@@ -1122,11 +1129,11 @@ export default function SuperAdminOnboardPage() {
                 <div className="space-y-2 pt-2">
                   <button
                     type="button"
-                    onClick={() => router.push('/superadmin/directory')}
+                    onClick={() => router.push(isSalesPerson ? '/sales/restaurants' : '/superadmin/directory')}
                     className="w-full flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-[#DE8626] to-[#CB741B] py-3 text-xs font-extrabold text-white shadow-lg shadow-[#DE8626]/25 hover:from-[#C4721C] hover:to-[#B66415] transition-all"
                   >
                     <Store className="h-4 w-4" />
-                    <span>VIEW IN STORE DIRECTORY</span>
+                    <span>{isSalesPerson ? 'VIEW MY STORES' : 'VIEW IN STORE DIRECTORY'}</span>
                   </button>
 
                   <button

@@ -10,3 +10,4 @@ export * from './wallet';
 export * from './subscription';
 export * from './printer';
 export * from './bank';
+export * from './sales';

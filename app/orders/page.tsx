@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Receipt,
+  ReceiptIndianRupee as Receipt,
   Search,
   Filter,
   RefreshCw,
@@ -276,10 +276,13 @@ export default function OrdersPage() {
     try {
       setPrintingOrderId(order.id);
       const receiptData: ReceiptData = {
-        restaurantName: activeRestaurant?.restaurantName || order.restaurantName || 'Menza Restaurant',
-        address: activeRestaurant?.address,
-        contactPhone: (activeRestaurant as any)?.contactNumber || activeRestaurant?.ownerMobile || '',
-        gstNumber: (activeRestaurant as any)?.gstNumber || (activeRestaurant as any)?.gstin,
+        restaurantName: restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || order.restaurantName || 'Menza Restaurant',
+        logoUrl: restaurantConfig?.logoUrl || activeRestaurant?.logoUrl || undefined,
+        address: restaurantConfig?.address || activeRestaurant?.address,
+        city: restaurantConfig?.city || activeRestaurant?.city,
+        state: restaurantConfig?.state || activeRestaurant?.state,
+        contactPhone: restaurantConfig?.contactNumber || (activeRestaurant as any)?.contactNumber || activeRestaurant?.ownerMobile || '',
+        gstNumber: restaurantConfig?.gstNumber || (activeRestaurant as any)?.gstNumber || (activeRestaurant as any)?.gstin,
         orderId: order.id,
         orderNumber: order.orderNumber,
         tableName: order.tableName,
@@ -1388,8 +1391,18 @@ export default function OrdersPage() {
               {/* Printable Receipt Card */}
               <div className="rounded-2xl border border-dashed border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-4 text-xs font-mono mb-4 space-y-2">
                 <div className="text-center pb-2 border-b border-dashed border-[#E7E1DA] dark:border-[#2B3540]">
+                  {(restaurantConfig?.logoUrl || (activeRestaurant as any)?.logoUrl) && (
+                    <div className="flex justify-center pb-2">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={restaurantConfig?.logoUrl || (activeRestaurant as any)?.logoUrl}
+                        alt="Store Logo"
+                        className="max-h-28 max-w-[140px] object-contain mx-auto"
+                      />
+                    </div>
+                  )}
                   <h4 className="font-bold text-sm uppercase">
-                    {activeRestaurant?.restaurantName || 'Menza Restaurant'}
+                    {restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant'}
                   </h4>
                   <p className="text-[10px] text-[#667085]">{activeRestaurant?.address}</p>
                   <p className="text-[10px] text-[#667085]">Phone: {(activeRestaurant as any)?.contactNumber || activeRestaurant?.ownerMobile || '-'}</p>

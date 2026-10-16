@@ -7,6 +7,7 @@ import {
 } from '@/types/bank';
 
 export class BankService {
+
   /**
    * Fetches registered bank account for a restaurant from RestaurantConfig with legacy fallback.
    */

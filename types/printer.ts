@@ -13,6 +13,8 @@ export interface ReceiptItem {
 
 export interface ReceiptData {
   restaurantName: string;
+  logoUrl?: string;
+  logoBitmap?: { widthBytes: number; heightDots: number; bytes: number[] };
   address?: string;
   city?: string;
   state?: string;

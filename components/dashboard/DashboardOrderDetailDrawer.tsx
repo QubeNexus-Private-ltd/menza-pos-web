@@ -142,11 +142,15 @@ export const DashboardOrderDetailDrawer: React.FC<DashboardOrderDetailDrawerProp
     try {
       setIsPrinting(true);
       const itemsList = Array.isArray(order.items) ? order.items : [];
+      const restCfg = usePosCatalogStore.getState().restaurantConfig;
       const receiptData: ReceiptData = {
-        restaurantName: activeRestaurant?.restaurantName || order.restaurantName || 'Menza Restaurant',
-        address: activeRestaurant?.address,
-        contactPhone: (activeRestaurant as any)?.contactNumber || activeRestaurant?.ownerMobile || '',
-        gstNumber: (activeRestaurant as any)?.gstNumber || (activeRestaurant as any)?.gstin,
+        restaurantName: restCfg?.restaurantName || activeRestaurant?.restaurantName || order.restaurantName || 'Menza Restaurant',
+        logoUrl: restCfg?.logoUrl || activeRestaurant?.logoUrl || undefined,
+        address: restCfg?.address || activeRestaurant?.address,
+        city: restCfg?.city || activeRestaurant?.city,
+        state: restCfg?.state || activeRestaurant?.state,
+        contactPhone: restCfg?.contactNumber || (activeRestaurant as any)?.contactNumber || activeRestaurant?.ownerMobile || '',
+        gstNumber: restCfg?.gstNumber || (activeRestaurant as any)?.gstNumber || (activeRestaurant as any)?.gstin,
         orderId: order.id,
         orderNumber: order.orderNumber,
         pickupToken: tokenDisplay,

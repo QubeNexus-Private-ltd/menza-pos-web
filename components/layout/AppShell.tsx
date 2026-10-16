@@ -59,6 +59,7 @@ const SubscriptionBlockerModal = dynamic(
   { ssr: false }
 );
 import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
+import { usePosCatalogStore } from '@/stores/usePosCatalogStore';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { useNotificationStore } from '@shared/presentation/state/useNotificationStore';
 import { useWebTheme } from '../theme/ThemeProvider';
@@ -221,10 +222,11 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
 
     const loadData = async () => {
       try {
-        const [rev, op, wal] = await Promise.allSettled([
+        const [rev, op, wal, cfg] = await Promise.allSettled([
           orderDs.getTodayRevenue(currentRestId),
           configDs.getOperatingStatus(currentRestId),
           walletDs.getWallet(currentRestId),
+          configDs.getConfig(currentRestId),
         ]);
 
         if (rev.status === 'fulfilled' && rev.value) {
@@ -238,6 +240,35 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
         }
         if (wal.status === 'fulfilled' && wal.value) {
           setWalletBalance(Number(wal.value.balance || 0));
+        }
+        if (cfg.status === 'fulfilled' && cfg.value) {
+          const opVal = op.status === 'fulfilled' ? op.value : null;
+          const resolvedLogo = (
+            cfg.value.logoUrl ||
+            opVal?.logoUrl ||
+            opVal?.storeImageUrl ||
+            cfg.value.imageUrl ||
+            opVal?.imageUrl ||
+            ''
+          ).trim();
+          const enrichedCfg = {
+            ...cfg.value,
+            logoUrl: resolvedLogo || cfg.value.logoUrl,
+          };
+          usePosCatalogStore.getState().updateRestaurantConfig(enrichedCfg);
+
+          const authState = useAuthStore.getState();
+          if (
+            authState.activeRestaurant &&
+            authState.activeRestaurant.restaurantId === currentRestId &&
+            resolvedLogo &&
+            authState.activeRestaurant.logoUrl !== resolvedLogo
+          ) {
+            authState.setActiveRestaurant({
+              ...authState.activeRestaurant,
+              logoUrl: resolvedLogo,
+            });
+          }
         }
 
         // Check active restaurant subscription lifecycle state

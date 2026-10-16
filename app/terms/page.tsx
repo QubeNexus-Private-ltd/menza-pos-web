@@ -8,7 +8,7 @@ import {
   Building2,
   FileText,
   CreditCard,
-  Receipt,
+  ReceiptIndianRupee as Receipt,
   Wallet,
   IndianRupee,
   Lock,

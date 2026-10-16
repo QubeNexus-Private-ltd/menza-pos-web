@@ -26,7 +26,7 @@ import {
   CalendarDays,
   Wallet,
   MessageSquare,
-  Receipt,
+  ReceiptIndianRupee as Receipt,
   Search,
   Eye,
   X,

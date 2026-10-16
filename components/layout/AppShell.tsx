@@ -30,7 +30,7 @@ import {
   AlertCircle,
   ChefHat,
   CalendarDays,
-  Receipt,
+  ReceiptIndianRupee as Receipt,
   Printer,
   TrendingUp,
   Maximize2,

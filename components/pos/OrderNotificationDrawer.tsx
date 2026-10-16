@@ -14,7 +14,7 @@ import {
   ShoppingBag,
   IndianRupee,
   Utensils,
-  Receipt,
+  ReceiptIndianRupee as Receipt,
   Sparkles,
   ChevronRight,
 } from 'lucide-react';

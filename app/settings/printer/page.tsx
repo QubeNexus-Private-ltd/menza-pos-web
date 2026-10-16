@@ -6,7 +6,7 @@ import {
   Printer,
   ArrowLeft,
   Check,
-  Receipt,
+  ReceiptIndianRupee as Receipt,
   UtensilsCrossed,
   Info,
   Laptop,

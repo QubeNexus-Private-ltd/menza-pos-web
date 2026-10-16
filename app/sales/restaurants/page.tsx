@@ -12,7 +12,7 @@ import {
   MapPin,
   Wallet,
   TrendingUp,
-  Receipt,
+  ReceiptIndianRupee as Receipt,
   Loader2,
   ArrowRight,
   AlertTriangle,

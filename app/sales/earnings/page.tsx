@@ -15,7 +15,7 @@ import {
   Clock,
   Sparkles,
   Loader2,
-  Receipt,
+  ReceiptIndianRupee as Receipt,
   Download,
   Info,
   Building,

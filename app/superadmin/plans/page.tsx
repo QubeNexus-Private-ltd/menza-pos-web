@@ -24,7 +24,7 @@ import {
   Truck,
   CreditCard,
   ChevronRight,
-  Receipt,
+  ReceiptIndianRupee as Receipt,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';

@@ -5,7 +5,7 @@ import {
   X,
   Clock,
   Printer,
-  Receipt,
+  ReceiptIndianRupee as Receipt,
   UtensilsCrossed,
   Phone,
   User,

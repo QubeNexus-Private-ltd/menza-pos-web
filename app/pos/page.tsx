@@ -22,7 +22,7 @@ import {
   AlertCircle,
   QrCode,
   ArrowRight,
-  Receipt,
+  ReceiptIndianRupee as Receipt,
   User,
   Phone,
   Sparkles,

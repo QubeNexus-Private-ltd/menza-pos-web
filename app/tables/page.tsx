@@ -9,7 +9,7 @@ import {
   Clock,
   IndianRupee,
   ShoppingBag,
-  Receipt,
+  ReceiptIndianRupee as Receipt,
   X,
   RefreshCw,
   Sparkles,

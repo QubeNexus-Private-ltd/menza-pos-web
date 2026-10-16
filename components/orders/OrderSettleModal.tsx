@@ -9,7 +9,7 @@ import {
   Printer,
   MessageCircle,
   ArrowRight,
-  Receipt,
+  ReceiptIndianRupee as Receipt,
   Sparkles,
   QrCode,
   Building2,

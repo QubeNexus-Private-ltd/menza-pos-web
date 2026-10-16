@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Receipt,
+  ReceiptIndianRupee as Receipt,
   Search,
   Filter,
   RefreshCw,

@@ -3,11 +3,12 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
+import { isSalesPersonUser } from '@/lib/auth/permissions';
 import { Loader2 } from 'lucide-react';
 
 export default function HomePage() {
   const router = useRouter();
-  const { isHydrating, isAuthenticated, hasCompletedOnboarding, hasAcceptedTerms, hydrateSession } = useAuthStore();
+  const { isHydrating, isAuthenticated, hasCompletedOnboarding, hasAcceptedTerms, hydrateSession, user } = useAuthStore();
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -18,14 +19,16 @@ export default function HomePage() {
   useEffect(() => {
     if (!mounted || isHydrating) return;
 
-    if (!hasCompletedOnboarding) {
-      router.replace('/onboarding');
-    } else if (!isAuthenticated) {
+    if (!isAuthenticated) {
       router.replace('/login');
+    } else if (isSalesPersonUser(user?.roles)) {
+      router.replace('/sales/earnings');
+    } else if (!hasCompletedOnboarding) {
+      router.replace('/onboarding');
     } else {
       router.replace('/dashboard');
     }
-  }, [mounted, isHydrating, isAuthenticated, hasCompletedOnboarding, router]);
+  }, [mounted, isHydrating, isAuthenticated, hasCompletedOnboarding, user?.roles, router]);
 
   return (
     <div className="flex h-screen w-screen items-center justify-center bg-[#FAF7F2] dark:bg-[#111418]">

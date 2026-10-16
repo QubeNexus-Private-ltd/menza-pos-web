@@ -16,3 +16,4 @@ export * from './orderHistoryService';
 export * from './reservationService';
 export * from './whatsAppService';
 export * from './bankService';
+export * from './salesService';

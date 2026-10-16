@@ -12,7 +12,7 @@ import {
   ArrowRight,
   ExternalLink,
   Flame,
-  Receipt,
+  ReceiptIndianRupee as Receipt,
   Plus,
 } from 'lucide-react';
 import { TableMaster } from '@shared/domain/models/Table';

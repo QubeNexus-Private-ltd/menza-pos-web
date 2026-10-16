@@ -8,7 +8,7 @@ import {
   Building2,
   FileText,
   CreditCard,
-  Receipt,
+  ReceiptIndianRupee as Receipt,
   Wallet,
   IndianRupee,
   Lock,
@@ -48,6 +48,7 @@ import {
 } from '@shared/core/constants/legalTermsData';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { isOwnerUser } from '@shared/core/auth/rolePermissions';
+import { isSalesPersonUser } from '@/lib/auth/permissions';
 
 const ICON_MAP: Record<string, React.ElementType> = {
   Info: Info,
@@ -104,6 +105,12 @@ export default function TermsPage() {
     });
   }, [selectedCategory, searchQuery]);
 
+  const getReturnRoute = () => {
+    if (!isAuthenticated) return '/login';
+    if (isSalesPersonUser(user?.roles)) return '/sales/earnings';
+    return '/dashboard';
+  };
+
   const handleAccept = async () => {
     if (!isChecked || isSubmitting) return;
 
@@ -111,7 +118,7 @@ export default function TermsPage() {
       setIsSubmitting(true);
       setErrorMsg(null);
       await acceptTerms();
-      router.replace('/dashboard');
+      router.replace(getReturnRoute());
     } catch (err: any) {
       setErrorMsg(
         err?.message || 'Unable to record your acceptance. Please check your network connection and try again.'
@@ -142,7 +149,7 @@ export default function TermsPage() {
           <div className="flex items-center gap-3">
             <button
               type="button"
-              onClick={() => router.push(isAuthenticated ? '/dashboard' : '/login')}
+              onClick={() => router.push(getReturnRoute())}
               className="p-2 rounded-xl text-[#667085] hover:text-[#1E2930] dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
               title="Return"
             >

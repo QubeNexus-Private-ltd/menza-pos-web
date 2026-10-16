@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect } from 'react';
-import { BellRing, X, ChevronRight, Utensils, Receipt } from 'lucide-react';
+import { BellRing, X, ChevronRight, Utensils, ReceiptIndianRupee as Receipt } from 'lucide-react';
 import { useNotificationStore } from '@shared/presentation/state/useNotificationStore';
 
 interface OrderAlertBannerProps {

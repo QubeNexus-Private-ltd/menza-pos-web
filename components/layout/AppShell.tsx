@@ -30,7 +30,7 @@ import {
   AlertCircle,
   ChefHat,
   CalendarDays,
-  Receipt,
+  ReceiptIndianRupee as Receipt,
   Printer,
   TrendingUp,
   Maximize2,
@@ -59,6 +59,7 @@ const SubscriptionBlockerModal = dynamic(
   { ssr: false }
 );
 import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
+import { usePosCatalogStore } from '@/stores/usePosCatalogStore';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { useNotificationStore } from '@shared/presentation/state/useNotificationStore';
 import { useWebTheme } from '../theme/ThemeProvider';
@@ -82,6 +83,7 @@ import { StoreOperatingStatus } from '@shared/domain/models/RestaurantConfig';
 import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
 import { WalletRemoteDataSource } from '@shared/data/datasources/WalletRemoteDataSource';
 import { WalletEvents } from '@shared/core/utils/walletEvents';
+import { isSalesPersonUser } from '@/lib/auth/permissions';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -126,8 +128,13 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
 
   const getPageSubtitle = () => {
     if (isSuperAdmin) return 'SuperAdmin Platform Governance';
+    if (isSalesPerson) return 'Sales Partner Portal';
     if (pathname === '/pos') return 'POS Terminal • Quick Billing';
     if (pathname === '/dashboard') return 'Dashboard • Executive Overview';
+    if (pathname === '/sales/earnings') return 'Earnings & Commission Ledger';
+    if (pathname === '/sales/restaurants') return 'Acquired Stores Directory';
+    if (pathname === '/sales/onboard' || pathname === '/superadmin/onboard') return isSalesPerson ? 'Onboard Store • Partner Attribution' : 'Onboard Store • Platform Directory';
+    if (pathname === '/superadmin/sales') return 'Sales Partner & Commission Governance';
     if (pathname === '/orders') return 'Orders Hub • Live Stream';
     if (pathname === '/kitchen') return 'Kitchen Display • Live KDS';
     if (pathname === '/tables') return 'Floor Tables • Dining Grid';
@@ -173,7 +180,18 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       ['SUPERADMIN', 'SUPER_ADMIN', 'SUPERADMINONLY'].includes(r.toUpperCase().replace(/[^A-Z]/g, ''))
     ) ||
     (typeof user?.roles?.[0] === 'string' && user.roles[0].toLowerCase().includes('superadmin'));
-  const roleName = isSuperAdmin ? 'SuperAdmin' : (typeof user?.roles?.[0] === 'string' ? user.roles[0] : extractedRoles[0] || 'Owner');
+
+  const isSalesPerson =
+    isSalesPersonUser(user?.roles) ||
+    extractedRoles.some((r) => r.includes('sales') || r.includes('partner'));
+
+  const roleName = isSuperAdmin
+    ? 'SuperAdmin'
+    : isSalesPerson
+    ? 'Sales Partner'
+    : typeof user?.roles?.[0] === 'string'
+    ? user.roles[0]
+    : extractedRoles[0] || 'Owner';
 
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
@@ -196,7 +214,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
 
   // Fetch telemetry & initialize SignalR connection
   useEffect(() => {
-    if (!currentRestId || isSuperAdmin) return;
+    if (!currentRestId || isSuperAdmin || isSalesPerson) return;
 
     const orderDs = new OrderRemoteDataSource();
     const configDs = new RestaurantConfigRemoteDataSource();
@@ -204,10 +222,11 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
 
     const loadData = async () => {
       try {
-        const [rev, op, wal] = await Promise.allSettled([
+        const [rev, op, wal, cfg] = await Promise.allSettled([
           orderDs.getTodayRevenue(currentRestId),
           configDs.getOperatingStatus(currentRestId),
           walletDs.getWallet(currentRestId),
+          configDs.getConfig(currentRestId),
         ]);
 
         if (rev.status === 'fulfilled' && rev.value) {
@@ -221,6 +240,35 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
         }
         if (wal.status === 'fulfilled' && wal.value) {
           setWalletBalance(Number(wal.value.balance || 0));
+        }
+        if (cfg.status === 'fulfilled' && cfg.value) {
+          const opVal = op.status === 'fulfilled' ? op.value : null;
+          const resolvedLogo = (
+            cfg.value.logoUrl ||
+            opVal?.logoUrl ||
+            opVal?.storeImageUrl ||
+            cfg.value.imageUrl ||
+            opVal?.imageUrl ||
+            ''
+          ).trim();
+          const enrichedCfg = {
+            ...cfg.value,
+            logoUrl: resolvedLogo || cfg.value.logoUrl,
+          };
+          usePosCatalogStore.getState().updateRestaurantConfig(enrichedCfg);
+
+          const authState = useAuthStore.getState();
+          if (
+            authState.activeRestaurant &&
+            authState.activeRestaurant.restaurantId === currentRestId &&
+            resolvedLogo &&
+            authState.activeRestaurant.logoUrl !== resolvedLogo
+          ) {
+            authState.setActiveRestaurant({
+              ...authState.activeRestaurant,
+              logoUrl: resolvedLogo,
+            });
+          }
         }
 
         // Check active restaurant subscription lifecycle state
@@ -304,9 +352,16 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
     ? [
         { href: '/dashboard', label: 'Overview', icon: LayoutDashboard },
         { href: '/superadmin/directory', label: 'Outlets', icon: Building2 },
+        { href: '/superadmin/sales', label: 'Sales Partners', icon: Users },
         { href: '/superadmin/onboard', label: 'Onboard Store', icon: Store },
         { href: '/superadmin/plans', label: 'Plans & Pricing', icon: Crown },
         { href: '/settings', label: 'Settings', icon: Settings },
+      ]
+    : isSalesPerson
+    ? [
+        { href: '/sales/earnings', label: 'My Earnings', icon: Wallet },
+        { href: '/sales/restaurants', label: 'My Stores', icon: Store },
+        { href: '/superadmin/onboard', label: 'Onboard Store', icon: Building2 },
       ]
     : [
         { href: '/dashboard', label: 'Overview', icon: LayoutDashboard },
@@ -323,6 +378,8 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       ];
 
   const mobileNavItems = isSuperAdmin
+    ? navItems
+    : isSalesPerson
     ? navItems
     : [
         { href: '/dashboard', label: 'Overview', icon: LayoutDashboard },
@@ -378,7 +435,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
         </div>
 
         {/* Current Active Outlet Summary Card */}
-        {!isSuperAdmin && activeRestaurant && (
+        {!isSuperAdmin && !isSalesPerson && activeRestaurant && (
           <div className="px-4 py-3 border-b border-[#E7E1DA]/60 dark:border-[#2B3540]/60 bg-[#FAF7F2]/60 dark:bg-[#151A20]/60">
             <div className="flex items-center justify-between mb-1">
               <span className="text-[11px] font-medium text-[#667085] dark:text-[#94A3B8]">Active Outlet</span>
@@ -501,6 +558,25 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                   </div>
                   <p className="text-[11px] font-medium text-[#667085] dark:text-[#94A3B8] truncate">
                     Platform Root Governance • Multi-Tenant
+                  </p>
+                </div>
+              </div>
+            ) : isSalesPerson ? (
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-600 to-teal-700 text-white shadow-xs shrink-0">
+                  <Wallet className="h-5 w-5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <h2 className="text-xs sm:text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6] truncate">
+                      Sales Partner
+                    </h2>
+                    <span className="hidden sm:inline-block rounded-full bg-emerald-600 px-1.5 py-0.5 text-[9px] font-black uppercase text-white">
+                      Partner
+                    </span>
+                  </div>
+                  <p className="text-[11px] font-medium text-[#667085] dark:text-[#94A3B8] truncate">
+                    Store Acquisition & Commission Growth
                   </p>
                 </div>
               </div>
@@ -648,7 +724,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
             </div>
 
             {/* Today's Sales Telemetry Pill */}
-            {!isSuperAdmin && (
+            {!isSuperAdmin && !isSalesPerson && (
               <div
                 title={`Today's Revenue: ₹${todaySales.revenue.toLocaleString('en-IN')} across ${todaySales.orderCount} orders`}
                 className="hidden 2xl:inline-flex h-[36px] items-center gap-2 rounded-xl border border-[#E7E0D6] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3 text-xs shadow-xs"
@@ -665,7 +741,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
             )}
 
             {/* Subscription & Licensing Pill */}
-            {!isSuperAdmin && currentRestId > 0 && (
+            {!isSuperAdmin && !isSalesPerson && currentRestId > 0 && (
               <button
                 type="button"
                 onClick={() => openRenewalModal(undefined, 'renew')}
@@ -698,7 +774,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
             )}
 
             {/* Prepaid Platform Fee Wallet Pill (Identical UX to F:\Menza) */}
-            {!isSuperAdmin && currentRestId > 0 && (
+            {!isSuperAdmin && !isSalesPerson && currentRestId > 0 && (
               <WalletBalanceWidget
                 restaurantId={currentRestId}
                 variant="pill"
@@ -807,7 +883,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
             </div>
 
             {/* Quick Bluetooth / Thermal Printer Status Action */}
-            {!isSuperAdmin && (
+            {!isSuperAdmin && !isSalesPerson && (
               <button
                 type="button"
                 onClick={() => router.push('/settings/printer')}
@@ -840,7 +916,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
             </button>
 
             {/* Quick POS Terminal Button (when not on POS page) */}
-            {!isSuperAdmin && pathname !== '/pos' && (
+            {!isSuperAdmin && !isSalesPerson && pathname !== '/pos' && (
               <button
                 type="button"
                 onClick={() => router.push('/pos')}

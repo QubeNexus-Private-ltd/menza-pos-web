@@ -9,7 +9,7 @@ import {
   Printer,
   MessageCircle,
   ArrowRight,
-  Receipt,
+  ReceiptIndianRupee as Receipt,
   Sparkles,
   QrCode,
   Building2,
@@ -176,11 +176,15 @@ export function OrderSettleModal({
   };
 
   const buildReceiptData = (): ReceiptData => {
+    const restCfg = usePosCatalogStore.getState().restaurantConfig;
     return {
-      restaurantName: activeRestaurant?.restaurantName || order.restaurantName || 'Menza Restaurant',
-      address: activeRestaurant?.address || order.address,
-      contactPhone: activeRestaurant?.ownerMobile || order.contactNumber,
-      gstNumber: (activeRestaurant as any)?.gstNumber || (order as any)?.gstNumber,
+      restaurantName: restCfg?.restaurantName || activeRestaurant?.restaurantName || order.restaurantName || 'Menza Restaurant',
+      logoUrl: restCfg?.logoUrl || activeRestaurant?.logoUrl || undefined,
+      address: restCfg?.address || activeRestaurant?.address || order.address,
+      city: restCfg?.city || activeRestaurant?.city,
+      state: restCfg?.state || activeRestaurant?.state,
+      contactPhone: restCfg?.contactNumber || activeRestaurant?.ownerMobile || order.contactNumber,
+      gstNumber: restCfg?.gstNumber || (activeRestaurant as any)?.gstNumber || (order as any)?.gstNumber,
       orderId: order.id,
       orderType: order.orderTypeName || (order.tableId ? 'Dine-In' : 'Counter'),
       tableName: order.tableName,

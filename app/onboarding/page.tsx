@@ -45,26 +45,34 @@ const SLIDES = [
   },
 ];
 
+import { isSalesPersonUser } from '@/lib/auth/permissions';
+
 export default function OnboardingPage() {
   const router = useRouter();
-  const { setCompletedOnboarding, isAuthenticated } = useAuthStore();
+  const { setCompletedOnboarding, isAuthenticated, user } = useAuthStore();
   const [activeIndex, setActiveIndex] = useState(0);
 
   const currentSlide = SLIDES[activeIndex];
   const Icon = currentSlide.icon;
+
+  const getPostOnboardRoute = () => {
+    if (!isAuthenticated) return '/login';
+    if (isSalesPersonUser(user?.roles)) return '/sales/earnings';
+    return '/dashboard';
+  };
 
   const handleNext = () => {
     if (activeIndex < SLIDES.length - 1) {
       setActiveIndex(activeIndex + 1);
     } else {
       setCompletedOnboarding(true);
-      router.replace(isAuthenticated ? '/dashboard' : '/login');
+      router.replace(getPostOnboardRoute());
     }
   };
 
   const handleSkip = () => {
     setCompletedOnboarding(true);
-    router.replace(isAuthenticated ? '/dashboard' : '/login');
+    router.replace(getPostOnboardRoute());
   };
 
   return (

@@ -23,9 +23,46 @@ export const OrderAlertBanner: React.FC<OrderAlertBannerProps> = ({ onPress, onS
 
   if (!latestIncomingOrder) return null;
 
-  const statusLower = (latestIncomingOrder.orderStatus || '').toLowerCase();
-  const isSettled = statusLower === 'settled' || statusLower === 'completed' || statusLower === 'cancelled';
-  const isBillReq = latestIncomingOrder.eventType === 'REQUEST_BILL' || statusLower === 'bill_requested';
+  const statusUpper = (latestIncomingOrder.orderStatus || '').toUpperCase();
+  const isBillReq = latestIncomingOrder.eventType === 'REQUEST_BILL' || statusUpper === 'BILL_REQUESTED';
+  const isWaterReq = latestIncomingOrder.eventType === 'REQUEST_WATER' || statusUpper === 'WATER_REQUESTED';
+  const isWaiterReq =
+    latestIncomingOrder.eventType === 'CALL_WAITER' ||
+    statusUpper === 'WAITER_CALLED' ||
+    statusUpper === 'ATTEND_COUNTER';
+  const isCancelled = latestIncomingOrder.eventType === 'CANCELLED' || statusUpper === 'CANCELLED';
+  const isSettled =
+    latestIncomingOrder.eventType === 'SETTLED' ||
+    statusUpper === 'SETTLED' ||
+    statusUpper === 'COMPLETED' ||
+    statusUpper === 'PAID';
+  const isReady = statusUpper === 'READY';
+  const isPreparing = statusUpper === 'PREPARING' || statusUpper === 'COOKING';
+  const isServed = statusUpper === 'SERVED' || statusUpper === 'DELIVERED';
+  const isAddOn = Boolean(latestIncomingOrder.isAddOn);
+  const isNewOrder = latestIncomingOrder.eventType === 'NEW_ORDER' && !isAddOn;
+
+  const badgeText = isBillReq
+    ? 'Bill Requested'
+    : isWaterReq
+    ? 'Water Refill'
+    : isWaiterReq
+    ? 'Waiter Call'
+    : isCancelled
+    ? 'Order Cancelled'
+    : isSettled
+    ? 'Order Settled'
+    : isReady
+    ? 'Order Ready'
+    : isPreparing
+    ? 'Preparing'
+    : isServed
+    ? 'Order Served'
+    : isAddOn
+    ? `Add-On KOT${latestIncomingOrder.roundNumber ? ` #${latestIncomingOrder.roundNumber}` : ''}`
+    : isNewOrder
+    ? 'New Incoming Order'
+    : `Status • ${latestIncomingOrder.orderStatus || 'Updated'}`;
 
   return (
     <div
@@ -39,12 +76,13 @@ export const OrderAlertBanner: React.FC<OrderAlertBannerProps> = ({ onPress, onS
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
           <span className="text-[10px] font-extrabold uppercase px-1.5 py-0.5 rounded-full bg-amber-500/10 text-[#DE8626]">
-            {isBillReq ? 'Bill Requested' : latestIncomingOrder.orderStatus || 'New Order'}
+            {badgeText}
           </span>
           <span className="text-[10px] text-[#667085] dark:text-[#94A3B8]">Just now</span>
         </div>
         <p className="text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6] truncate mt-0.5">
-          {latestIncomingOrder.tableName || `Order #${latestIncomingOrder.orderId}`} • ₹{latestIncomingOrder.totalAmount?.toFixed(2)}
+          {latestIncomingOrder.tableName || `Order #${latestIncomingOrder.orderId}`}
+          {latestIncomingOrder.totalAmount > 0 ? ` • ₹${latestIncomingOrder.totalAmount.toFixed(2)}` : ''}
         </p>
         <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] truncate">
           {latestIncomingOrder.itemsSummary || latestIncomingOrder.customerName || 'Tap to view'}

@@ -212,6 +212,15 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // Auto-dismiss floating toast alert after 8 seconds
+  useEffect(() => {
+    if (!latestIncomingOrder) return;
+    const timer = setTimeout(() => {
+      dismissBanner();
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, [latestIncomingOrder, dismissBanner]);
+
   // Fetch telemetry & initialize SignalR connection
   useEffect(() => {
     if (!currentRestId || isSuperAdmin || isSalesPerson) return;
@@ -219,6 +228,18 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
     const orderDs = new OrderRemoteDataSource();
     const configDs = new RestaurantConfigRemoteDataSource();
     const walletDs = new WalletRemoteDataSource();
+
+    // Seed known orders & statuses on initial startup so status transitions on existing orders are not misclassified as new orders
+    if (!useNotificationStore.getState().hasInitialized) {
+      orderDs
+        .getTodayOrders(currentRestId, 'ALL', 1, 30)
+        .then((res) => {
+          if (res?.items && res.items.length > 0) {
+            useNotificationStore.getState().processIncomingOrders(res.items);
+          }
+        })
+        .catch(() => {});
+    }
 
     const loadData = async () => {
       try {
@@ -291,17 +312,17 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       });
 
     const unsubCreated = onPosOrderCreated((order) => {
-      handleOrderStatusChanged(order);
+      handleOrderStatusChanged({ ...order, _signalType: 'CREATED' });
       loadData();
     });
 
     const unsubStatus = onPosOrderStatusChanged((event) => {
-      handleOrderStatusChanged(event);
+      handleOrderStatusChanged({ ...event, _signalType: 'STATUS_CHANGED' });
       loadData();
     });
 
     const unsubSettled = onPosOrderSettled((order) => {
-      handleOrderStatusChanged(order);
+      handleOrderStatusChanged({ ...order, _signalType: 'SETTLED' });
       loadData();
     });
 
@@ -831,23 +852,64 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                       </div>
                     ) : (
                       notifications.slice(0, 15).map((n) => {
-                        const isBill = n.eventType === 'REQUEST_BILL' || n.orderStatus === 'BILL_REQUESTED';
-                        const isWater = n.eventType === 'REQUEST_WATER';
-                        const isWaiter = n.eventType === 'CALL_WAITER' || n.orderStatus === 'WAITER_CALLED';
+                        const statusUpper = String(n.orderStatus || '').toUpperCase();
+                        const isBill = n.eventType === 'REQUEST_BILL' || statusUpper === 'BILL_REQUESTED';
+                        const isWater = n.eventType === 'REQUEST_WATER' || statusUpper === 'WATER_REQUESTED';
+                        const isWaiter = n.eventType === 'CALL_WAITER' || statusUpper === 'WAITER_CALLED' || statusUpper === 'ATTEND_COUNTER';
+                        const isCancelled = n.eventType === 'CANCELLED' || statusUpper === 'CANCELLED';
+                        const isSettled = n.eventType === 'SETTLED' || statusUpper === 'SETTLED' || statusUpper === 'COMPLETED' || statusUpper === 'PAID';
+                        const isReady = statusUpper === 'READY';
+                        const isPreparing = statusUpper === 'PREPARING' || statusUpper === 'COOKING';
+                        const isServed = statusUpper === 'SERVED' || statusUpper === 'DELIVERED';
+                        const isAddOn = Boolean(n.isAddOn);
+                        const isNewOrder = n.eventType === 'NEW_ORDER' && !isAddOn;
+
+                        const badgeLabel = isBill
+                          ? 'Pre-Bill'
+                          : isWater
+                          ? 'Water'
+                          : isWaiter
+                          ? 'Waiter Call'
+                          : isCancelled
+                          ? 'Cancelled'
+                          : isSettled
+                          ? 'Settled'
+                          : isReady
+                          ? 'Ready'
+                          : isPreparing
+                          ? 'Preparing'
+                          : isServed
+                          ? 'Served'
+                          : isAddOn
+                          ? `Add-On${n.roundNumber ? ` #${n.roundNumber}` : ''}`
+                          : isNewOrder
+                          ? 'New Order'
+                          : n.orderStatus;
 
                         return (
                           <div
                             key={n.id}
                             onClick={() => {
                               markAsRead(n.id);
+                              setNotifDrawerOpen(false);
                               if (isBill || isWaiter || isWater) {
                                 router.push('/tables');
+                              } else if (isPreparing || isReady) {
+                                router.push('/kitchen');
                               } else {
                                 router.push('/orders');
                               }
                             }}
                             className={`p-3 text-xs transition-colors cursor-pointer hover:bg-black/5 dark:hover:bg-white/5 ${
-                              !n.isRead ? (isBill ? 'bg-rose-500/5' : isWater ? 'bg-sky-500/5' : 'bg-amber-500/5') : ''
+                              !n.isRead
+                                ? isBill || isCancelled
+                                  ? 'bg-rose-500/5'
+                                  : isWater || isPreparing
+                                  ? 'bg-sky-500/5'
+                                  : isSettled || isReady || isServed
+                                  ? 'bg-emerald-500/5'
+                                  : 'bg-amber-500/5'
+                                : ''
                             }`}
                           >
                             <div className="flex items-center justify-between mb-1">
@@ -856,21 +918,23 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                               </span>
                               <span
                                 className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${
-                                  isBill
+                                  isBill || isCancelled
                                     ? 'bg-rose-500/15 text-rose-600 dark:text-rose-400 border border-rose-500/20'
-                                    : isWater
+                                    : isWater || isPreparing
                                     ? 'bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/20'
+                                    : isSettled || isReady || isServed
+                                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
                                     : isWaiter
                                     ? 'bg-amber-500/15 text-[#DE8626] border border-amber-500/20'
                                     : 'bg-amber-500/10 text-[#DE8626]'
                                 }`}
                               >
-                                {isBill ? 'Pre-Bill' : isWater ? 'Water' : isWaiter ? 'Waiter Call' : n.orderStatus}
+                                {badgeLabel}
                               </span>
                             </div>
                             <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] line-clamp-1">{n.itemsSummary}</p>
                             <div className="mt-1 flex items-center justify-between text-[10px] text-[#667085]">
-                              <span>{n.totalAmount > 0 ? `₹${n.totalAmount} • ` : ''}{n.customerName}</span>
+                              <span>{n.totalAmount > 0 ? `₹${n.totalAmount.toLocaleString('en-IN')} • ` : ''}{n.customerName}</span>
                               <span>{new Date(n.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                             </div>
                           </div>
@@ -969,64 +1033,99 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
           </div>
         </header>
 
-        {/* Global Floating Toast Alert for Incoming Real-Time Orders & Service Requests */}
+        {/* Global Floating Toast Alert for Real-Time Orders, Status Updates & Service Requests */}
         {latestIncomingOrder && (() => {
-          const isBillRequest = latestIncomingOrder.eventType === 'REQUEST_BILL' || latestIncomingOrder.orderStatus === 'BILL_REQUESTED';
-          const isWaiterCall = latestIncomingOrder.eventType === 'CALL_WAITER' || latestIncomingOrder.orderStatus === 'WAITER_CALLED';
-          const isWaterRequest = latestIncomingOrder.eventType === 'REQUEST_WATER';
+          const statusUpper = String(latestIncomingOrder.orderStatus || '').toUpperCase();
+          const isBillRequest = latestIncomingOrder.eventType === 'REQUEST_BILL' || statusUpper === 'BILL_REQUESTED';
+          const isWaiterCall =
+            latestIncomingOrder.eventType === 'CALL_WAITER' ||
+            statusUpper === 'WAITER_CALLED' ||
+            statusUpper === 'ATTEND_COUNTER';
+          const isWaterRequest = latestIncomingOrder.eventType === 'REQUEST_WATER' || statusUpper === 'WATER_REQUESTED';
           const isServiceCall = isBillRequest || isWaiterCall || isWaterRequest;
+          const isCancelled = latestIncomingOrder.eventType === 'CANCELLED' || statusUpper === 'CANCELLED';
+          const isSettled =
+            latestIncomingOrder.eventType === 'SETTLED' ||
+            statusUpper === 'SETTLED' ||
+            statusUpper === 'COMPLETED' ||
+            statusUpper === 'PAID';
+          const isReady = statusUpper === 'READY';
+          const isPreparing = statusUpper === 'PREPARING' || statusUpper === 'COOKING';
+          const isServed = statusUpper === 'SERVED' || statusUpper === 'DELIVERED';
+          const isAddOn = Boolean(latestIncomingOrder.isAddOn);
+          const isStatusChanged = latestIncomingOrder.eventType === 'STATUS_CHANGED' && !isAddOn;
+
+          const toastTitle = isBillRequest
+            ? 'Pre-Bill Requested!'
+            : isWaterRequest
+            ? 'Water Refill Requested!'
+            : isWaiterCall
+            ? 'Guest Calling Waiter!'
+            : isCancelled
+            ? 'Order Cancelled!'
+            : isSettled
+            ? 'Order Settled & Paid!'
+            : isReady
+            ? 'Order Ready to Serve!'
+            : isPreparing
+            ? 'Kitchen Preparing Order'
+            : isServed
+            ? 'Order Served'
+            : isAddOn
+            ? `New Add-On KOT${latestIncomingOrder.roundNumber ? ` (Round #${latestIncomingOrder.roundNumber})` : ''}!`
+            : isStatusChanged
+            ? `Order Status • ${latestIncomingOrder.orderStatus}`
+            : 'New Incoming Order!';
+
+          const borderTheme = isBillRequest || isCancelled
+            ? 'border-rose-500/50 bg-[#FFFFFF] dark:bg-[#1C1417] shadow-rose-500/20'
+            : isWaterRequest || isPreparing || isStatusChanged
+            ? 'border-sky-500/50 bg-[#FFFFFF] dark:bg-[#111922] shadow-sky-500/20'
+            : isSettled || isReady || isServed
+            ? 'border-emerald-500/50 bg-[#FFFFFF] dark:bg-[#111F19] shadow-emerald-500/20'
+            : 'border-amber-500/50 bg-[#FFFFFF] dark:bg-[#1F1812] shadow-amber-500/20';
+
+          const iconTheme = isBillRequest || isCancelled
+            ? 'bg-rose-500/20 text-rose-600 dark:text-rose-400'
+            : isWaterRequest || isPreparing || isStatusChanged
+            ? 'bg-sky-500/20 text-sky-600 dark:text-sky-400'
+            : isSettled || isReady || isServed
+            ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400'
+            : 'bg-amber-500/20 text-[#DE8626]';
+
+          const titleTextColor = isBillRequest || isCancelled
+            ? 'text-rose-600 dark:text-rose-400'
+            : isWaterRequest || isPreparing || isStatusChanged
+            ? 'text-sky-600 dark:text-sky-400'
+            : isSettled || isReady || isServed
+            ? 'text-emerald-600 dark:text-emerald-400'
+            : 'text-[#DE8626]';
 
           return (
             <div
-              className={`fixed top-20 right-4 z-50 flex w-80 sm:w-96 items-start gap-3 rounded-2xl border p-4 shadow-2xl transition-all ${
-                isBillRequest
-                  ? 'border-rose-500/50 bg-[#FFFFFF] dark:bg-[#1C1417] shadow-rose-500/20'
-                  : isWaterRequest
-                  ? 'border-sky-500/50 bg-[#FFFFFF] dark:bg-[#111922] shadow-sky-500/20'
-                  : isWaiterCall
-                  ? 'border-amber-500/50 bg-[#FFFFFF] dark:bg-[#1F1812] shadow-amber-500/20'
-                  : 'border-amber-400/40 bg-[#FFFFFF] dark:bg-[#1E1E1E] shadow-amber-500/20'
-              }`}
+              className={`fixed top-20 right-4 z-50 flex w-80 sm:w-96 items-start gap-3 rounded-2xl border p-4 shadow-2xl transition-all ${borderTheme}`}
             >
-              <div
-                className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${
-                  isBillRequest
-                    ? 'bg-rose-500/20 text-rose-600 dark:text-rose-400'
-                    : isWaterRequest
-                    ? 'bg-sky-500/20 text-sky-600 dark:text-sky-400'
-                    : isWaiterCall
-                    ? 'bg-amber-500/20 text-[#DE8626]'
-                    : 'bg-amber-500/20 text-[#DE8626]'
-                }`}
-              >
+              <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${iconTheme}`}>
                 {isBillRequest ? (
                   <Receipt className="h-5 w-5 animate-pulse" />
+                ) : isCancelled ? (
+                  <AlertCircle className="h-5 w-5" />
+                ) : isSettled || isServed ? (
+                  <Check className="h-5 w-5" />
+                ) : isReady || isPreparing || isAddOn ? (
+                  <ChefHat className="h-5 w-5" />
                 ) : isWaterRequest ? (
                   <Sparkles className="h-5 w-5 text-sky-500" />
                 ) : isWaiterCall ? (
                   <Bell className="h-5 w-5 animate-bounce" />
                 ) : (
-                  <Sparkles className="h-5 w-5 animate-spin" />
+                  <BellRing className="h-5 w-5 animate-bounce" />
                 )}
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between">
-                  <p
-                    className={`text-xs font-bold uppercase tracking-wider ${
-                      isBillRequest
-                        ? 'text-rose-600 dark:text-rose-400'
-                        : isWaterRequest
-                        ? 'text-sky-600 dark:text-sky-400'
-                        : 'text-[#DE8626]'
-                    }`}
-                  >
-                    {isBillRequest
-                      ? 'Pre-Bill Requested!'
-                      : isWaterRequest
-                      ? 'Water Refill Requested!'
-                      : isWaiterCall
-                      ? 'Guest Calling Waiter!'
-                      : 'New Incoming Order!'}
+                  <p className={`text-xs font-bold uppercase tracking-wider ${titleTextColor}`}>
+                    {toastTitle}
                   </p>
                   <button
                     onClick={dismissBanner}
@@ -1081,20 +1180,58 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                         Acknowledge
                       </button>
                     </>
+                  ) : isPreparing || isReady ? (
+                    <>
+                      <button
+                        onClick={() => {
+                          dismissBanner();
+                          router.push('/kitchen');
+                        }}
+                        className="rounded-lg bg-sky-600 hover:bg-sky-700 px-3 py-1 text-xs font-bold text-white shadow-sm"
+                      >
+                        Open KDS
+                      </button>
+                      <button
+                        onClick={() => {
+                          dismissBanner();
+                          router.push('/orders');
+                        }}
+                        className="rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] px-3 py-1 text-xs font-semibold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5"
+                      >
+                        View Orders
+                      </button>
+                    </>
+                  ) : isSettled || isCancelled || isServed ? (
+                    <>
+                      <button
+                        onClick={() => {
+                          dismissBanner();
+                          router.push('/orders');
+                        }}
+                        className="rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] px-3 py-1 text-xs font-semibold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5"
+                      >
+                        View Orders
+                      </button>
+                      {latestIncomingOrder.totalAmount > 0 && (
+                        <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                          ₹{latestIncomingOrder.totalAmount.toLocaleString('en-IN')}
+                        </span>
+                      )}
+                    </>
                   ) : (
                     <>
                       <button
                         onClick={() => {
                           dismissBanner();
-                          router.push('/pos');
+                          router.push(pathname === '/pos' ? '/orders' : '/pos');
                         }}
                         className="rounded-lg bg-[#DE8626] px-3 py-1 text-xs font-semibold text-white shadow-sm hover:bg-[#C4721C]"
                       >
-                        Open in POS
+                        {pathname === '/pos' ? 'View Orders' : 'Open in POS'}
                       </button>
                       {latestIncomingOrder.totalAmount > 0 && (
                         <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
-                          ₹{latestIncomingOrder.totalAmount}
+                          ₹{latestIncomingOrder.totalAmount.toLocaleString('en-IN')}
                         </span>
                       )}
                     </>

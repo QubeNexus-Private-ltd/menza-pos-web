@@ -465,12 +465,6 @@ export default function PosPage() {
       }
     });
 
-    const unsubCreated = onPosOrderCreated((data) => {
-      if (data && isMounted) {
-        useNotificationStore.getState().handleOrderStatusChanged(data);
-      }
-    });
-
     const unsubWallet = onWalletBalanceChanged((data) => {
       if (data?.newBalance !== undefined && isMounted) {
         setRestaurantConfig((prev) => {
@@ -514,7 +508,6 @@ export default function PosPage() {
     return () => {
       isMounted = false;
       unsubStatus();
-      unsubCreated();
       unsubWallet();
       unsubTable();
       unsubReconnect();
@@ -2841,11 +2834,6 @@ export default function PosPage() {
               }
               setNotificationDrawerOpen(false);
             }}
-          />
-
-          {/* Order Alert Banner (Floating Toast) */}
-          <OrderAlertBanner
-            onPress={() => setNotificationDrawerOpen(true)}
           />
 
           {/* Web Printer Settings Modal */}

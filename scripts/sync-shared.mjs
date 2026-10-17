@@ -27,12 +27,12 @@ function copyFolderSync(src, dest) {
     if (entry.isDirectory()) {
       copyFolderSync(srcPath, destPath);
     } else {
-      // Only copy if changed or destination missing
+      // Only copy if source is newer than destination or destination is missing
       let shouldCopy = true;
       if (fs.existsSync(destPath)) {
         const srcStat = fs.statSync(srcPath);
         const destStat = fs.statSync(destPath);
-        if (srcStat.size === destStat.size && srcStat.mtimeMs <= destStat.mtimeMs) {
+        if (srcStat.mtimeMs <= destStat.mtimeMs) {
           shouldCopy = false;
         }
       }

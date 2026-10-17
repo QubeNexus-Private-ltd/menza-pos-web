@@ -51,6 +51,14 @@ export class SuperAdminRemoteDataSource {
       stateCode = match ? match.code : stateCode.substring(0, 10);
     }
 
+    const loggedUser = useAuthStore.getState().user as any;
+    const isSalesPerson = Array.isArray(loggedUser?.roles) && loggedUser.roles.some((r: string) =>
+      String(r).toLowerCase().includes('sales')
+    );
+    const resolvedSalesPersonId =
+      (request as any)?.salesPersonId ||
+      (isSalesPerson ? (loggedUser?.salesPersonId || loggedUser?.id || loggedUser?.userId) : undefined);
+
     const restResponse = await apiClient.post('/RestaurantConfig/RestaurantConfig', {
       restaurantName: resName,
       address,
@@ -58,6 +66,7 @@ export class SuperAdminRemoteDataSource {
       state: stateCode,
       imageUrl: request.imageUrl || '',
       logoUrl: request.logoUrl || '',
+      ...(resolvedSalesPersonId ? { salesPersonId: Number(resolvedSalesPersonId) } : {}),
     });
 
     let restaurantId = restResponse.data?.id || restResponse.data?.Id || restResponse.data?.restaurantId || 0;

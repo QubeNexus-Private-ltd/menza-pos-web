@@ -10,19 +10,19 @@ import {
   AlertTriangle,
   RefreshCw,
   Power,
-  Pause,
-  Play,
-  Settings,
+  Settings2,
   X,
   Trash2,
   UtensilsCrossed,
   Sparkles,
-  Eye,
   Printer,
   Volume2,
   VolumeX,
   Zap,
   Keyboard,
+  Search,
+  Check,
+  Bell,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
@@ -32,6 +32,7 @@ import { WebKitchenService, KitchenStationDTO, CreateKitchenStationModel } from 
 import { WebPrinterService } from '@/services/webPrinterService';
 import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
 import { OrderMaster } from '@shared/domain/models/Order';
+import { parseUtcDate, formatToIstTime } from '@shared/core/utils/formatters';
 import {
   startPosSignalRConnection,
   onPosOrderCreated,
@@ -42,24 +43,38 @@ import {
 } from '@/lib/signalr/signalrService';
 import {
   getNextRecommendedStatus,
-  normalizeOrderStatus,
   OrderStatuses,
+  isOrderSettled as isOrderCanonicalSettled,
 } from '@/lib/utils/orderStatusEngine';
 
 const orderDataSource = new OrderRemoteDataSource();
 
+type KdsStageFilter = 'ACTIVE_KITCHEN' | 'NEW' | 'PREPARING' | 'READY' | 'SERVED';
+
 export default function KitchenKdsPage() {
   const { activeRestaurant, restaurants } = useAuthStore();
   const { paperWidth } = usePrinterStore();
-  const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
+  const currentRestId =
+    activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
   const [stations, setStations] = useState<KitchenStationDTO[]>([]);
-  const [activeOrders, setActiveOrders] = useState<OrderMaster[]>([]);
+  const [allOpenOrders, setAllOpenOrders] = useState<OrderMaster[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedStationCode, setSelectedStationCode] = useState<string>('ALL');
+  const [stageFilter, setStageFilter] = useState<KdsStageFilter>('ACTIVE_KITCHEN');
+  const [searchQuery, setSearchQuery] = useState('');
   const [updatingOrderId, setUpdatingOrderId] = useState<number | null>(null);
   const [printingOrderId, setPrintingOrderId] = useState<number | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [manageStationsOpen, setManageStationsOpen] = useState(false);
+  const [checkedItems, setCheckedItems] = useState<Record<string, boolean>>({});
+  const [nowTick, setNowTick] = useState<number>(() => Date.now());
+
+  // Update elapsed timer every 30 seconds
+  useEffect(() => {
+    const timer = setInterval(() => setNowTick(Date.now()), 30000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Play two-tone Web Audio chime when a new order arrives
   const playKitchenChime = useCallback(() => {
@@ -69,7 +84,6 @@ export default function KitchenKdsPage() {
       const ctx = new AudioCtx();
       const now = ctx.currentTime;
 
-      // Note 1: D5 (587.33 Hz)
       const osc1 = ctx.createOscillator();
       const gain1 = ctx.createGain();
       osc1.type = 'sine';
@@ -81,7 +95,6 @@ export default function KitchenKdsPage() {
       osc1.start(now);
       osc1.stop(now + 0.25);
 
-      // Note 2: A5 (880.00 Hz)
       const osc2 = ctx.createOscillator();
       const gain2 = ctx.createGain();
       osc2.type = 'sine';
@@ -97,7 +110,7 @@ export default function KitchenKdsPage() {
     }
   }, []);
 
-  // Add Station Modal
+  // Add Station Modal state
   const [stationModalOpen, setStationModalOpen] = useState(false);
   const [stationCode, setStationCode] = useState('');
   const [stationName, setStationName] = useState('');
@@ -111,21 +124,18 @@ export default function KitchenKdsPage() {
       setLoading(true);
       const [stList, ordList] = await Promise.allSettled([
         WebKitchenService.getStations(currentRestId),
-        orderDataSource.getTodayOrders(currentRestId, 'ALL', 1, 50),
+        orderDataSource.getTodayOrders(currentRestId, 'ALL', 1, 100),
       ]);
 
       if (stList.status === 'fulfilled') {
         setStations(stList.value);
       }
       if (ordList.status === 'fulfilled' && ordList.value?.items) {
-        // Show orders that are actively in progress / in kitchen
-        const kitchenOrders = ordList.value.items.filter((o) => {
+        const openOrders = ordList.value.items.filter((o) => {
           const st = (o.status || '').toUpperCase();
-          const pay = (o.paymentStatus || '').toUpperCase();
-          const isSettled = Boolean(o.settledDateUtc) || st === 'SETTLED' || (st === 'COMPLETED' && pay === 'PAID');
-          return !isSettled && st !== 'CANCELLED';
+          return !isOrderCanonicalSettled(o) && st !== 'CANCELLED' && st !== 'COMPLETED';
         });
-        setActiveOrders(kitchenOrders);
+        setAllOpenOrders(openOrders);
       }
     } catch (err) {
       console.warn('Failed to load kitchen data', err);
@@ -138,7 +148,6 @@ export default function KitchenKdsPage() {
     loadData();
 
     if (currentRestId) {
-      // Real-time SignalR sync
       startPosSignalRConnection(currentRestId).catch(() => {});
       const unsub1 = onPosOrderCreated(() => {
         if (soundEnabled) playKitchenChime();
@@ -206,56 +215,124 @@ export default function KitchenKdsPage() {
     }
   };
 
+  // Helper to normalize station code for an item
+  const getItemStationCode = useCallback((it: any): string => {
+    return String(it?.stationCode || 'MAIN').trim().toUpperCase();
+  }, []);
+
+  // Classify order stage
+  const getOrderStage = useCallback((status?: string): 'NEW' | 'PREPARING' | 'READY' | 'SERVED' => {
+    const st = (status || '').toUpperCase();
+    if (st === 'SERVED' || st === 'DELIVERED') return 'SERVED';
+    if (st === 'READY') return 'READY';
+    if (st === 'PREPARING' || st === 'COOKING') return 'PREPARING';
+    return 'NEW';
+  }, []);
+
+  // Orders currently in kitchen preparation (excluding already served/delivered unless SERVED filter is selected)
+  const kitchenQueueOrders = useMemo(
+    () => allOpenOrders.filter((o) => getOrderStage(o.status) !== 'SERVED'),
+    [allOpenOrders, getOrderStage]
+  );
+
+  // Stage counts
+  const stageCounts = useMemo(() => {
+    let newCount = 0;
+    let preparingCount = 0;
+    let readyCount = 0;
+    let servedCount = 0;
+    allOpenOrders.forEach((o) => {
+      const stage = getOrderStage(o.status);
+      if (stage === 'NEW') newCount++;
+      else if (stage === 'PREPARING') preparingCount++;
+      else if (stage === 'READY') readyCount++;
+      else if (stage === 'SERVED') servedCount++;
+    });
+    return {
+      activeKitchen: newCount + preparingCount + readyCount,
+      newCount,
+      preparingCount,
+      readyCount,
+      servedCount,
+    };
+  }, [allOpenOrders, getOrderStage]);
+
   // Dynamically group stations from active orders & configured master
   const availableStations = useMemo(() => {
-    const list: Array<{ code: string; name: string; color: string }> = [
-      { code: 'ALL', name: 'All Stations', color: '#DE8626' },
+    const baseOrders = stageFilter === 'SERVED' ? allOpenOrders : kitchenQueueOrders;
+    const list: Array<{ code: string; name: string; color: string; count: number }> = [
+      { code: 'ALL', name: 'All Stations', color: '#DE8626', count: baseOrders.length },
     ];
-    const seenCodes = new Set<string>();
+    const stationMap = new Map<string, { code: string; name: string; color: string }>();
 
-    activeOrders.forEach((o) => {
+    stations.forEach((st) => {
+      if (st.isActive === false) return;
+      const c = st.stationCode.trim().toUpperCase();
+      stationMap.set(c, {
+        code: c,
+        name: st.stationName,
+        color: st.colorHex || '#DE8626',
+      });
+    });
+
+    baseOrders.forEach((o) => {
       (o.items || []).forEach((it) => {
-        const c = (it.stationCode || 'MAIN').toUpperCase();
-        if (!seenCodes.has(c)) {
-          seenCodes.add(c);
-          list.push({
+        const c = getItemStationCode(it);
+        if (!stationMap.has(c)) {
+          stationMap.set(c, {
             code: c,
-            name: it.stationName || c,
+            name: it.stationName || (c === 'MAIN' ? 'Main Kitchen' : c),
             color: it.stationBadgeColor || '#DE8626',
           });
         }
       });
     });
 
-    stations.forEach((st) => {
-      const c = st.stationCode.toUpperCase();
-      if (!seenCodes.has(c)) {
-        seenCodes.add(c);
-        list.push({
-          code: c,
-          name: st.stationName,
-          color: st.colorHex || '#DE8626',
-        });
-      }
+    stationMap.forEach((meta) => {
+      const count = baseOrders.filter((o) =>
+        (o.items || []).some(
+          (it) =>
+            getItemStationCode(it) === meta.code ||
+            (it.stationName || '').trim().toUpperCase() === meta.name.trim().toUpperCase()
+        )
+      ).length;
+      list.push({ ...meta, count });
     });
 
     return list;
-  }, [activeOrders, stations]);
+  }, [allOpenOrders, kitchenQueueOrders, stageFilter, stations, getItemStationCode]);
 
-  // Filter orders by chosen kitchen station
+  // Filter orders by stage, chosen kitchen station, and search query
   const filteredOrders = useMemo(() => {
-    if (selectedStationCode === 'ALL') {
-      return activeOrders;
-    }
-    return activeOrders.filter((order) => {
+    return allOpenOrders.filter((order) => {
+      const stage = getOrderStage(order.status);
+      if (stageFilter === 'ACTIVE_KITCHEN' && stage === 'SERVED') return false;
+      if (stageFilter !== 'ACTIVE_KITCHEN' && stage !== stageFilter) return false;
+
       const items = Array.isArray(order.items) ? order.items : [];
-      return items.some(
-        (it) =>
-          (it.stationCode || '').toUpperCase() === selectedStationCode.toUpperCase() ||
-          (it.stationName || '').toUpperCase() === selectedStationCode.toUpperCase()
-      );
+      if (selectedStationCode !== 'ALL') {
+        const matchesStation = items.some(
+          (it) =>
+            getItemStationCode(it) === selectedStationCode.toUpperCase() ||
+            (it.stationName || '').trim().toUpperCase() === selectedStationCode.toUpperCase()
+        );
+        if (!matchesStation) return false;
+      }
+
+      if (searchQuery.trim()) {
+        const q = searchQuery.trim().toLowerCase();
+        const matchOrder =
+          String(order.id).includes(q) ||
+          (order.orderNumber || '').toLowerCase().includes(q) ||
+          (order.tableName || '').toLowerCase().includes(q) ||
+          (order.customerName || '').toLowerCase().includes(q) ||
+          items.some((it) => (it.itemName || '').toLowerCase().includes(q));
+        if (!matchOrder) return false;
+      }
+
+      return true;
     });
-  }, [activeOrders, selectedStationCode]);
+  }, [allOpenOrders, stageFilter, selectedStationCode, searchQuery, getOrderStage, getItemStationCode]);
 
   const getNextStatus = (order: OrderMaster) => {
     const recommended = getNextRecommendedStatus(order.status, order.orderTypeName, order.tableId);
@@ -263,7 +340,8 @@ export default function KitchenKdsPage() {
       if (recommended.nextStatus === OrderStatuses.Settled) {
         const isDineIn =
           Boolean(order.tableId) ||
-          (order.orderTypeName && ['DINE-IN', 'DINE_IN', 'TABLE'].includes(order.orderTypeName.toUpperCase()));
+          (order.orderTypeName &&
+            ['DINE-IN', 'DINE_IN', 'TABLE'].includes(order.orderTypeName.toUpperCase()));
         return isDineIn ? OrderStatuses.Served : OrderStatuses.Delivered;
       }
       return recommended.nextStatus;
@@ -354,7 +432,11 @@ export default function KitchenKdsPage() {
   };
 
   const handleInitDefaults = async () => {
-    if (confirm('Initialize standard kitchen stations (Main Kitchen, Tandoor & Grill, Bakery, Bar, Pantry)?')) {
+    if (
+      confirm(
+        'Initialize standard kitchen stations (Main Kitchen, Tandoor & Grill, Bakery, Bar, Pantry)?'
+      )
+    ) {
       try {
         setLoading(true);
         await WebKitchenService.initializeDefaults(currentRestId);
@@ -390,65 +472,82 @@ export default function KitchenKdsPage() {
     }
   };
 
+  const toggleItemChecked = (orderId: number, itemIdx: number) => {
+    const key = `${orderId}_${itemIdx}`;
+    setCheckedItems((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
   return (
     <AuthGuard>
       <AppShell>
-        <div className="p-4 sm:p-6 lg:p-8 space-y-6 max-w-7xl mx-auto">
-          {/* Header */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-[#1E2930] dark:text-[#F3F4F6]">
-                  Kitchen Display & Stations (KDS)
-                </h1>
-                <span className="rounded-full bg-amber-500/10 px-3 py-0.5 text-xs font-bold text-[#DE8626]">
-                  {activeOrders.length} Active Tickets • {stations.length} Stations
-                </span>
+        <div className="p-4 sm:p-6 lg:p-8 space-y-5 max-w-7xl mx-auto">
+          {/* 1. Header */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-start sm:items-center gap-3 min-w-0">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-amber-500/10 text-[#DE8626] border border-amber-500/20">
+                <ChefHat className="h-5 w-5" />
               </div>
-              <p className="mt-1 text-xs sm:text-sm text-[#667085] dark:text-[#94A3B8]">
-                Real-time kitchen order tickets (KOT), item preparation routing, and station rush management
-              </p>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h1 className="text-xl sm:text-2xl lg:text-3xl font-extrabold tracking-tight text-[#1E2930] dark:text-[#F3F4F6]">
+                    Kitchen Display System (KDS)
+                  </h1>
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 border border-amber-500/20 px-2.5 py-0.5 text-xs font-bold text-[#DE8626] whitespace-nowrap">
+                    <span className="h-1.5 w-1.5 rounded-full bg-[#DE8626] animate-pulse" />
+                    {stageCounts.activeKitchen} Active • {stations.length || availableStations.length - 1} Stations
+                  </span>
+                </div>
+                <p className="mt-0.5 text-xs sm:text-sm text-[#667085] dark:text-[#94A3B8]">
+                  Live KOT preparation queue, station-wise dish routing, and bump-bar workflow
+                </p>
+              </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
               <button
+                type="button"
                 onClick={() => {
                   setSoundEnabled((prev) => !prev);
                   if (!soundEnabled) playKitchenChime();
                 }}
                 className={`flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition-all ${
                   soundEnabled
-                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
                     : 'border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#667085]'
                 }`}
                 title={soundEnabled ? 'Kitchen Chime Active (Click to Mute)' : 'Kitchen Chime Muted (Click to Unmute)'}
               >
                 {soundEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
-                <span className="hidden sm:inline">{soundEnabled ? 'Chime ON' : 'Muted'}</span>
+                <span>{soundEnabled ? 'Chime ON' : 'Muted'}</span>
               </button>
 
               <button
+                type="button"
+                onClick={() => setManageStationsOpen((prev) => !prev)}
+                className={`flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition-all ${
+                  manageStationsOpen
+                    ? 'border-[#DE8626] bg-amber-500/10 text-[#DE8626]'
+                    : 'border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5'
+                }`}
+              >
+                <Settings2 className="h-4 w-4 text-[#DE8626]" />
+                <span>Stations ({stations.length})</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={loadData}
                 disabled={loading}
-                className="flex items-center gap-2 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-3.5 py-2 text-xs font-semibold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5"
+                className="flex items-center gap-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-3 py-2 text-xs font-semibold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-colors disabled:opacity-50"
               >
-                <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+                <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
                 <span>Refresh</span>
               </button>
 
-              {stations.length === 0 && (
-                <button
-                  onClick={handleInitDefaults}
-                  className="flex items-center gap-2 rounded-xl border border-[#DE8626] bg-amber-500/10 px-3.5 py-2 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20"
-                >
-                  <Sparkles className="h-4 w-4" />
-                  <span>Init Default Stations</span>
-                </button>
-              )}
-
               <button
+                type="button"
                 onClick={() => setStationModalOpen(true)}
-                className="flex items-center gap-2 rounded-xl bg-[#DE8626] px-4 py-2 text-xs font-bold text-white shadow-md shadow-[#DE8626]/20 hover:bg-[#C4721C] transition-colors"
+                className="flex items-center gap-1.5 rounded-xl bg-[#DE8626] px-3.5 py-2 text-xs font-bold text-white shadow-sm hover:bg-[#C4721C] transition-colors"
               >
                 <Plus className="h-4 w-4" />
                 <span>New Station</span>
@@ -456,315 +555,563 @@ export default function KitchenKdsPage() {
             </div>
           </div>
 
-          {/* KDS Bump Bar Shortcut Hint Banner */}
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-amber-500/30 bg-amber-500/[0.04] px-4 py-2 text-xs text-[#1E2930] dark:text-[#F3F4F6]">
-            <div className="flex flex-wrap items-center gap-2 font-medium">
-              <Keyboard className="h-4 w-4 text-[#DE8626]" />
-              <span className="font-bold text-[#DE8626]">KDS Bump Bar:</span>
-              <span className="text-[#667085] dark:text-[#94A3B8]">Press</span>
-              <kbd className="rounded-md border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-1.5 py-0.5 font-mono text-[11px] font-bold shadow-xs">1-9</kbd>
-              <span className="text-[#667085] dark:text-[#94A3B8]">to bump ticket index,</span>
-              <kbd className="rounded-md border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-1.5 py-0.5 font-mono text-[11px] font-bold shadow-xs">Space / Enter</kbd>
-              <span className="text-[#667085] dark:text-[#94A3B8]">to bump oldest,</span>
-              <kbd className="rounded-md border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-1.5 py-0.5 font-mono text-[11px] font-bold shadow-xs">P</kbd>
-              <span className="text-[#667085] dark:text-[#94A3B8]">to Print KOT,</span>
-              <kbd className="rounded-md border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-1.5 py-0.5 font-mono text-[11px] font-bold shadow-xs">R</kbd>
-              <span className="text-[#667085] dark:text-[#94A3B8]">to Refresh.</span>
-            </div>
-            <div className="flex items-center gap-1.5 text-[11px] text-[#667085] dark:text-[#94A3B8]">
-              <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" /> &lt;10m Normal
-              <span className="inline-block h-2 w-2 rounded-full bg-amber-500 ml-2" /> 10-20m Warning
-              <span className="inline-block h-2 w-2 rounded-full bg-red-500 ml-2" /> &gt;20m Overdue
-            </div>
-          </div>
-
-          {/* Kitchen Stations Status Bar */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-            {stations.map((st) => (
-              <div
-                key={st.id}
-                className={`rounded-2xl border p-3 shadow-sm transition-all ${
-                  st.isActive
-                    ? 'border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127]'
-                    : 'border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-[#151A20] opacity-60'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <span
-                    className="h-2.5 w-2.5 rounded-full"
-                    style={{ backgroundColor: st.colorHex || '#DE8626' }}
-                  />
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => handleToggleStatus(st)}
-                      title={st.isActive ? 'Pause Station' : 'Activate Station'}
-                      className="p-1 rounded text-[#667085] hover:text-[#1E2930]"
-                    >
-                      <Power className={`h-3 w-3 ${st.isActive ? 'text-emerald-500' : 'text-gray-400'}`} />
-                    </button>
-                    <button
-                      onClick={() => handleDeleteStation(st.id)}
-                      className="p-1 rounded text-[#667085] hover:text-red-500"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </button>
-                  </div>
-                </div>
-                <h4 className="text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6] truncate">
-                  {st.stationName}
-                </h4>
-                <p className="text-[10px] text-[#667085] uppercase tracking-wider font-mono">
-                  {st.stationCode}
-                </p>
-              </div>
-            ))}
-          </div>
-
-          {/* Station Routing Filter Tabs */}
-          <div className="flex items-center gap-2 overflow-x-auto pb-1 border-b border-[#E7E1DA] dark:border-[#2B3540]">
-            {availableStations.map((st) => {
-              const isSelected = selectedStationCode.toUpperCase() === st.code.toUpperCase();
-              const stationCount = st.code === 'ALL'
-                ? activeOrders.length
-                : activeOrders.filter((o) =>
-                    (o.items || []).some(
-                      (it) =>
-                        (it.stationCode || '').toUpperCase() === st.code.toUpperCase() ||
-                        (it.stationName || '').toUpperCase() === st.code.toUpperCase()
-                    )
-                  ).length;
-
-              return (
-                <button
-                  key={st.code}
-                  onClick={() => setSelectedStationCode(st.code)}
-                  className={`flex items-center gap-2 rounded-2xl px-4 py-2 text-xs font-extrabold whitespace-nowrap transition-all shadow-xs ${
-                    isSelected
-                      ? 'bg-[#1E2930] dark:bg-[#F3F4F6] text-white dark:text-[#1E2930] shadow-sm'
-                      : 'border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#667085] hover:bg-black/5 dark:hover:bg-white/5'
-                  }`}
-                >
-                  <span
-                    className="h-2 w-2 rounded-full"
-                    style={{ backgroundColor: st.color }}
-                  />
-                  <span>{st.name}</span>
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-[10px] ${
-                      isSelected
-                        ? 'bg-white/20 dark:bg-black/20 text-white dark:text-[#1E2930]'
-                        : 'bg-black/5 dark:bg-white/5 text-[#667085]'
-                    }`}
-                  >
-                    {stationCount}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Live Kitchen Order Tickets Grid */}
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6] flex items-center gap-2">
-                <ChefHat className="h-5 w-5 text-[#DE8626]" />
-                <span>
-                  {selectedStationCode === 'ALL'
-                    ? `Live Kitchen Tickets (${filteredOrders.length})`
-                    : `${availableStations.find((s) => s.code === selectedStationCode)?.name || selectedStationCode} Station Queue (${filteredOrders.length})`}
+          {/* 2. Live Kitchen Stage Summary Cards */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <button
+              type="button"
+              onClick={() => setStageFilter('ACTIVE_KITCHEN')}
+              className={`text-left rounded-2xl border p-3.5 transition-all ${
+                stageFilter === 'ACTIVE_KITCHEN'
+                  ? 'border-[#DE8626] bg-amber-500/[0.06] ring-1 ring-[#DE8626]/30 shadow-sm'
+                  : 'border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] hover:border-[#DE8626]/50'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-[#667085] dark:text-[#94A3B8]">
+                  Active Kitchen Queue
                 </span>
-              </h2>
-            </div>
-
-            {filteredOrders.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-[#E7E1DA] dark:border-[#2B3540] p-12 text-center">
-                <ChefHat className="h-10 w-10 text-[#667085] mx-auto mb-3 opacity-40" />
-                <h3 className="text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6]">
-                  {selectedStationCode === 'ALL' ? 'Kitchen is all clear!' : 'No orders queued for this station!'}
-                </h3>
-                <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-1">
-                  {selectedStationCode === 'ALL'
-                    ? 'No orders currently waiting in the kitchen queue. New orders from POS or QR will appear instantly.'
-                    : `No active tickets with dishes assigned to ${selectedStationCode}. Switch station tabs to view other queues.`}
-                </p>
+                <span className="flex h-7 w-7 items-center justify-center rounded-xl bg-amber-500/15 text-[#DE8626]">
+                  <ChefHat className="h-3.5 w-3.5" />
+                </span>
               </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {filteredOrders.map((order, orderIdx) => {
-                  const items = Array.isArray(order.items) ? order.items : [];
-                  const timeFormatted = order.createdAt
-                    ? new Date(order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                    : '';
-                  const orderStatusUpper = (order.status || '').toUpperCase();
-                  const isPreparing = orderStatusUpper === 'PREPARING' || orderStatusUpper === 'COOKING';
-                  const isReady = orderStatusUpper === 'READY';
-                  const isPlaced = orderStatusUpper === 'PLACED' || orderStatusUpper === 'CONFIRMED';
+              <div className="mt-1.5 flex items-baseline gap-2">
+                <span className="text-xl sm:text-2xl font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                  {stageCounts.activeKitchen}
+                </span>
+                <span className="text-xs text-[#667085]">tickets on line</span>
+              </div>
+            </button>
 
-                  const elapsedMins = order.createdAt
-                    ? Math.max(0, Math.floor((Date.now() - new Date(order.createdAt).getTime()) / 60000))
-                    : 0;
-                  const isOverdue = elapsedMins >= 20;
-                  const isWarning = elapsedMins >= 10 && elapsedMins < 20;
-                  const nextStatus = getNextStatus(order);
+            <button
+              type="button"
+              onClick={() => setStageFilter('NEW')}
+              className={`text-left rounded-2xl border p-3.5 transition-all ${
+                stageFilter === 'NEW'
+                  ? 'border-rose-500 bg-rose-500/[0.06] ring-1 ring-rose-500/30 shadow-sm'
+                  : 'border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] hover:border-rose-500/40'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-[#667085] dark:text-[#94A3B8]">
+                  New / Placed
+                </span>
+                <span className="flex h-7 w-7 items-center justify-center rounded-xl bg-rose-500/10 text-rose-600 dark:text-rose-400">
+                  <Bell className="h-3.5 w-3.5" />
+                </span>
+              </div>
+              <div className="mt-1.5 flex items-baseline gap-2">
+                <span className="text-xl sm:text-2xl font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                  {stageCounts.newCount}
+                </span>
+                <span className="text-xs text-rose-600 dark:text-rose-400 font-semibold">
+                  awaiting fire
+                </span>
+              </div>
+            </button>
 
-                  return (
+            <button
+              type="button"
+              onClick={() => setStageFilter('PREPARING')}
+              className={`text-left rounded-2xl border p-3.5 transition-all ${
+                stageFilter === 'PREPARING'
+                  ? 'border-amber-500 bg-amber-500/[0.06] ring-1 ring-amber-500/30 shadow-sm'
+                  : 'border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] hover:border-amber-500/40'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-[#667085] dark:text-[#94A3B8]">
+                  Cooking Now
+                </span>
+                <span className="flex h-7 w-7 items-center justify-center rounded-xl bg-amber-500/15 text-amber-600">
+                  <Flame className="h-3.5 w-3.5" />
+                </span>
+              </div>
+              <div className="mt-1.5 flex items-baseline gap-2">
+                <span className="text-xl sm:text-2xl font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                  {stageCounts.preparingCount}
+                </span>
+                <span className="text-xs text-amber-600 font-semibold">in preparation</span>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setStageFilter('READY')}
+              className={`text-left rounded-2xl border p-3.5 transition-all ${
+                stageFilter === 'READY'
+                  ? 'border-emerald-500 bg-emerald-500/[0.06] ring-1 ring-emerald-500/30 shadow-sm'
+                  : 'border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] hover:border-emerald-500/40'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-[#667085] dark:text-[#94A3B8]">
+                  Ready on Pass
+                </span>
+                <span className="flex h-7 w-7 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-600">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                </span>
+              </div>
+              <div className="mt-1.5 flex items-baseline gap-2">
+                <span className="text-xl sm:text-2xl font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                  {stageCounts.readyCount}
+                </span>
+                <span className="text-xs text-emerald-600 font-semibold">ready for pickup</span>
+              </div>
+            </button>
+          </div>
+
+          {/* 3. Collapsible Station Management Drawer */}
+          {manageStationsOpen && (
+            <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-4 shadow-sm space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-xs font-extrabold uppercase tracking-wider text-[#1E2930] dark:text-[#F3F4F6]">
+                    Configured Kitchen Stations ({stations.length})
+                  </h3>
+                  <p className="text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                    Toggle station availability or remove unused stations
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {stations.length === 0 && (
+                    <button
+                      type="button"
+                      onClick={handleInitDefaults}
+                      className="flex items-center gap-1.5 rounded-xl border border-[#DE8626] bg-amber-500/10 px-3 py-1.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20"
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                      <span>Initialize Default Stations</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setStationModalOpen(true)}
+                    className="flex items-center gap-1 rounded-xl bg-[#DE8626] px-3 py-1.5 text-xs font-bold text-white hover:bg-[#C4721C]"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    <span>Add Station</span>
+                  </button>
+                </div>
+              </div>
+
+              {stations.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-[#E7E1DA] dark:border-[#2B3540] p-6 text-center text-xs text-[#667085]">
+                  No custom stations configured yet. Click <strong>Initialize Default Stations</strong> to create Main Kitchen, Tandoor &amp; Grill, Bakery, Bar, and Pantry.
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2.5">
+                  {stations.map((st) => (
                     <div
-                      key={order.id}
-                      className={`rounded-2xl border shadow-md overflow-hidden flex flex-col justify-between transition-all ${
-                        isOverdue
-                          ? 'border-red-500 ring-2 ring-red-500/30 bg-red-500/[0.03]'
-                          : isWarning
-                          ? 'border-amber-500/80 ring-1 ring-amber-500/20 bg-amber-500/[0.02]'
-                          : isReady
-                          ? 'border-blue-500/40 bg-blue-500/[0.02]'
-                          : isPreparing
-                          ? 'border-amber-500/50 bg-amber-500/[0.02]'
-                          : 'border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127]'
+                      key={st.id}
+                      className={`rounded-xl border p-2.5 transition-all ${
+                        st.isActive
+                          ? 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20]'
+                          : 'border-gray-200 dark:border-gray-800 bg-gray-100/60 dark:bg-gray-900/40 opacity-60'
                       }`}
                     >
-                      {/* Ticket Header */}
-                      <div
-                        className={`text-white p-3 flex items-center justify-between ${
-                          isOverdue
-                            ? 'bg-gradient-to-r from-red-600 to-rose-700'
-                            : isReady
-                            ? 'bg-gradient-to-r from-blue-600 to-indigo-600'
-                            : isPreparing
-                            ? 'bg-gradient-to-r from-amber-600 to-amber-700'
-                            : 'bg-gradient-to-r from-[#1E2930] to-[#2B3540]'
-                        }`}
-                      >
-                        <div>
-                          <div className="flex items-center gap-1.5">
-                            {orderIdx < 9 && (
-                              <span className="rounded-md bg-black/30 px-1.5 py-0.2 font-mono text-[10px] font-extrabold text-amber-300">
-                                #{orderIdx + 1}
-                              </span>
-                            )}
-                            <span className="text-[10px] font-bold uppercase tracking-wider block opacity-90">
-                              {order.tableName || order.orderTypeName || 'Counter'}
-                            </span>
-                          </div>
-                          <h3 className="text-base font-extrabold">Order #{order.id}</h3>
-                        </div>
-                        <div className="text-right">
-                          <div className="flex items-center gap-1.5 justify-end">
-                            <span className="text-xs font-semibold flex items-center gap-1">
-                              <Clock className="h-3 w-3" />
-                              {timeFormatted}
-                            </span>
-                            <span
-                              className={`rounded-full px-2 py-0.5 text-[10px] font-extrabold flex items-center gap-1 ${
-                                isOverdue
-                                  ? 'bg-white text-red-600 animate-pulse font-black'
-                                  : isWarning
-                                  ? 'bg-amber-400 text-amber-950'
-                                  : 'bg-white/20 text-white'
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="inline-flex items-center gap-1.5">
+                          <span
+                            className="h-2.5 w-2.5 rounded-full"
+                            style={{ backgroundColor: st.colorHex || '#DE8626' }}
+                          />
+                          <span className="text-[10px] font-mono font-bold uppercase text-[#667085]">
+                            {st.stationCode}
+                          </span>
+                        </span>
+                        <div className="flex items-center gap-0.5">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleStatus(st)}
+                            title={st.isActive ? 'Pause Station' : 'Activate Station'}
+                            className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5"
+                          >
+                            <Power
+                              className={`h-3 w-3 ${
+                                st.isActive ? 'text-emerald-500' : 'text-gray-400'
                               }`}
-                            >
-                              {isOverdue && <AlertTriangle className="h-2.5 w-2.5" />}
-                              {elapsedMins}m
+                            />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteStation(st.id)}
+                            title="Delete Station"
+                            className="p-1 rounded text-[#667085] hover:text-red-500 hover:bg-red-500/10"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        </div>
+                      </div>
+                      <h4 className="text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6] truncate">
+                        {st.stationName}
+                      </h4>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 4. Unified Station Filter Tabs + Search & Stage Bar */}
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-[#E7E1DA] dark:border-[#2B3540] pb-3">
+            {/* Station Filter Pills */}
+            <div className="flex items-center gap-2 overflow-x-auto pb-1 lg:pb-0">
+              {availableStations.map((st) => {
+                const isSelected = selectedStationCode.toUpperCase() === st.code.toUpperCase();
+                return (
+                  <button
+                    key={st.code}
+                    type="button"
+                    onClick={() => setSelectedStationCode(st.code)}
+                    className={`flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-bold whitespace-nowrap transition-all shrink-0 ${
+                      isSelected
+                        ? 'bg-[#1E2930] dark:bg-[#F3F4F6] text-white dark:text-[#1E2930] shadow-sm'
+                        : 'border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#667085] hover:bg-black/5 dark:hover:bg-white/5'
+                    }`}
+                  >
+                    <span
+                      className="h-2 w-2 rounded-full shrink-0"
+                      style={{ backgroundColor: st.color }}
+                    />
+                    <span>{st.name}</span>
+                    <span
+                      className={`rounded-full px-1.5 py-0.5 text-[10px] font-extrabold ${
+                        isSelected
+                          ? 'bg-white/20 dark:bg-black/20 text-white dark:text-[#1E2930]'
+                          : 'bg-black/5 dark:bg-white/5 text-[#667085]'
+                      }`}
+                    >
+                      {st.count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Search + Served Toggle */}
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1 sm:w-64">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#667085]" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search Order #, Table, Dish..."
+                  className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] pl-8 pr-7 py-2 text-xs text-[#1E2930] dark:text-[#F3F4F6] placeholder-[#667085] outline-none focus:border-[#DE8626]"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#667085]"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setStageFilter((prev) => (prev === 'SERVED' ? 'ACTIVE_KITCHEN' : 'SERVED'))
+                }
+                className={`rounded-xl border px-3 py-2 text-xs font-bold whitespace-nowrap transition-colors ${
+                  stageFilter === 'SERVED'
+                    ? 'border-emerald-600 bg-emerald-600 text-white'
+                    : 'border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#667085] hover:bg-black/5'
+                }`}
+              >
+                Served ({stageCounts.servedCount})
+              </button>
+            </div>
+          </div>
+
+          {/* 5. Compact KDS Bump Bar & SLA Legend Strip */}
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white/80 dark:bg-[#1B2127]/80 px-4 py-2.5 text-xs">
+            <div className="flex flex-wrap items-center gap-1.5 text-[#667085] dark:text-[#94A3B8]">
+              <Keyboard className="h-4 w-4 text-[#DE8626] mr-0.5" />
+              <span className="font-bold text-[#1E2930] dark:text-[#F3F4F6]">Shortcuts:</span>
+              <kbd className="rounded border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                1-9
+              </kbd>
+              <span>Bump Ticket</span>
+              <span className="mx-1 opacity-40">•</span>
+              <kbd className="rounded border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                Space
+              </kbd>
+              <span>Bump Oldest</span>
+              <span className="mx-1 opacity-40">•</span>
+              <kbd className="rounded border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                P
+              </kbd>
+              <span>Print KOT</span>
+              <span className="mx-1 opacity-40">•</span>
+              <kbd className="rounded border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-1.5 py-0.5 font-mono text-[10px] font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                R
+              </kbd>
+              <span>Refresh</span>
+            </div>
+
+            <div className="flex items-center gap-3 text-[11px] font-semibold text-[#667085] dark:text-[#94A3B8]">
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-emerald-500" /> &lt;10m On-Time
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-amber-500" /> 10–20m Warning
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-2 w-2 rounded-full bg-rose-500" /> &gt;20m Delayed
+              </span>
+            </div>
+          </div>
+
+          {/* 6. Live Kitchen Order Tickets Grid */}
+          {filteredOrders.length === 0 ? (
+            <div className="rounded-3xl border border-dashed border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-12 text-center">
+              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500/10 text-[#DE8626]">
+                <ChefHat className="h-6 w-6" />
+              </div>
+              <h3 className="text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                {selectedStationCode === 'ALL'
+                  ? 'Kitchen queue is all clear!'
+                  : 'No tickets queued for this station'}
+              </h3>
+              <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-1 max-w-md mx-auto">
+                {selectedStationCode === 'ALL'
+                  ? 'No active orders are waiting in this stage. New POS or QR orders will appear here automatically with a chime.'
+                  : `No active tickets have dishes routed to ${selectedStationCode}. Switch station tabs above to view other queues.`}
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 items-stretch">
+              {filteredOrders.map((order, orderIdx) => {
+                const items = Array.isArray(order.items) ? order.items : [];
+                const parsedCreated = order.createdAt ? parseUtcDate(order.createdAt) : new Date();
+                const timeFormatted = order.createdAt ? formatToIstTime(order.createdAt) : '';
+                const elapsedMins = Math.max(
+                  0,
+                  Math.floor((nowTick - parsedCreated.getTime()) / 60000)
+                );
+
+                const stage = getOrderStage(order.status);
+                const isPreparing = stage === 'PREPARING';
+                const isReady = stage === 'READY';
+                const isServed = stage === 'SERVED';
+
+                const isOverdue = !isReady && !isServed && elapsedMins >= 20;
+                const isWarning = !isReady && !isServed && elapsedMins >= 10 && elapsedMins < 20;
+                const nextStatus = getNextStatus(order);
+                const totalQty = items.reduce((sum, i) => sum + (Number(i.quantity) || 1), 0);
+
+                return (
+                  <div
+                    key={order.id}
+                    className={`rounded-3xl border overflow-hidden flex flex-col justify-between transition-all shadow-sm hover:shadow-md bg-white dark:bg-[#1B2127] ${
+                      isOverdue
+                        ? 'border-rose-500/80 ring-1 ring-rose-500/25'
+                        : isReady
+                        ? 'border-emerald-500/70 ring-1 ring-emerald-500/20'
+                        : isPreparing
+                        ? 'border-amber-500/70'
+                        : 'border-[#E7E1DA] dark:border-[#2B3540]'
+                    }`}
+                  >
+                    {/* Ticket Header */}
+                    <div
+                      className={`px-4 py-3 border-b flex items-start justify-between gap-2 ${
+                        isOverdue
+                          ? 'bg-rose-500/10 border-rose-500/20'
+                          : isReady
+                          ? 'bg-emerald-500/10 border-emerald-500/20'
+                          : isPreparing
+                          ? 'bg-amber-500/10 border-amber-500/20'
+                          : 'bg-[#FAF7F2] dark:bg-[#151A20] border-[#E7E1DA] dark:border-[#2B3540]'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {orderIdx < 9 && (
+                            <span className="rounded-md bg-[#1E2930] dark:bg-[#F3F4F6] px-1.5 py-0.5 font-mono text-[10px] font-black text-white dark:text-[#1E2930]">
+                              Key {orderIdx + 1}
                             </span>
-                          </div>
-                          <span className="text-[10px] uppercase font-bold bg-white/20 px-2 py-0.5 rounded-full mt-1 inline-block">
+                          )}
+                          <span className="rounded-md bg-[#DE8626]/15 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-[#DE8626]">
+                            {order.tableName || order.orderTypeName || 'Counter'}
+                          </span>
+                        </div>
+                        <div className="mt-1 flex items-baseline gap-2">
+                          <h3 className="text-base font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                            Order #{order.id}
+                          </h3>
+                          {order.pickupToken && String(order.pickupToken) !== String(order.id) && (
+                            <span className="text-[11px] font-bold text-[#667085]">
+                              Token #{order.pickupToken}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="text-right shrink-0">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <span
+                            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-extrabold ${
+                              isOverdue
+                                ? 'bg-rose-600 text-white'
+                                : isWarning
+                                ? 'bg-amber-500 text-white'
+                                : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
+                            }`}
+                          >
+                            {isOverdue ? (
+                              <AlertTriangle className="h-3 w-3" />
+                            ) : (
+                              <Clock className="h-3 w-3" />
+                            )}
+                            <span>{elapsedMins < 1 ? 'Just now' : `${elapsedMins}m`}</span>
+                          </span>
+                        </div>
+                        <div className="mt-1 flex items-center justify-end gap-1.5">
+                          <span className="text-[10px] text-[#667085] dark:text-[#94A3B8]">
+                            {timeFormatted}
+                          </span>
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wider ${
+                              isReady
+                                ? 'bg-emerald-600 text-white'
+                                : isPreparing
+                                ? 'bg-amber-500 text-white'
+                                : isServed
+                                ? 'bg-gray-500 text-white'
+                                : 'bg-[#1E2930] dark:bg-[#F3F4F6] text-white dark:text-[#1E2930]'
+                            }`}
+                          >
                             {order.status}
                           </span>
                         </div>
                       </div>
+                    </div>
 
-                      {/* Items List */}
-                      <div className="p-3 space-y-2 flex-1 divide-y divide-[#E7E1DA]/60 dark:divide-[#2B3540]/60 text-xs">
-                        {items.map((it, idx) => {
+                    {/* Items List */}
+                    <div className="p-4 space-y-2.5 flex-1 divide-y divide-[#E7E1DA]/60 dark:divide-[#2B3540]/60 max-h-72 overflow-y-auto">
+                      {items.length === 0 ? (
+                        <div className="py-4 text-center text-xs text-[#667085] italic">
+                          Order #{order.id} • Standard Kitchen Preparation
+                        </div>
+                      ) : (
+                        items.map((it, idx) => {
+                          const itemStation = getItemStationCode(it);
                           const matchesCurrentStation =
                             selectedStationCode === 'ALL' ||
-                            (it.stationCode || '').toUpperCase() === selectedStationCode.toUpperCase() ||
-                            (it.stationName || '').toUpperCase() === selectedStationCode.toUpperCase();
+                            itemStation === selectedStationCode.toUpperCase() ||
+                            (it.stationName || '').trim().toUpperCase() ===
+                              selectedStationCode.toUpperCase();
+                          const isChecked = Boolean(checkedItems[`${order.id}_${idx}`]);
 
                           return (
                             <div
                               key={idx}
-                              className={`pt-2 first:pt-0 flex items-start justify-between gap-2 ${
+                              onClick={() => toggleItemChecked(order.id, idx)}
+                              className={`pt-2.5 first:pt-0 flex items-start justify-between gap-2 cursor-pointer select-none transition-opacity ${
                                 !matchesCurrentStation ? 'opacity-40' : ''
                               }`}
                             >
-                              <div className="flex items-start gap-2">
-                                <span className="font-extrabold text-[#DE8626] text-sm min-w-5">
-                                  {it.quantity}x
+                              <div className="flex items-start gap-2.5 min-w-0">
+                                <span
+                                  className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border text-[10px] font-bold transition-colors ${
+                                    isChecked
+                                      ? 'border-emerald-600 bg-emerald-600 text-white'
+                                      : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-transparent'
+                                  }`}
+                                >
+                                  <Check className="h-3 w-3" />
                                 </span>
-                                <div>
-                                  <div className="flex items-center gap-1 flex-wrap">
-                                    <p className="font-bold text-[#1E2930] dark:text-[#F3F4F6]">
-                                      {it.itemName}
-                                    </p>
-                                    {it.stationName && (
-                                      <span
-                                        className="text-[9px] px-1.5 py-0.2 rounded-full font-bold uppercase tracking-wider"
-                                        style={{
-                                          backgroundColor: `${it.stationBadgeColor || '#DE8626'}20`,
-                                          color: it.stationBadgeColor || '#DE8626',
-                                        }}
-                                      >
-                                        {it.stationName}
-                                      </span>
-                                    )}
-                                  </div>
+                                <span className="font-black text-[#DE8626] text-xs sm:text-sm min-w-[24px]">
+                                  {it.quantity}×
+                                </span>
+                                <div className="min-w-0">
+                                  <p
+                                    className={`text-xs sm:text-sm font-bold leading-snug ${
+                                      isChecked
+                                        ? 'line-through text-[#667085]'
+                                        : 'text-[#1E2930] dark:text-[#F3F4F6]'
+                                    }`}
+                                  >
+                                    {it.itemName}
+                                  </p>
                                   {it.cookingInstruction && (
-                                    <p className="text-[11px] text-amber-700 dark:text-amber-400 italic">
+                                    <p className="mt-0.5 rounded-md bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:text-amber-300">
                                       Note: {it.cookingInstruction}
                                     </p>
                                   )}
                                 </div>
                               </div>
+
+                              {(it.stationName || itemStation) && (
+                                <span
+                                  className="shrink-0 rounded-md px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-wider"
+                                  style={{
+                                    backgroundColor: `${it.stationBadgeColor || '#DE8626'}18`,
+                                    color: it.stationBadgeColor || '#DE8626',
+                                  }}
+                                >
+                                  {it.stationName || itemStation}
+                                </span>
+                              )}
                             </div>
                           );
-                        })}
-                      </div>
-
-                      {/* Footer & Status Progression Controls */}
-                      <div className="p-3 border-t border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] space-y-2">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="text-[#667085] truncate max-w-[150px]">
-                            {order.customerName || 'Guest'}
-                          </span>
-                          <button
-                            onClick={() => handlePrintKot(order)}
-                            disabled={printingOrderId === order.id}
-                            title="Print KOT Ticket (Press P)"
-                            className="flex items-center gap-1 rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-2 py-1 text-[10px] font-bold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5 disabled:opacity-50 transition-colors"
-                          >
-                            <Printer className="h-3 w-3 text-[#DE8626]" />
-                            <span>Print KOT</span>
-                          </button>
-                        </div>
-
-                        {/* Bump Action Button */}
-                        <div className="grid grid-cols-2 gap-1.5 pt-1">
-                          <button
-                            onClick={() => handleBumpOrder(order)}
-                            disabled={updatingOrderId === order.id}
-                            className={`col-span-2 flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-black shadow-sm transition-all disabled:opacity-50 ${
-                              isReady
-                                ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/20'
-                                : isPreparing
-                                ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-blue-600/20'
-                                : 'bg-[#DE8626] hover:bg-[#C4721C] text-white shadow-amber-600/20'
-                            }`}
-                          >
-                            <Zap className="h-3.5 w-3.5 fill-current" />
-                            <span>
-                              {updatingOrderId === order.id
-                                ? 'Updating...'
-                                : `BUMP ➔ ${nextStatus.toUpperCase()} ${orderIdx < 9 ? `(Key ${orderIdx + 1})` : ''}`}
-                            </span>
-                          </button>
-                        </div>
-                      </div>
+                        })
+                      )}
                     </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+
+                    {/* Footer & Bump Action */}
+                    <div className="p-3.5 border-t border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2]/70 dark:bg-[#151A20]/70 space-y-2.5">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-[#667085] dark:text-[#94A3B8] font-medium truncate max-w-[150px]">
+                          {order.customerName || 'Walk-in Guest'} • {totalQty} {totalQty === 1 ? 'item' : 'items'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handlePrintKot(order)}
+                          disabled={printingOrderId === order.id}
+                          title="Print KOT Slip (Shortcut: P)"
+                          className="flex items-center gap-1 rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-2.5 py-1 text-[11px] font-bold text-[#1E2930] dark:text-[#F3F4F6] hover:border-[#DE8626] hover:text-[#DE8626] disabled:opacity-50 transition-colors"
+                        >
+                          <Printer className="h-3 w-3 text-[#DE8626]" />
+                          <span>{printingOrderId === order.id ? 'Printing...' : 'Print KOT'}</span>
+                        </button>
+                      </div>
+
+                      {!isServed && (
+                        <button
+                          type="button"
+                          onClick={() => handleBumpOrder(order)}
+                          disabled={updatingOrderId === order.id}
+                          className={`w-full flex items-center justify-center gap-1.5 rounded-xl py-2.5 px-3 text-xs font-black text-white shadow-sm transition-all disabled:opacity-50 ${
+                            isReady
+                              ? 'bg-emerald-600 hover:bg-emerald-700'
+                              : isPreparing
+                              ? 'bg-amber-600 hover:bg-amber-700'
+                              : 'bg-[#DE8626] hover:bg-[#C4721C]'
+                          }`}
+                        >
+                          <Zap className="h-3.5 w-3.5 fill-current" />
+                          <span>
+                            {updatingOrderId === order.id
+                              ? 'Updating...'
+                              : isReady
+                              ? `MARK ${nextStatus.toUpperCase()} ${orderIdx < 9 ? `[${orderIdx + 1}]` : ''}`
+                              : isPreparing
+                              ? `MARK READY ON PASS ${orderIdx < 9 ? `[${orderIdx + 1}]` : ''}`
+                              : `START COOKING (${nextStatus.toUpperCase()}) ${orderIdx < 9 ? `[${orderIdx + 1}]` : ''}`}
+                          </span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Add Station Modal */}
@@ -772,7 +1119,7 @@ export default function KitchenKdsPage() {
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
             <div className="w-full max-w-md rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-6 shadow-2xl">
               <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2.5">
                   <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-500/10 text-[#DE8626]">
                     <ChefHat className="h-5 w-5" />
                   </div>
@@ -781,6 +1128,7 @@ export default function KitchenKdsPage() {
                   </h3>
                 </div>
                 <button
+                  type="button"
                   onClick={() => setStationModalOpen(false)}
                   className="rounded-lg p-1 text-[#667085] hover:bg-black/5"
                 >
@@ -790,7 +1138,9 @@ export default function KitchenKdsPage() {
 
               <form onSubmit={handleCreateStation} className="space-y-4 text-xs">
                 <div>
-                  <label className="block font-semibold mb-1">Station Code (e.g. TAN, BAR, CURRY) *</label>
+                  <label className="block font-semibold mb-1">
+                    Station Code (e.g. TAN, BAR, CURRY) *
+                  </label>
                   <input
                     type="text"
                     required
@@ -842,7 +1192,7 @@ export default function KitchenKdsPage() {
                   <button
                     type="button"
                     onClick={() => setStationModalOpen(false)}
-                    className="rounded-xl border border-[#E7E1DA] px-4 py-2 text-xs font-semibold text-[#667085]"
+                    className="rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] px-4 py-2 text-xs font-semibold text-[#667085]"
                   >
                     Cancel
                   </button>

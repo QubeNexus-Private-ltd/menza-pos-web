@@ -124,8 +124,46 @@ export const OrderNotificationDrawer: React.FC<OrderNotificationDrawerProps> = (
             </div>
           ) : (
             notifications.map((item) => {
-              const isBillReq = item.eventType === 'REQUEST_BILL' || item.orderStatus.toLowerCase() === 'bill_requested';
-              const isServiceReq = item.eventType === 'CALL_WAITER' || item.eventType === 'REQUEST_WATER';
+              const statusUpper = String(item.orderStatus || '').toUpperCase();
+              const isBillReq = item.eventType === 'REQUEST_BILL' || statusUpper === 'BILL_REQUESTED';
+              const isWaterReq = item.eventType === 'REQUEST_WATER' || statusUpper === 'WATER_REQUESTED';
+              const isWaiterReq =
+                item.eventType === 'CALL_WAITER' ||
+                statusUpper === 'WAITER_CALLED' ||
+                statusUpper === 'ATTEND_COUNTER';
+              const isCancelled = item.eventType === 'CANCELLED' || statusUpper === 'CANCELLED';
+              const isSettled =
+                item.eventType === 'SETTLED' ||
+                statusUpper === 'SETTLED' ||
+                statusUpper === 'COMPLETED' ||
+                statusUpper === 'PAID';
+              const isReady = statusUpper === 'READY';
+              const isPreparing = statusUpper === 'PREPARING' || statusUpper === 'COOKING';
+              const isServed = statusUpper === 'SERVED' || statusUpper === 'DELIVERED';
+              const isAddOn = Boolean(item.isAddOn);
+              const isNewOrder = item.eventType === 'NEW_ORDER' && !isAddOn;
+
+              const badgeLabel = isBillReq
+                ? 'Bill Requested 🧾'
+                : isWaterReq
+                ? 'Water Refill 💧'
+                : isWaiterReq
+                ? 'Waiter Call 🛎️'
+                : isCancelled
+                ? 'Cancelled ❌'
+                : isSettled
+                ? 'Settled ✅'
+                : isReady
+                ? 'Ready to Serve 🍽️'
+                : isPreparing
+                ? 'Preparing 👨‍🍳'
+                : isServed
+                ? 'Served ✅'
+                : isAddOn
+                ? `Add-On KOT${item.roundNumber ? ` #${item.roundNumber}` : ''} ➕`
+                : isNewOrder
+                ? 'New Order 🔔'
+                : item.orderStatus;
 
               return (
                 <div
@@ -146,18 +184,16 @@ export const OrderNotificationDrawer: React.FC<OrderNotificationDrawerProps> = (
                     <div className="flex items-center gap-2">
                       <span
                         className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase ${
-                          isBillReq
+                          isBillReq || isCancelled
                             ? 'bg-rose-500/10 text-rose-600 border border-rose-500/30'
-                            : isServiceReq
+                            : isWaterReq || isPreparing
                             ? 'bg-blue-500/10 text-blue-600 border border-blue-500/30'
-                            : 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/30'
+                            : isSettled || isReady || isServed
+                            ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/30'
+                            : 'bg-amber-500/10 text-[#DE8626] border border-amber-500/30'
                         }`}
                       >
-                        {isBillReq
-                          ? 'Bill Requested 🧾'
-                          : isServiceReq
-                          ? 'Service Call 🛎️'
-                          : item.orderStatus}
+                        {badgeLabel}
                       </span>
 
                       {!item.isRead && (
@@ -184,7 +220,7 @@ export const OrderNotificationDrawer: React.FC<OrderNotificationDrawerProps> = (
                   <div className="mt-2 flex items-center justify-between text-xs">
                     <div>
                       <span className="font-bold text-[#1E2930] dark:text-[#F3F4F6]">
-                        {item.tableName ? `${item.tableName}` : `Order #${item.orderId}`}
+                        {item.orderId > 0 ? `Order #${item.orderId} • ` : ''}{item.tableName || 'Counter'}
                       </span>
                       {item.customerName && (
                         <span className="text-[11px] text-[#667085] dark:text-[#94A3B8] ml-1.5">

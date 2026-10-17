@@ -787,7 +787,7 @@ export const SubscriptionBlockerModal: React.FC = () => {
                         ? `${matchedPlan.baseCommissionPercentage}% per order`
                         : matchedPlan?.baseFlatCommissionPerOrder
                         ? `₹${matchedPlan.baseFlatCommissionPerOrder} flat / order`
-                        : '0% Commission Plan'}
+                        : '0% Platform Fee Plan'}
                     </p>
                     <span className="text-[10px] text-[#667085]">
                       {matchedPlan?.maxCommissionCapPerOrder

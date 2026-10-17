@@ -30,6 +30,7 @@ export interface RestaurantWallet {
   lowBalanceThreshold: number;
   totalRecharged: number;
   totalCommissionPaid: number;
+  totalRefunded?: number;
   status: WalletStatus;
   currency: string;
   lastUpdated: string;

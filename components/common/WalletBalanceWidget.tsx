@@ -156,7 +156,7 @@ export const WalletBalanceWidget: React.FC<WalletBalanceWidgetProps> = ({
             ₹{balance.toLocaleString('en-IN')}
           </span>
           <p className="mt-1 text-[11px] text-[#667085] dark:text-[#94A3B8]">
-            Used for transaction commissions & SMS receipts
+            Used for order platform fees & SMS receipts
           </p>
         </div>
         <button

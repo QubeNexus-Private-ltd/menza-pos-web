@@ -97,6 +97,13 @@ export class PdfLedgerGenerator {
 
             const typeBadgeColor = isCredit ? '#17845A' : '#DC2626';
             const typeBadgeBg = isCredit ? '#E4F5EC' : '#FEE2E2';
+            const formattedType = String(txn.transactionType || '')
+              .replace(/ORDER_COMMISSION|COMMISSION/gi, 'PLATFORM FEE')
+              .replace(/_/g, ' ');
+            const formattedDesc = String(txn.description || 'Wallet Transaction').replace(
+              /\bCommission\b/gi,
+              'Platform Fee'
+            );
 
             return `
               <tr style="border-bottom: 1px solid #E7E1DA;">
@@ -107,11 +114,11 @@ export class PdfLedgerGenerator {
                 </td>
                 <td style="padding: 10px 8px;">
                   <span style="background-color: ${typeBadgeBg}; color: ${typeBadgeColor}; font-size: 9px; font-weight: 800; padding: 3px 7px; border-radius: 4px; letter-spacing: 0.5px; text-transform: uppercase;">
-                    ${txn.transactionType}
+                    ${formattedType}
                   </span>
                 </td>
                 <td style="padding: 10px 8px; font-size: 11px; color: #1F2937;">
-                  <div style="font-weight: 600;">${txn.description || 'Wallet Transaction'}</div>
+                  <div style="font-weight: 600;">${formattedDesc}</div>
                   ${txn.paymentReference ? `<div style="font-size: 9px; color: #8C7A6B; font-family: monospace;">Ref: ${txn.paymentReference}</div>` : ''}
                 </td>
                 <td style="padding: 10px 8px; font-size: 12px; font-weight: 800; text-align: right; color: ${isCredit ? '#17845A' : '#DC2626'};">

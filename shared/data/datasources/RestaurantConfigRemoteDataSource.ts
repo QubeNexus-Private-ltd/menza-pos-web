@@ -102,55 +102,14 @@ export class RestaurantConfigRemoteDataSource {
     }
   }
 
-  private normalizeStateCode(stateVal?: string): string {
-    const raw = (stateVal || 'KA').trim();
-    if (!raw) return 'KA';
-    const stateMap: Record<string, string> = {
-      'andhra pradesh': 'AP',
-      'arunachal pradesh': 'AR',
-      'assam': 'AS',
-      'bihar': 'BR',
-      'chhattisgarh': 'CG',
-      'goa': 'GA',
-      'gujarat': 'GJ',
-      'haryana': 'HR',
-      'himachal pradesh': 'HP',
-      'jharkhand': 'JH',
-      'karnataka': 'KA',
-      'kerala': 'KL',
-      'madhya pradesh': 'MP',
-      'maharashtra': 'MH',
-      'manipur': 'MN',
-      'meghalaya': 'ML',
-      'mizoram': 'MZ',
-      'nagaland': 'NL',
-      'odisha': 'OD',
-      'punjab': 'PB',
-      'rajasthan': 'RJ',
-      'sikkim': 'SK',
-      'tamil nadu': 'TN',
-      'telangana': 'TG',
-      'tripura': 'TR',
-      'uttar pradesh': 'UP',
-      'uttarakhand': 'UK',
-      'west bengal': 'WB',
-      'delhi': 'DL',
-    };
-    const mapped = stateMap[raw.toLowerCase()];
-    if (mapped) return mapped;
-    return raw.substring(0, 10).toUpperCase();
-  }
-
   async updateConfig(restaurantId: number, config: Partial<RestaurantConfig>): Promise<boolean> {
     try {
       const targetId = restaurantId > 0 ? restaurantId : (config.id || 1);
-      const stateCode = this.normalizeStateCode(config.state);
-
       const payload = {
         restaurantName: config.restaurantName?.trim() || '',
         address: config.address?.trim() || '',
         city: config.city?.trim() || '',
-        state: stateCode,
+        state: config.state?.trim() || 'KA',
         imageUrl: config.imageUrl?.trim() || '',
         logoUrl: config.logoUrl?.trim() || '',
         contactNumber: config.contactNumber?.trim() || '',
@@ -165,40 +124,7 @@ export class RestaurantConfigRemoteDataSource {
       const response = await apiClient.put(`/RestaurantConfig/${targetId}`, payload, {
         headers: { 'X-Restaurant-Id': targetId.toString() },
       });
-      const ok = response.status === 200 || response.status === 204;
-
-      if (ok) {
-        const authState = useAuthStore.getState();
-        if (authState.activeRestaurant && authState.activeRestaurant.restaurantId === targetId) {
-          authState.setActiveRestaurant({
-            ...authState.activeRestaurant,
-            restaurantName: payload.restaurantName || authState.activeRestaurant.restaurantName,
-            address: payload.address || authState.activeRestaurant.address,
-            city: payload.city || authState.activeRestaurant.city,
-            state: payload.state || authState.activeRestaurant.state,
-            imageUrl: payload.imageUrl || authState.activeRestaurant.imageUrl,
-            logoUrl: payload.logoUrl || authState.activeRestaurant.logoUrl,
-          });
-        }
-        if (Array.isArray(authState.restaurants) && authState.restaurants.length > 0) {
-          const updatedList = authState.restaurants.map((r) =>
-            r.restaurantId === targetId
-              ? {
-                  ...r,
-                  restaurantName: payload.restaurantName || r.restaurantName,
-                  address: payload.address || r.address,
-                  city: payload.city || r.city,
-                  state: payload.state || r.state,
-                  imageUrl: payload.imageUrl || r.imageUrl,
-                  logoUrl: payload.logoUrl || r.logoUrl,
-                }
-              : r
-          );
-          authState.setRestaurants(updatedList);
-        }
-      }
-
-      return ok;
+      return response.status === 200 || response.status === 204;
     } catch (err: any) {
       console.warn('Update restaurant profile error:', err?.message);
       return false;
@@ -215,12 +141,8 @@ export class RestaurantConfigRemoteDataSource {
       const merged: Partial<RestaurantConfig> = {
         ...current,
         ...fallbackConfig,
-        restaurantName: fallbackConfig?.restaurantName?.trim() || current.restaurantName || 'Menza Restaurant',
-        address: fallbackConfig?.address?.trim() ?? current.address ?? '',
-        city: fallbackConfig?.city?.trim() ?? current.city ?? '',
-        state: fallbackConfig?.state?.trim() || current.state || 'KA',
-        imageUrl: images.imageUrl !== undefined ? images.imageUrl.trim() : (current.imageUrl || ''),
-        logoUrl: images.logoUrl !== undefined ? images.logoUrl.trim() : (current.logoUrl || ''),
+        imageUrl: images.imageUrl !== undefined ? images.imageUrl : current.imageUrl,
+        logoUrl: images.logoUrl !== undefined ? images.logoUrl : current.logoUrl,
       };
       return await this.updateConfig(restaurantId, merged);
     } catch (err: any) {

@@ -21,6 +21,13 @@ import {
   CheckCircle2,
   ChevronRight,
   Layers,
+  Calendar,
+  Hash,
+  History,
+  Percent,
+  Wallet,
+  ExternalLink,
+  FileText,
 } from 'lucide-react';
 import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
@@ -42,9 +49,12 @@ export const SubscriptionBlockerModal: React.FC = () => {
     isRenewalModalOpen,
     activeModalTab,
     plans,
+    history,
     isPlansLoading,
+    isHistoryLoading,
     fetchPlans,
     fetchSubscriptionStatus,
+    fetchSubscriptionHistory,
     closeRenewalModal,
     assignPlan,
     initiateCashFreePayment,
@@ -52,7 +62,7 @@ export const SubscriptionBlockerModal: React.FC = () => {
     hasLoaded,
   } = useSubscriptionStore();
 
-  const [modalTab, setModalTab] = useState<'renew' | 'explore'>(activeModalTab || 'explore');
+  const [modalTab, setModalTab] = useState<'renew' | 'explore' | 'history'>(activeModalTab || 'renew');
   const [selectedPlanId, setSelectedPlanId] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'error' | 'success'; text: string } | null>(null);
@@ -92,24 +102,34 @@ export const SubscriptionBlockerModal: React.FC = () => {
     (isNoSubscription || !subscription || isExpired || lifecycleState === 'EXPIRED' || lifecycleState === 'NONE');
   const isVisible = hasLoaded && (isStrictlyLocked || isRenewalModalOpen);
 
-  // Auto-fetch plans when modal opens or locked
+  // Auto-fetch plans and history when modal opens or locked
   useEffect(() => {
     if (isStrictlyLocked || isRenewalModalOpen) {
       if (plans.length === 0) {
         fetchPlans();
       }
+      if (currentRestId > 0) {
+        fetchSubscriptionHistory(currentRestId);
+      }
     }
-  }, [isStrictlyLocked, isRenewalModalOpen, plans.length, fetchPlans]);
+  }, [isStrictlyLocked, isRenewalModalOpen, plans.length, currentRestId, fetchPlans, fetchSubscriptionHistory]);
+
+  // Helper to match subscription to plan
+  const isMatchingPlan = (p: SubscriptionPlan, sub = subscription) => {
+    if (!sub) return false;
+    const subConfigId = sub.subscriptionConfigurationId || sub.planId || (sub as any)?.subscriptionPlanId;
+    if (subConfigId && (p.id === subConfigId || p.planId === subConfigId)) {
+      return true;
+    }
+    const planLabel = (p.subscriptionName || p.planName || '').trim().toLowerCase();
+    const subLabel = (sub.planName || '').trim().toLowerCase();
+    return Boolean(planLabel && subLabel && planLabel === subLabel);
+  };
 
   // Set default plan selection
   useEffect(() => {
     if (plans.length > 0 && (selectedPlanId === null || !plans.some((p) => p.id === selectedPlanId))) {
-      // Find matching current plan, or default to first
-      const currentPlanMatch = plans.find(
-        (p) =>
-          p.id === (subscription as any)?.subscriptionPlanId ||
-          (p.subscriptionName && subscription?.planName && p.subscriptionName.toLowerCase() === subscription.planName.toLowerCase())
-      );
+      const currentPlanMatch = plans.find((p) => isMatchingPlan(p));
       setSelectedPlanId(currentPlanMatch ? currentPlanMatch.id : plans[0].id);
     }
   }, [plans, selectedPlanId, subscription]);
@@ -119,7 +139,10 @@ export const SubscriptionBlockerModal: React.FC = () => {
     if (target) {
       setActiveRestaurant(target);
       setStatusMessage(null);
-      await fetchSubscriptionStatus(target.restaurantId);
+      await Promise.all([
+        fetchSubscriptionStatus(target.restaurantId),
+        fetchSubscriptionHistory(target.restaurantId),
+      ]);
     }
   };
 
@@ -128,14 +151,84 @@ export const SubscriptionBlockerModal: React.FC = () => {
   }
 
   // Find the user's active current plan in plans list
-  const currentPlan =
-    plans.find(
-      (p) =>
-        p.id === (subscription as any)?.subscriptionPlanId ||
-        (p.subscriptionName && subscription?.planName && p.subscriptionName.toLowerCase() === subscription.planName.toLowerCase())
-    ) || (plans.length > 0 ? plans[0] : null);
-
+  const matchedPlan = plans.find((p) => isMatchingPlan(p)) || null;
+  const currentPlan = matchedPlan || (plans.length > 0 ? plans[0] : null);
   const selectedPlan = plans.find((p) => p.id === selectedPlanId) || currentPlan || plans[0];
+
+  const formatDate = (dateStr?: string, includeTime = false) => {
+    if (!dateStr) return 'N/A';
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return 'N/A';
+    if (includeTime) {
+      return d.toLocaleString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    }
+    return d.toLocaleDateString('en-IN', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    });
+  };
+
+  const startFormatted = formatDate(subscription?.startDate);
+  const expiryFormatted = formatDate(subscription?.endDate || subscription?.expiryDate);
+  const effectiveEndFormatted = formatDate(
+    subscription?.effectiveCoverageEndDate || subscription?.endDate || subscription?.expiryDate
+  );
+
+  const planDurationDays = Number(matchedPlan?.durationInDays || matchedPlan?.durationDays || 30);
+  const totalDaysLeft = Number(subscription?.totalDaysRemaining ?? daysRemaining ?? 0);
+  const currentCycleDaysLeft = Number(subscription?.currentCycleDaysRemaining ?? daysRemaining ?? 0);
+  const queuedRenewalDays = Number(subscription?.queuedRenewalDays ?? 0);
+  const hasQueuedRenewal = Boolean(subscription?.hasQueuedRenewal && queuedRenewalDays > 0);
+  const progressPercent = Math.min(100, Math.max(0, Math.round((Math.max(0, currentCycleDaysLeft) / Math.max(1, planDurationDays)) * 100)));
+
+  // Determine feature entitlements from subscription.entitlements or matchedPlan
+  const checkEntitlementAllowed = (configKey: string, planFlag?: boolean): boolean => {
+    const ents = subscription?.entitlements || matchedPlan?.entitlements || [];
+    const found = ents.find(
+      (e: any) => String(e.configKey || e.ConfigKey || '').toLowerCase() === configKey.toLowerCase()
+    );
+    if (found !== undefined) {
+      return Boolean(found.isAllowed ?? (found as any).IsAllowed);
+    }
+    if (planFlag !== undefined) {
+      return Boolean(planFlag);
+    }
+    return true;
+  };
+
+  const entitlementItems = [
+    {
+      label: 'Counter POS & Instant Billing',
+      enabled: checkEntitlementAllowed('IsCounterOrderingEnabled', matchedPlan?.allowCounterOrdering),
+    },
+    {
+      label: 'Table QR & Dine-In Ordering',
+      enabled: checkEntitlementAllowed('IsTableOrderingEnabled', matchedPlan?.allowTableOrdering),
+    },
+    {
+      label: 'Kitchen Display System (KDS & KOT)',
+      enabled: checkEntitlementAllowed('IsKdsEnabled', matchedPlan?.allowKds),
+    },
+    {
+      label: 'Self-Pickup & Takeaway Orders',
+      enabled: checkEntitlementAllowed('IsSelfPickupEnabled', matchedPlan?.allowSelfPickup),
+    },
+    {
+      label: 'Delivery Channel Management',
+      enabled: checkEntitlementAllowed('IsDeliveryEnabled', matchedPlan?.allowDelivery),
+    },
+    {
+      label: 'Online Gateway Payments (UPI/Cards)',
+      enabled: checkEntitlementAllowed('AllowOnlinePayment', matchedPlan?.allowOnlinePayment),
+    },
+  ];
 
   const handlePayAndActivate = async (plan: SubscriptionPlan, isRenewAction: boolean = false) => {
     if (!currentRestId) {
@@ -167,6 +260,7 @@ export const SubscriptionBlockerModal: React.FC = () => {
           });
           setTimeout(async () => {
             await fetchSubscriptionStatus(currentRestId);
+            await fetchSubscriptionHistory(currentRestId);
             closeRenewalModal();
             setSubmitting(false);
           }, 1200);
@@ -238,12 +332,14 @@ export const SubscriptionBlockerModal: React.FC = () => {
             : 'Subscription activated successfully! POS unlocked.',
         });
         await fetchSubscriptionStatus(currentRestId);
+        await fetchSubscriptionHistory(currentRestId);
         setTimeout(() => {
           closeRenewalModal();
           setSubmitting(false);
         }, 1500);
       } else {
         await fetchSubscriptionStatus(currentRestId);
+        await fetchSubscriptionHistory(currentRestId);
         const latestSub = useSubscriptionStore.getState().subscription;
         if (latestSub && !useSubscriptionStore.getState().isExpired) {
           try {
@@ -276,14 +372,6 @@ export const SubscriptionBlockerModal: React.FC = () => {
     }
   };
 
-  const expiryFormatted = subscription?.endDate
-    ? new Date(subscription.endDate).toLocaleDateString('en-IN', {
-        day: 'numeric',
-        month: 'short',
-        year: 'numeric',
-      })
-    : 'No active date';
-
   return (
     <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-in fade-in duration-300">
       <div className="relative w-full max-w-4xl max-h-[92vh] overflow-hidden rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] shadow-2xl flex flex-col">
@@ -305,17 +393,27 @@ export const SubscriptionBlockerModal: React.FC = () => {
                       ? 'Subscription Plan Required'
                       : isStrictlyLocked
                       ? 'Subscription Expired'
-                      : 'Manage Restaurant Subscription'}
+                      : 'Subscription Details & Licensing'}
                   </h2>
                   <span
                     className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-extrabold uppercase ${
                       isStrictlyLocked
                         ? 'bg-red-500/15 text-red-600 border border-red-500/30'
-                        : 'bg-amber-500/15 text-[#DE8626] border border-amber-500/30'
+                        : isInGracePeriod
+                        ? 'bg-amber-500/15 text-amber-600 border border-amber-500/30'
+                        : 'bg-emerald-500/15 text-emerald-600 border border-emerald-500/30'
                     }`}
                   >
-                    <Lock className="h-3 w-3" />
-                    {isStrictlyLocked ? 'Locked' : subscription ? 'Active' : 'Plan Required'}
+                    {isStrictlyLocked ? <Lock className="h-3 w-3" /> : <ShieldCheck className="h-3 w-3" />}
+                    {isStrictlyLocked
+                      ? 'Locked'
+                      : isInGracePeriod
+                      ? 'Grace Period'
+                      : hasQueuedRenewal
+                      ? 'Active • Renewed'
+                      : subscription
+                      ? subscription.status || 'Active'
+                      : 'Plan Required'}
                   </span>
                 </div>
                 <p className="mt-1 text-xs text-[#667085] dark:text-[#94A3B8]">
@@ -323,12 +421,12 @@ export const SubscriptionBlockerModal: React.FC = () => {
                     ? `No active subscription found for ${activeRestaurant?.restaurantName || 'this store'}. Please purchase a plan below to unlock POS.`
                     : isStrictlyLocked
                     ? `Subscription for ${activeRestaurant?.restaurantName || 'this store'} has expired. Please renew or select a plan to resume operations.`
-                    : `${activeRestaurant?.restaurantName || 'Active Store'} • Seamless billing, KOT kitchen routing, and multi-terminal sync.`}
+                    : `${activeRestaurant?.restaurantName || 'Active Store'} • View your current subscription details, validity dates, entitlements, and billing history.`}
                 </p>
               </div>
             </div>
 
-            {/* Header Right Actions: Outlet Switcher + Logout + Optional Close */}
+            {/* Header Right Actions: Outlet Switcher + Full Billing Page + Logout + Close */}
             <div className="flex items-center gap-2 shrink-0">
               {restaurants.length > 1 && (
                 <select
@@ -343,6 +441,21 @@ export const SubscriptionBlockerModal: React.FC = () => {
                     </option>
                   ))}
                 </select>
+              )}
+
+              {!isStrictlyLocked && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    closeRenewalModal();
+                    router.push('/settings/billing');
+                  }}
+                  className="hidden sm:inline-flex items-center gap-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-3 py-1.5 text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6] hover:border-[#DE8626] hover:text-[#DE8626] transition-colors"
+                  title="Open Full Subscription & Billing Page"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  <span>Billing Page</span>
+                </button>
               )}
 
               <button
@@ -372,23 +485,29 @@ export const SubscriptionBlockerModal: React.FC = () => {
         </div>
 
         {/* Primary Tabs */}
-        <div className="flex border-b border-[#E7E1DA] dark:border-[#2B3540] px-6 bg-white dark:bg-[#1B2127]">
+        <div className="flex overflow-x-auto border-b border-[#E7E1DA] dark:border-[#2B3540] px-6 bg-white dark:bg-[#1B2127]">
           {subscription && !isNoSubscription && (
             <button
               onClick={() => {
                 setModalTab('renew');
                 setStatusMessage(null);
               }}
-              className={`flex items-center gap-2 border-b-2 py-3 px-3 text-xs font-bold transition-all ${
+              className={`flex items-center gap-2 border-b-2 py-3 px-3 text-xs font-bold whitespace-nowrap transition-all ${
                 modalTab === 'renew'
                   ? 'border-[#DE8626] text-[#DE8626]'
                   : 'border-transparent text-[#667085] hover:text-[#1E2930] dark:hover:text-[#F3F4F6]'
               }`}
             >
-              <RotateCcw className="h-4 w-4" />
-              <span>Renew Current Plan</span>
-              <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] text-[#DE8626]">
-                {daysRemaining}d left
+              <Crown className="h-4 w-4" />
+              <span>Current Plan & Details</span>
+              <span
+                className={`rounded-full px-2 py-0.5 text-[10px] font-extrabold ${
+                  isExpired
+                    ? 'bg-red-500/10 text-red-600'
+                    : 'bg-amber-500/10 text-[#DE8626]'
+                }`}
+              >
+                {isExpired ? 'Expired' : `${totalDaysLeft}d left`}
               </span>
             </button>
           )}
@@ -398,7 +517,7 @@ export const SubscriptionBlockerModal: React.FC = () => {
               setModalTab('explore');
               setStatusMessage(null);
             }}
-            className={`flex items-center gap-2 border-b-2 py-3 px-4 text-xs font-bold transition-all ${
+            className={`flex items-center gap-2 border-b-2 py-3 px-4 text-xs font-bold whitespace-nowrap transition-all ${
               modalTab === 'explore'
                 ? 'border-[#DE8626] text-[#DE8626]'
                 : 'border-transparent text-[#667085] hover:text-[#1E2930] dark:hover:text-[#F3F4F6]'
@@ -411,6 +530,31 @@ export const SubscriptionBlockerModal: React.FC = () => {
                 : `Choose Subscription Plan (${plans.length})`}
             </span>
           </button>
+
+          {subscription && !isNoSubscription && (
+            <button
+              onClick={() => {
+                setModalTab('history');
+                setStatusMessage(null);
+                if (currentRestId > 0 && history.length === 0) {
+                  fetchSubscriptionHistory(currentRestId);
+                }
+              }}
+              className={`flex items-center gap-2 border-b-2 py-3 px-4 text-xs font-bold whitespace-nowrap transition-all ${
+                modalTab === 'history'
+                  ? 'border-[#DE8626] text-[#DE8626]'
+                  : 'border-transparent text-[#667085] hover:text-[#1E2930] dark:hover:text-[#F3F4F6]'
+              }`}
+            >
+              <History className="h-4 w-4" />
+              <span>Billing History</span>
+              {history.length > 0 && (
+                <span className="rounded-full bg-stone-500/10 px-2 py-0.5 text-[10px] text-[#667085] dark:text-[#94A3B8]">
+                  {history.length}
+                </span>
+              )}
+            </button>
+          )}
         </div>
 
         {/* Modal Body */}
@@ -459,96 +603,293 @@ export const SubscriptionBlockerModal: React.FC = () => {
             </div>
           )}
 
-          {/* TAB 1: RENEW CURRENT PLAN */}
-          {modalTab === 'renew' && subscription && !isNoSubscription && currentPlan && (
+          {/* TAB 1: CURRENT PLAN & SUBSCRIPTION DETAILS */}
+          {modalTab === 'renew' && subscription && !isNoSubscription && (
             <div className="space-y-5">
               {/* Active Plan Hero Card */}
               <div className="rounded-3xl border-2 border-[#DE8626] bg-amber-500/5 p-6 shadow-sm">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div>
-                    <span className="inline-block rounded-md bg-[#DE8626] px-2.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-white mb-2">
-                      Active Subscription
-                    </span>
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span
+                        className={`inline-block rounded-md px-2.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-white ${
+                          isExpired
+                            ? 'bg-red-600'
+                            : isInGracePeriod
+                            ? 'bg-amber-600'
+                            : 'bg-[#DE8626]'
+                        }`}
+                      >
+                        {isExpired
+                          ? 'Subscription Expired'
+                          : isInGracePeriod
+                          ? `Grace Period (${graceDaysRemaining}d left)`
+                          : hasQueuedRenewal
+                          ? 'Active • Queued Renewal'
+                          : 'Active Subscription'}
+                      </span>
+                      {matchedPlan?.subscriptionCode && (
+                        <span className="rounded-md border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-2 py-0.5 text-[10px] font-bold text-[#667085] dark:text-[#94A3B8]">
+                          Code: {matchedPlan.subscriptionCode}
+                        </span>
+                      )}
+                      {matchedPlan?.billingCycle && (
+                        <span className="rounded-md bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold text-[#DE8626] uppercase">
+                          {matchedPlan.billingCycle}
+                        </span>
+                      )}
+                    </div>
+
                     <h3 className="text-xl font-black text-[#1E2930] dark:text-[#F3F4F6]">
-                      {subscription.planName || currentPlan.subscriptionName || currentPlan.planName}
+                      {subscription.planName || matchedPlan?.subscriptionName || matchedPlan?.planName || 'Store Subscription Plan'}
                     </h3>
-                    <p className="mt-1 text-xs text-[#667085] dark:text-[#94A3B8]">
-                      Expires on <strong>{expiryFormatted}</strong> • {daysRemaining} days remaining
+                    <p className="text-xs text-[#667085] dark:text-[#94A3B8]">
+                      {matchedPlan?.description || 'Full POS billing, station KOT routing, live floor table status, and analytics.'}
                     </p>
                   </div>
 
-                  <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-4 text-left sm:text-right">
-                    <span className="text-[11px] text-[#667085]">Renewal Price</span>
-                    <p className="text-2xl font-black text-[#DE8626]">
-                      ₹{currentPlan.finalPrice ?? currentPlan.price}
+                  {currentPlan && (
+                    <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-4 text-left sm:text-right shrink-0">
+                      <span className="text-[11px] font-semibold text-[#667085]">Renewal Price</span>
+                      <p className="text-2xl font-black text-[#DE8626]">
+                        ₹{ Number(currentPlan.finalPrice ?? currentPlan.price ?? subscription.amountPaid ?? 0).toLocaleString('en-IN') }
+                      </p>
+                      <span className="text-[10px] text-[#667085]">
+                        for {currentPlan.durationInDays || currentPlan.durationDays || 30} days
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Cycle Validity Progress Bar */}
+                <div className="mt-5 space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-bold text-[#1E2930] dark:text-[#F3F4F6] flex items-center gap-1.5">
+                      <Clock className="h-3.5 w-3.5 text-[#DE8626]" />
+                      {isExpired
+                        ? 'Plan validity has ended'
+                        : `${currentCycleDaysLeft} days remaining in current cycle`}
+                    </span>
+                    <span className="text-[11px] font-semibold text-[#667085] dark:text-[#94A3B8]">
+                      {startFormatted} → {expiryFormatted}
+                    </span>
+                  </div>
+                  <div className="h-2.5 w-full overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        isExpired || currentCycleDaysLeft <= 3
+                          ? 'bg-red-500'
+                          : currentCycleDaysLeft <= 7
+                          ? 'bg-amber-500'
+                          : 'bg-emerald-500'
+                      }`}
+                      style={{ width: `${isExpired ? 100 : Math.max(6, progressPercent)}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* Queued Renewal Coverage Banner */}
+                {hasQueuedRenewal && (
+                  <div className="mt-4 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-xs text-emerald-900 dark:text-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <Sparkles className="h-4 w-4 text-emerald-600 shrink-0" />
+                      <div>
+                        <strong className="font-extrabold">Queued Renewal Active (+{queuedRenewalDays} Days)</strong>
+                        <p className="text-[11px] opacity-90">
+                          Current Cycle: {currentCycleDaysLeft}d left • Queued Extension: +{queuedRenewalDays}d
+                        </p>
+                      </div>
+                    </div>
+                    <div className="rounded-xl bg-white/80 dark:bg-black/20 px-3 py-1.5 text-right">
+                      <span className="block text-[10px] uppercase font-bold text-emerald-700 dark:text-emerald-300">
+                        Effective Coverage Until
+                      </span>
+                      <strong className="text-xs font-black text-emerald-950 dark:text-white">
+                        {effectiveEndFormatted} ({totalDaysLeft}d total)
+                      </strong>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Subscription Details Grid (6 Metadata Cards) */}
+              <div>
+                <h4 className="text-xs font-extrabold uppercase tracking-wider text-[#667085] dark:text-[#94A3B8] mb-2.5">
+                  Subscription & Billing Details
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {/* 1. Start Date */}
+                  <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-3.5">
+                    <div className="flex items-center gap-2 text-[11px] font-semibold text-[#667085] dark:text-[#94A3B8]">
+                      <Calendar className="h-3.5 w-3.5 text-[#DE8626]" />
+                      <span>Start / Activated Date</span>
+                    </div>
+                    <p className="mt-1 text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                      {startFormatted}
                     </p>
                     <span className="text-[10px] text-[#667085]">
-                      for {currentPlan.durationInDays || currentPlan.durationDays || 30} days
+                      Status: {subscription.status || 'Active'}
                     </span>
                   </div>
-                </div>
 
-                {/* Continuous Date Extension Explainer */}
-                <div className="mt-5 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-xs text-emerald-800 dark:text-emerald-300 flex items-start gap-3">
-                  <RotateCcw className="h-4 w-4 shrink-0 text-emerald-600 mt-0.5" />
-                  <div>
-                    <strong className="block font-bold">Continuous Seamless Extension:</strong>
-                    <span>
-                      Renewing now appends {currentPlan.durationInDays || currentPlan.durationDays || 30} full days directly to your existing expiry date ({expiryFormatted}). You lose zero days and experience no disruption.
+                  {/* 2. Expiry Date */}
+                  <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-3.5">
+                    <div className="flex items-center gap-2 text-[11px] font-semibold text-[#667085] dark:text-[#94A3B8]">
+                      <Clock className="h-3.5 w-3.5 text-[#DE8626]" />
+                      <span>Current Cycle Expiry</span>
+                    </div>
+                    <p className="mt-1 text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                      {expiryFormatted}
+                    </p>
+                    <span className="text-[10px] text-[#667085]">
+                      {hasQueuedRenewal
+                        ? `Extended to ${effectiveEndFormatted}`
+                        : `${Math.max(0, currentCycleDaysLeft)} days remaining`}
+                    </span>
+                  </div>
+
+                  {/* 3. Amount Paid */}
+                  <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-3.5">
+                    <div className="flex items-center gap-2 text-[11px] font-semibold text-[#667085] dark:text-[#94A3B8]">
+                      <CreditCard className="h-3.5 w-3.5 text-emerald-600" />
+                      <span>Amount Paid</span>
+                    </div>
+                    <p className="mt-1 text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                      ₹{Number(subscription.amountPaid ?? matchedPlan?.finalPrice ?? matchedPlan?.price ?? 0).toLocaleString('en-IN')}
+                    </p>
+                    <span className="text-[10px] text-[#667085]">
+                      Cycle: {matchedPlan?.billingCycle || `${planDurationDays} Days`}
+                    </span>
+                  </div>
+
+                  {/* 4. Payment Reference */}
+                  <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-3.5">
+                    <div className="flex items-center gap-2 text-[11px] font-semibold text-[#667085] dark:text-[#94A3B8]">
+                      <Hash className="h-3.5 w-3.5 text-[#DE8626]" />
+                      <span>Payment Reference</span>
+                    </div>
+                    <p className="mt-1 text-xs font-extrabold text-[#1E2930] dark:text-[#F3F4F6] truncate" title={subscription.paymentReferenceNo || 'N/A'}>
+                      {subscription.paymentReferenceNo || 'Direct / Admin Assigned'}
+                    </p>
+                    <span className="text-[10px] text-[#667085]">
+                      Sub ID: #{subscription.subscriptionId || subscription.subscriptionConfigurationId || 'Active'}
+                    </span>
+                  </div>
+
+                  {/* 5. Platform Commission Terms */}
+                  <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-3.5">
+                    <div className="flex items-center gap-2 text-[11px] font-semibold text-[#667085] dark:text-[#94A3B8]">
+                      <Percent className="h-3.5 w-3.5 text-[#DE8626]" />
+                      <span>Platform Fee Structure</span>
+                    </div>
+                    <p className="mt-1 text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                      {matchedPlan?.baseCommissionPercentage !== undefined && matchedPlan.baseCommissionPercentage > 0
+                        ? `${matchedPlan.baseCommissionPercentage}% per order`
+                        : matchedPlan?.baseFlatCommissionPerOrder
+                        ? `₹${matchedPlan.baseFlatCommissionPerOrder} flat / order`
+                        : '0% Platform Fee Plan'}
+                    </p>
+                    <span className="text-[10px] text-[#667085]">
+                      {matchedPlan?.maxCommissionCapPerOrder
+                        ? `Max cap: ₹${matchedPlan.maxCommissionCapPerOrder}/order`
+                        : matchedPlan?.commissionType || 'Standard SaaS License'}
+                    </span>
+                  </div>
+
+                  {/* 6. Included Wallet Credit & Outlet Info */}
+                  <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-3.5">
+                    <div className="flex items-center gap-2 text-[11px] font-semibold text-[#667085] dark:text-[#94A3B8]">
+                      <Wallet className="h-3.5 w-3.5 text-emerald-600" />
+                      <span>Included Wallet Credit</span>
+                    </div>
+                    <p className="mt-1 text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                      ₹{Number(matchedPlan?.includedWalletCredit || 0).toLocaleString('en-IN')}
+                    </p>
+                    <span className="text-[10px] text-[#667085]">
+                      Outlet: {activeRestaurant?.restaurantName || `Store #${currentRestId}`}
                     </span>
                   </div>
                 </div>
               </div>
 
-              {/* What is Included Checklist */}
-              <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-4 space-y-2">
-                <span className="text-xs font-bold text-[#667085] uppercase tracking-wider">
-                  Features Included with this Plan
-                </span>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-[#1E2930] dark:text-[#F3F4F6] pt-1">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
-                    <span>High-Speed Counter POS Terminal</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
-                    <span>Station-Bifurcated Kitchen KOT Printing</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
-                    <span>Live Floor Table Board & Merging</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
-                    <span>Executive Revenue & GST Analytics</span>
-                  </div>
+              {/* Active Feature Entitlements Checklist */}
+              <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-4 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold text-[#667085] uppercase tracking-wider">
+                    Plan Feature Entitlements
+                  </span>
+                  <span className="text-[11px] font-semibold text-emerald-600">
+                    {entitlementItems.filter((i) => i.enabled).length} of {entitlementItems.length} Enabled
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs pt-1">
+                  {entitlementItems.map((item) => (
+                    <div
+                      key={item.label}
+                      className={`flex items-center gap-2 rounded-xl px-3 py-2 border ${
+                        item.enabled
+                          ? 'border-emerald-500/20 bg-emerald-500/5 text-[#1E2930] dark:text-[#F3F4F6]'
+                          : 'border-[#E7E1DA] dark:border-[#2B3540] bg-black/5 dark:bg-white/5 text-[#667085] line-through opacity-70'
+                      }`}
+                    >
+                      {item.enabled ? (
+                        <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+                      ) : (
+                        <Lock className="h-4 w-4 text-[#667085] shrink-0" />
+                      )}
+                      <span className="font-semibold">{item.label}</span>
+                    </div>
+                  ))}
                 </div>
               </div>
 
-              {/* Instant Renew Button */}
-              {isOwner && (
-                <div className="pt-2">
-                  <button
-                    type="button"
-                    disabled={submitting}
-                    onClick={() => handlePayAndActivate(currentPlan, true)}
-                    className="w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-[#DE8626] to-[#CB741B] py-4 text-sm font-extrabold text-white shadow-xl shadow-[#DE8626]/25 hover:from-[#C4721C] hover:to-[#B66415] disabled:opacity-50 transition-all hover:scale-[1.01] active:scale-[0.99]"
-                  >
-                    {submitting ? (
-                      <>
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        <span>Processing Renewal...</span>
-                      </>
-                    ) : (
-                      <>
-                        <CreditCard className="h-4 w-4" />
-                        <span>
-                          Renew Current Plan Now (₹{currentPlan.finalPrice ?? currentPlan.price})
-                        </span>
-                        <ArrowRight className="h-4 w-4" />
-                      </>
-                    )}
-                  </button>
+              {/* Continuous Date Extension Explainer & Instant Renew Action */}
+              {currentPlan && (
+                <div className="space-y-3 pt-1">
+                  <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-xs text-emerald-800 dark:text-emerald-300 flex items-start gap-3">
+                    <RotateCcw className="h-4 w-4 shrink-0 text-emerald-600 mt-0.5" />
+                    <div>
+                      <strong className="block font-bold">Continuous Seamless Extension:</strong>
+                      <span>
+                        Renewing now appends {currentPlan.durationInDays || currentPlan.durationDays || 30} full days directly to your existing coverage date ({hasQueuedRenewal ? effectiveEndFormatted : expiryFormatted}). You lose zero days and experience no disruption.
+                      </span>
+                    </div>
+                  </div>
+
+                  {isOwner && (
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                      <button
+                        type="button"
+                        disabled={submitting}
+                        onClick={() => handlePayAndActivate(currentPlan, true)}
+                        className="flex-1 inline-flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-[#DE8626] to-[#CB741B] py-4 px-5 text-sm font-extrabold text-white shadow-xl shadow-[#DE8626]/25 hover:from-[#C4721C] hover:to-[#B66415] disabled:opacity-50 transition-all hover:scale-[1.01] active:scale-[0.99]"
+                      >
+                        {submitting ? (
+                          <>
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            <span>Processing Renewal...</span>
+                          </>
+                        ) : (
+                          <>
+                            <CreditCard className="h-4 w-4" />
+                            <span>
+                              Renew {subscription.planName || currentPlan.subscriptionName || currentPlan.planName} Now (₹{Number(currentPlan.finalPrice ?? currentPlan.price ?? 0).toLocaleString('en-IN')})
+                            </span>
+                            <ArrowRight className="h-4 w-4" />
+                          </>
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setModalTab('explore')}
+                        className="inline-flex items-center justify-center gap-1.5 rounded-2xl border border-[#DE8626] bg-amber-500/10 py-4 px-5 text-xs font-extrabold text-[#DE8626] hover:bg-[#DE8626] hover:text-white transition-all"
+                      >
+                        <Layers className="h-4 w-4" />
+                        <span>Compare Plans</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -563,7 +904,7 @@ export const SubscriptionBlockerModal: React.FC = () => {
                     Choose a Subscription Tier
                   </h3>
                   <p className="text-xs text-[#667085] dark:text-[#94A3B8]">
-                    Compare features and select the tier best tailored to your operations
+                    Compare features, validity duration, and platform fee structure across available plans
                   </p>
                 </div>
                 {isPlansLoading && (
@@ -578,11 +919,9 @@ export const SubscriptionBlockerModal: React.FC = () => {
                 {plans.map((plan) => {
                   const isSelected = selectedPlanId === plan.id;
                   const price = Number(plan.finalPrice ?? plan.price ?? 0);
+                  const originalPrice = Number(plan.price ?? price);
                   const duration = plan.durationInDays || plan.durationDays || 30;
-                  const isCurrent =
-                    subscription &&
-                    ((plan.id === (subscription as any)?.subscriptionPlanId) ||
-                      (plan.subscriptionName && subscription.planName && plan.subscriptionName.toLowerCase() === subscription.planName.toLowerCase()));
+                  const isCurrent = isMatchingPlan(plan);
 
                   return (
                     <div
@@ -603,7 +942,7 @@ export const SubscriptionBlockerModal: React.FC = () => {
                       <div>
                         <div className="flex items-center gap-1.5 mb-1">
                           <Crown className="h-4 w-4 text-[#DE8626]" />
-                          <h4 className="text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                          <h4 className="text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6] pr-16">
                             {plan.subscriptionName || plan.planName}
                           </h4>
                         </div>
@@ -611,11 +950,30 @@ export const SubscriptionBlockerModal: React.FC = () => {
                           {plan.description || 'Full POS, KOT printing, and multi-outlet table sync.'}
                         </p>
 
-                        <div className="mt-4 flex items-baseline gap-1">
+                        <div className="mt-4 flex items-baseline gap-1.5">
                           <span className="text-2xl font-black text-[#1E2930] dark:text-[#F3F4F6]">
-                            ₹{price}
+                            ₹{price.toLocaleString('en-IN')}
                           </span>
+                          {originalPrice > price && (
+                            <span className="text-xs text-[#667085] line-through">
+                              ₹{originalPrice.toLocaleString('en-IN')}
+                            </span>
+                          )}
                           <span className="text-[11px] text-[#667085]">/ {duration} days</span>
+                        </div>
+
+                        {/* Commercial Highlights */}
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {plan.billingCycle && (
+                            <span className="rounded-md bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-[#DE8626] uppercase">
+                              {plan.billingCycle}
+                            </span>
+                          )}
+                          {plan.includedWalletCredit ? (
+                            <span className="rounded-md bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold text-emerald-600">
+                              +₹{plan.includedWalletCredit} Wallet Credit
+                            </span>
+                          ) : null}
                         </div>
 
                         <div className="mt-4 space-y-1.5 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60 pt-3 text-[11px] text-[#667085] dark:text-[#94A3B8]">
@@ -633,7 +991,11 @@ export const SubscriptionBlockerModal: React.FC = () => {
                           </div>
                           <div className="flex items-center gap-1.5">
                             <Check className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
-                            <span>Daily Revenue Analytics</span>
+                            <span>
+                              {plan.baseCommissionPercentage !== undefined && plan.baseCommissionPercentage > 0
+                                ? `${plan.baseCommissionPercentage}% Platform Fee`
+                                : 'Daily Revenue & GST Analytics'}
+                            </span>
                           </div>
                         </div>
                       </div>
@@ -656,19 +1018,19 @@ export const SubscriptionBlockerModal: React.FC = () => {
 
               {/* Primary Action Button for Selected Plan */}
               {isOwner && selectedPlan && (
-                <div className="pt-2 flex items-center justify-between gap-4 border-t border-[#E7E1DA] dark:border-[#2B3540] pt-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-t border-[#E7E1DA] dark:border-[#2B3540] pt-4">
                   <div className="text-xs text-[#667085]">
                     <span>Selected Tier: </span>
                     <strong className="text-sm font-black text-[#1E2930] dark:text-[#F3F4F6]">
-                      {selectedPlan.subscriptionName || selectedPlan.planName} (₹{selectedPlan.finalPrice ?? selectedPlan.price})
+                      {selectedPlan.subscriptionName || selectedPlan.planName} (₹{Number(selectedPlan.finalPrice ?? selectedPlan.price ?? 0).toLocaleString('en-IN')})
                     </strong>
                   </div>
 
                   <button
                     type="button"
                     disabled={submitting}
-                    onClick={() => handlePayAndActivate(selectedPlan, false)}
-                    className="inline-flex items-center gap-2 rounded-2xl bg-[#DE8626] px-6 py-3 text-xs font-extrabold text-white shadow-lg shadow-[#DE8626]/20 hover:bg-[#C4721C] disabled:opacity-50 transition-all hover:scale-[1.02] active:scale-[0.98]"
+                    onClick={() => handlePayAndActivate(selectedPlan, isMatchingPlan(selectedPlan))}
+                    className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#DE8626] px-6 py-3 text-xs font-extrabold text-white shadow-lg shadow-[#DE8626]/20 hover:bg-[#C4721C] disabled:opacity-50 transition-all hover:scale-[1.02] active:scale-[0.98]"
                   >
                     {submitting ? (
                       <>
@@ -679,12 +1041,99 @@ export const SubscriptionBlockerModal: React.FC = () => {
                       <>
                         <CreditCard className="h-4 w-4" />
                         <span>
-                          Activate {selectedPlan.subscriptionName || selectedPlan.planName} (₹{selectedPlan.finalPrice ?? selectedPlan.price})
+                          {isMatchingPlan(selectedPlan) ? 'Renew' : 'Activate'} {selectedPlan.subscriptionName || selectedPlan.planName} (₹{Number(selectedPlan.finalPrice ?? selectedPlan.price ?? 0).toLocaleString('en-IN')})
                         </span>
                         <ArrowRight className="h-3.5 w-3.5" />
                       </>
                     )}
                   </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 3: SUBSCRIPTION & BILLING HISTORY */}
+          {modalTab === 'history' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6] uppercase tracking-wide">
+                    Subscription & Billing Ledger
+                  </h3>
+                  <p className="text-xs text-[#667085] dark:text-[#94A3B8]">
+                    Chronological audit trail of plan activations, renewals, upgrades, and payment references
+                  </p>
+                </div>
+                {isHistoryLoading && (
+                  <span className="flex items-center gap-1.5 text-xs text-[#DE8626]">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <span>Loading history...</span>
+                  </span>
+                )}
+              </div>
+
+              {history.length === 0 && !isHistoryLoading ? (
+                <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-8 text-center space-y-2">
+                  <FileText className="h-8 w-8 text-[#667085] mx-auto opacity-60" />
+                  <p className="text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                    No Subscription History Records Found
+                  </p>
+                  <p className="text-xs text-[#667085] dark:text-[#94A3B8]">
+                    Your current active plan is {subscription?.planName || 'Active'} ({startFormatted} – {expiryFormatted}). Future renewals and upgrades will appear here.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {history.map((item) => {
+                    const evt = (item.eventType || item.newStatus || 'ACTIVATED').toUpperCase();
+                    const isUpgradeOrRenew = evt.includes('RENEW') || evt.includes('UPGRADE') || evt.includes('ACTIVATE');
+                    return (
+                      <div
+                        key={item.id}
+                        className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span
+                              className={`rounded-full px-2.5 py-0.5 text-[10px] font-extrabold uppercase ${
+                                isUpgradeOrRenew
+                                  ? 'bg-emerald-500/15 text-emerald-600 border border-emerald-500/30'
+                                  : 'bg-amber-500/15 text-[#DE8626] border border-amber-500/30'
+                              }`}
+                            >
+                              {evt}
+                            </span>
+                            <h4 className="text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                              {item.subscriptionName || item.subscriptionCode || subscription?.planName || 'Subscription Plan'}
+                            </h4>
+                            <span className="text-[11px] text-[#667085]">
+                              • {formatDate(item.createdDateUtc, true)}
+                            </span>
+                          </div>
+
+                          <p className="text-xs text-[#667085] dark:text-[#94A3B8]">
+                            Coverage: <strong>{formatDate(item.startDate)}</strong> → <strong>{formatDate(item.endDate)}</strong>
+                            {item.paymentReferenceNo ? ` • Ref: ${item.paymentReferenceNo}` : ''}
+                          </p>
+                          {item.remarks && (
+                            <p className="text-[11px] text-[#667085] italic">{item.remarks}</p>
+                          )}
+                        </div>
+
+                        <div className="text-left sm:text-right shrink-0">
+                          <span className="text-[10px] font-semibold uppercase text-[#667085] block">
+                            Amount Paid
+                          </span>
+                          <span className="text-base font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                            ₹{Number(item.amountPaid || 0).toLocaleString('en-IN')}
+                          </span>
+                          <span className="block text-[10px] text-emerald-600 font-bold uppercase">
+                            {item.newStatus || 'ACTIVE'}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

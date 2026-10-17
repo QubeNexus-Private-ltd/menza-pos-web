@@ -766,8 +766,8 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
               <button
                 type="button"
                 onClick={() => openRenewalModal(undefined, 'renew')}
-                title="Subscription & Licensing • Click to Renew or Explore Other Plans"
-                className={`group hidden 2xl:inline-flex h-[36px] items-center gap-2 rounded-xl border pl-2.5 pr-1.5 text-xs font-extrabold transition-all cursor-pointer shadow-xs active:scale-[0.98] ${
+                title="Subscription Details & Licensing • Click to View Details, Renew or Explore Plans"
+                className={`group hidden lg:inline-flex h-[36px] items-center gap-2 rounded-xl border pl-2.5 pr-1.5 text-xs font-extrabold transition-all cursor-pointer shadow-xs active:scale-[0.98] ${
                   isExpired || lifecycleState === 'EXPIRED'
                     ? 'border-red-500/40 bg-red-500/10 text-red-600 ring-1 ring-red-500/30 animate-pulse'
                     : isInGracePeriod || (daysRemaining > 0 && daysRemaining <= 3)
@@ -780,7 +780,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                 </div>
                 <div className="flex items-center gap-1.5">
                   <span className="truncate max-w-[85px] sm:max-w-[110px] font-extrabold">
-                    {subscription?.planName || 'Store Plan'}
+                    {subscription?.planName || 'Subscription'}
                   </span>
                   {daysRemaining > 0 && (
                     <span className="text-[11px] font-semibold text-[#667085] dark:text-[#94A3B8]">
@@ -789,7 +789,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                   )}
                 </div>
                 <span className="rounded-lg bg-amber-500/15 group-hover:bg-[#DE8626] group-hover:text-white px-2 py-0.5 text-[10px] font-extrabold uppercase text-[#DE8626] transition-colors tracking-tight">
-                  Plans
+                  Details
                 </span>
               </button>
             )}
@@ -1012,6 +1012,26 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                       {roleName}
                     </p>
                   </div>
+                  {!isSuperAdmin && !isSalesPerson && currentRestId > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setProfileMenuOpen(false);
+                        openRenewalModal(undefined, 'renew');
+                      }}
+                      className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-xs text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                    >
+                      <span className="flex items-center gap-2">
+                        <Crown className="h-3.5 w-3.5 text-[#DE8626]" />
+                        <span>Subscription Details</span>
+                      </span>
+                      {daysRemaining > 0 && (
+                        <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-[#DE8626]">
+                          {daysRemaining}d
+                        </span>
+                      )}
+                    </button>
+                  )}
                   <Link
                     href="/settings"
                     onClick={() => setProfileMenuOpen(false)}

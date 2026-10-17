@@ -47,13 +47,22 @@ export class WalletRemoteDataSource {
 
           return {
             id: String(t.id || t.Id || t.transactionId || `WTX_${Date.now()}`),
-            transactionType: rawType || (direction === 'CREDIT' ? 'RECHARGE' : 'COMMISSION_DEDUCT'),
+            transactionType: rawType || (direction === 'CREDIT' ? 'RECHARGE' : 'PLATFORM_FEE'),
             direction,
             amount: Number(t.amount ?? t.Amount ?? 0),
             balanceBefore: Number(t.balanceBefore ?? t.BalanceBefore ?? 0),
             balanceAfter: Number(t.balanceAfter ?? t.BalanceAfter ?? 0),
-            description: t.description || t.Description || t.reason || t.Reason || 'Wallet Ledger Entry',
-            paymentReference: t.paymentReference || t.PaymentReference || t.orderId || t.OrderId,
+            description: String(t.description || t.Description || t.reason || t.Reason || 'Wallet Ledger Entry').replace(
+              /\bCommission\b/gi,
+              'Platform Fee'
+            ),
+            orderId: t.orderId || t.OrderId ? String(t.orderId || t.OrderId) : undefined,
+            paymentReference:
+              t.paymentReference ||
+              t.PaymentReference ||
+              t.paymentGatewayRef ||
+              t.PaymentGatewayRef ||
+              (t.orderId || t.OrderId ? `ORD-${t.orderId || t.OrderId}` : undefined),
             createdAt: t.createdAt || t.CreatedAt || t.transactionDate || t.TransactionDate || new Date().toISOString(),
           };
         });
@@ -64,6 +73,7 @@ export class WalletRemoteDataSource {
           lowBalanceThreshold: threshold,
           totalRecharged: Number(data.totalRecharged ?? data.TotalRecharged ?? 0),
           totalCommissionPaid: Number(data.totalCommissionPaid ?? data.TotalCommissionPaid ?? 0),
+          totalRefunded: Number(data.totalRefunded ?? data.TotalRefunded ?? 0),
           status: balance <= 0 ? 'EXHAUSTED' : balance < threshold ? 'LOW_BALANCE' : 'HEALTHY',
           currency: 'INR',
           lastUpdated: data.lastUpdated || new Date().toISOString(),
@@ -227,28 +237,47 @@ export class WalletRemoteDataSource {
         headers: { 'X-Restaurant-Id': restaurantId.toString() },
       });
       if (res.status === 200 && res.data) {
-        const items = res.data.items || res.data.Items || res.data.transactions || (Array.isArray(res.data) ? res.data : []);
+        const items =
+          res.data.transactions ||
+          res.data.Transactions ||
+          res.data.items ||
+          res.data.Items ||
+          res.data.data?.transactions ||
+          res.data.data?.items ||
+          (Array.isArray(res.data) ? res.data : []);
         if (Array.isArray(items) && items.length > 0) {
           const mapped = items.map((t: any) => {
             const rawType = t.transactionType || t.TransactionType || '';
             const rawDir = t.direction || t.Direction || '';
+            const balBefore = Number(t.balanceBefore ?? t.BalanceBefore ?? 0);
+            const balAfter = Number(t.balanceAfter ?? t.BalanceAfter ?? 0);
             const isCredit =
               rawDir.toUpperCase() === 'CREDIT' ||
               rawType.toUpperCase().includes('CREDIT') ||
               rawType.toUpperCase().includes('RECHARGE') ||
               rawType.toUpperCase().includes('REFUND') ||
-              rawType.toUpperCase().includes('BONUS');
+              rawType.toUpperCase().includes('BONUS') ||
+              (balAfter > balBefore && balBefore >= 0);
             const direction = rawDir ? rawDir.toUpperCase() : isCredit ? 'CREDIT' : 'DEBIT';
 
             return {
               id: String(t.id || t.Id || t.transactionId || `TXN_${Date.now()}`),
-              transactionType: rawType || (direction === 'CREDIT' ? 'RECHARGE' : 'COMMISSION_DEDUCT'),
+              transactionType: rawType || (direction === 'CREDIT' ? 'RECHARGE' : 'PLATFORM_FEE'),
               direction,
               amount: Number(t.amount ?? t.Amount ?? 0),
-              balanceBefore: Number(t.balanceBefore ?? t.BalanceBefore ?? 0),
-              balanceAfter: Number(t.balanceAfter ?? t.BalanceAfter ?? 0),
-              description: t.description || t.Description || t.reason || t.Reason || 'Wallet Ledger Entry',
-              paymentReference: t.paymentReference || t.PaymentReference || t.orderId || t.OrderId,
+              balanceBefore: balBefore,
+              balanceAfter: balAfter,
+              description: String(t.description || t.Description || t.reason || t.Reason || 'Wallet Ledger Entry').replace(
+                /\bCommission\b/gi,
+                'Platform Fee'
+              ),
+              orderId: t.orderId || t.OrderId ? String(t.orderId || t.OrderId) : undefined,
+              paymentReference:
+                t.paymentReference ||
+                t.PaymentReference ||
+                t.paymentGatewayRef ||
+                t.PaymentGatewayRef ||
+                (t.orderId || t.OrderId ? `ORD-${t.orderId || t.OrderId}` : undefined),
               createdAt: t.createdAt || t.CreatedAt || t.transactionDate || t.TransactionDate || new Date().toISOString(),
             };
           });
@@ -269,28 +298,45 @@ export class WalletRemoteDataSource {
         headers: { 'X-Restaurant-Id': restaurantId.toString() },
       });
       if (res.status === 200 && res.data) {
-        const items = res.data.items || res.data.Items || res.data.transactions || (Array.isArray(res.data) ? res.data : []);
+        const items =
+          res.data.transactions ||
+          res.data.Transactions ||
+          res.data.items ||
+          res.data.Items ||
+          (Array.isArray(res.data) ? res.data : []);
         if (Array.isArray(items) && items.length > 0) {
           return items.map((t: any) => {
             const rawType = t.transactionType || t.TransactionType || '';
             const rawDir = t.direction || t.Direction || '';
+            const balBefore = Number(t.balanceBefore ?? t.BalanceBefore ?? 0);
+            const balAfter = Number(t.balanceAfter ?? t.BalanceAfter ?? 0);
             const isCredit =
               rawDir.toUpperCase() === 'CREDIT' ||
               rawType.toUpperCase().includes('CREDIT') ||
               rawType.toUpperCase().includes('RECHARGE') ||
               rawType.toUpperCase().includes('REFUND') ||
-              rawType.toUpperCase().includes('BONUS');
+              rawType.toUpperCase().includes('BONUS') ||
+              (balAfter > balBefore && balBefore >= 0);
             const direction = rawDir ? rawDir.toUpperCase() : isCredit ? 'CREDIT' : 'DEBIT';
 
             return {
               id: String(t.id || t.Id || t.transactionId || `TXN_${Date.now()}`),
-              transactionType: rawType || (direction === 'CREDIT' ? 'RECHARGE' : 'COMMISSION_DEDUCT'),
+              transactionType: rawType || (direction === 'CREDIT' ? 'RECHARGE' : 'PLATFORM_FEE'),
               direction,
               amount: Number(t.amount ?? t.Amount ?? 0),
-              balanceBefore: Number(t.balanceBefore ?? t.BalanceBefore ?? 0),
-              balanceAfter: Number(t.balanceAfter ?? t.BalanceAfter ?? 0),
-              description: t.description || t.Description || t.reason || t.Reason || 'Wallet Ledger Entry',
-              paymentReference: t.paymentReference || t.PaymentReference || t.orderId || t.OrderId,
+              balanceBefore: balBefore,
+              balanceAfter: balAfter,
+              description: String(t.description || t.Description || t.reason || t.Reason || 'Wallet Ledger Entry').replace(
+                /\bCommission\b/gi,
+                'Platform Fee'
+              ),
+              orderId: t.orderId || t.OrderId ? String(t.orderId || t.OrderId) : undefined,
+              paymentReference:
+                t.paymentReference ||
+                t.PaymentReference ||
+                t.paymentGatewayRef ||
+                t.PaymentGatewayRef ||
+                (t.orderId || t.OrderId ? `ORD-${t.orderId || t.OrderId}` : undefined),
               createdAt: t.createdAt || t.CreatedAt || t.transactionDate || t.TransactionDate || new Date().toISOString(),
             };
           });

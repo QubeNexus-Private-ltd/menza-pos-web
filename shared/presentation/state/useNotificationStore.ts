@@ -139,85 +139,21 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
   handleOrderStatusChanged: (event: any) => {
     if (!event) return;
 
-    const details = event.orderDetails || event.orderData || {};
-    const orderId = Number(
-      event.orderId ??
-      event.OrderId ??
-      details.orderId ??
-      details.OrderId ??
-      event.id ??
-      event.Id ??
-      0
-    );
+    const orderId = Number(event.orderId ?? event.id ?? 0);
     if (!orderId || orderId <= 0) return;
 
     const state = get();
     const currentKnownIds = new Set(state.knownOrderIds);
     const currentKnownStatuses = new Map(state.knownOrderStatuses);
-    const wasAlreadyKnown = currentKnownIds.has(orderId);
-    const previousKnownStatus = currentKnownStatuses.get(orderId);
+    const wasOrderAlreadyKnown = currentKnownIds.has(orderId);
 
-    const signalType = String(event._signalType || '').toUpperCase();
-    const rawEventType = String(event.eventType || event.EventType || details.eventType || details.EventType || '').toUpperCase();
-    const isAddOn = Boolean(
-      event.isAddOn ??
-      event.IsAddOn ??
-      details.isAddOn ??
-      details.IsAddOn ??
-      Number(event.roundNumber ?? event.RoundNumber ?? details.roundNumber ?? details.RoundNumber ?? 1) > 1
-    );
-    const roundNumber = Number(
-      event.roundNumber ??
-      event.RoundNumber ??
-      event.ticketVersion ??
-      event.TicketVersion ??
-      details.roundNumber ??
-      details.RoundNumber ??
-      details.ticketVersion ??
-      details.TicketVersion ??
-      1
-    );
+    const newStatus = String(event.orderStatus || event.newStatus || event.status || 'Placed');
+    const oldStatus = event.oldStatus ? String(event.oldStatus) : currentKnownStatuses.get(orderId);
+    const isAddOn = Boolean(event.isAddOn || event.IsAddOn || Number(event.roundNumber || event.RoundNumber || 1) > 1);
+    const roundNumber = Number(event.roundNumber ?? event.RoundNumber ?? (isAddOn ? 2 : 1));
 
-    const rawNewStatus = String(
-      event.orderStatus ||
-      event.OrderStatus ||
-      event.newStatus ||
-      event.NewStatus ||
-      details.orderStatus ||
-      details.OrderStatus ||
-      event.status ||
-      event.Status ||
-      (signalType === 'SETTLED' ? 'Settled' : 'Placed')
-    );
-    const newStatus = signalType === 'SETTLED' && rawNewStatus.toUpperCase() !== 'CANCELLED'
-      ? 'Settled'
-      : rawNewStatus;
-    const oldStatus = event.oldStatus || event.OldStatus || details.oldStatus || details.OldStatus
-      ? String(event.oldStatus || event.OldStatus || details.oldStatus || details.OldStatus)
-      : previousKnownStatus;
-
-    // Check if there is a very recent notification (< 3.5s ago) for the exact same order
-    const recentExistingNotif = state.notifications.find(
-      (n) => n.orderId === orderId && Date.now() - n.timestamp < 3500
-    );
-
-    // Deduplicate duplicate SignalR group broadcasts (e.g., Restaurant_{id} + Restaurant_{id}_Staff)
-    // or immediate follow-up OnOrderStatusChanged right after OnOrderCreated
-    if (wasAlreadyKnown && previousKnownStatus === newStatus && !isAddOn) {
-      return;
-    }
-    if (
-      recentExistingNotif &&
-      recentExistingNotif.eventType === 'NEW_ORDER' &&
-      signalType === 'STATUS_CHANGED' &&
-      ['PLACED', 'CONFIRMED', 'NEW', 'PENDING'].includes(newStatus.toUpperCase())
-    ) {
-      currentKnownIds.add(orderId);
-      currentKnownStatuses.set(orderId, newStatus);
-      set({
-        knownOrderIds: currentKnownIds,
-        knownOrderStatuses: currentKnownStatuses,
-      });
+    // If status hasn't changed and order was already known (and not an add-on round), skip
+    if (wasOrderAlreadyKnown && currentKnownStatuses.get(orderId) === newStatus && !isAddOn) {
       return;
     }
 
@@ -228,9 +164,8 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
     // should NOT trigger notification cards, unread count increments, or audio chimes for cashier/owner.
     const orderSource = String(
       event.source ||
-      event.Source ||
-      details.source ||
-      details.Source ||
+      event.orderDetails?.source ||
+      event.orderData?.source ||
       ''
     ).toUpperCase();
     const isPosAdmin = orderSource === 'POS_ADMIN' || orderSource === 'COUNTER';
@@ -244,28 +179,6 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
       return;
     }
 
-    const rawTableId = Number(
-      event.tableId ??
-      event.TableId ??
-      details.tableId ??
-      details.TableId ??
-      0
-    );
-
-    const tableName = String(
-      event.tableName ||
-      event.TableName ||
-      details.tableName ||
-      details.TableName ||
-      (rawTableId > 0
-        ? `Table #${rawTableId}`
-        : event.orderTypeName ||
-          event.OrderTypeName ||
-          details.orderTypeName ||
-          details.OrderTypeName ||
-          'Counter / Takeaway')
-    );
-
     // Orders taken by waiter on dining tables: internal kitchen statuses (Preparing, Ready, Served)
     // are managed directly by KDS chefs and floor waiters. Cashier / Owner at POS should NOT be
     // disturbed by kitchen status chimes/popups. Only order creation, cancellation, settlement,
@@ -276,56 +189,28 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
       statusUpper === 'COOKING' ||
       statusUpper === 'READY' ||
       statusUpper === 'SERVED' ||
+      statusUpper === 'COMPLETED' ||
       statusUpper === 'DELIVERED';
+    const isInitialPlacementStatus =
+      statusUpper === 'PLACED' ||
+      statusUpper === 'PENDING' ||
+      statusUpper === 'CONFIRMED' ||
+      statusUpper === 'ACCEPTED' ||
+      statusUpper === 'NEW';
     const isWaiterOrder = Boolean(
       orderSource.includes('WAITER') ||
       orderSource === 'STAFF' ||
       event.isWaiterOrder ||
-      details.isWaiterOrder ||
-      rawTableId > 0 ||
-      tableName.toLowerCase().includes('table')
+      event.orderDetails?.isWaiterOrder ||
+      (event.tableId && Number(event.tableId) > 0) ||
+      event.tableName?.toLowerCase().includes('table')
     );
-    const isKitchenUpdate = Boolean(
-      event.isKitchenStatus ||
-      details.isKitchenStatus ||
-      orderSource === 'KDS' ||
-      isKitchenPrepStatus
-    );
+    const isKitchenUpdate = Boolean(event.isKitchenStatus || event.source === 'KDS' || isKitchenPrepStatus);
 
-    const isBillRequest =
-      statusUpper.includes('BILL') ||
-      rawEventType === 'REQUEST_BILL' ||
-      rawEventType.includes('BILL');
-    const isSettledStatus =
-      signalType === 'SETTLED' ||
-      Boolean(event.settledDateUtc || event.settledBy || details.settledDateUtc || details.settledBy) ||
-      statusUpper === 'SETTLED' ||
-      statusUpper === 'COMPLETED' ||
-      statusUpper === 'PAID';
-    const isCancelledStatus = statusUpper === 'CANCELLED' || statusUpper === 'REJECTED';
-
-    // Determine whether this event is truly a NEW_ORDER vs STATUS_CHANGED:
-    // - Never classify Settled, Cancelled, Bill Request, or Kitchen Progress (Preparing/Ready/Served/Delivered) as NEW_ORDER.
-    // - Classify as NEW_ORDER only when triggered by OnOrderCreated (or KOT_CREATED), or when an order was not yet known
-    //   and arrives in an initial placement status (Placed / Pending / New / Confirmed).
-    const isInitialPlacementStatus =
-      statusUpper === 'PLACED' ||
-      statusUpper === 'PENDING' ||
-      statusUpper === 'NEW' ||
-      statusUpper === 'CREATED' ||
-      statusUpper === 'CONFIRMED';
-
-    const isNewOrder =
-      !isBillRequest &&
-      !isSettledStatus &&
-      !isCancelledStatus &&
-      !isKitchenPrepStatus &&
-      (signalType === 'CREATED' ||
-        rawEventType.includes('CREATED') ||
-        isAddOn ||
-        (!wasAlreadyKnown && signalType !== 'STATUS_CHANGED' && isInitialPlacementStatus) ||
-        (!wasAlreadyKnown && !oldStatus && isInitialPlacementStatus));
-
+    const isBillRequest = statusUpper.includes('BILL');
+    const isSettledStatus = statusUpper === 'SETTLED' || statusUpper === 'PAID';
+    const isCancelledStatus = statusUpper === 'CANCELLED';
+    const isNewOrder = !isAddOn && !wasOrderAlreadyKnown && isInitialPlacementStatus && (!oldStatus || oldStatus === newStatus);
     const eventType: 'NEW_ORDER' | 'STATUS_CHANGED' | 'SETTLED' | 'CANCELLED' | 'REQUEST_BILL' =
       isBillRequest
         ? 'REQUEST_BILL'
@@ -338,19 +223,10 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
         : 'STATUS_CHANGED';
 
     // Orders taken by waiter on dining tables:
-    // 1. Initial Order Placement (NEW_ORDER) by waiter/staff: Waiter and KDS handle this; Cashier does NOT receive audible/modal alerts.
-    //    (Note: Customer self-QR orders on tables have source 'QR' / 'CUSTOMER' / 'PUBLIC_DINE_IN' and SHOULD alert cashier if not waiter).
+    // 1. Initial Order Placement (NEW_ORDER): Waiter and KDS handle this; Cashier does NOT receive audible/modal alerts.
     // 2. Kitchen Preparation Statuses (Preparing, Ready, Served): Chef and waiter manage this; Cashier is NOT disturbed.
-    const isStaffPlacedWaiterOrder =
-      orderSource.includes('WAITER') ||
-      orderSource === 'STAFF' ||
-      Boolean(event.isWaiterOrder || details.isWaiterOrder);
-
-    if (
-      !isBillRequest &&
-      ((isStaffPlacedWaiterOrder && eventType === 'NEW_ORDER') ||
-        (isWaiterOrder && isKitchenUpdate && isKitchenPrepStatus))
-    ) {
+    // ONLY Bill Requests and Order Status changes (Cancelled, Settled, or overarching status changes) should alert cashier!
+    if (isWaiterOrder && !isBillRequest && (eventType === 'NEW_ORDER' || (isKitchenUpdate && isKitchenPrepStatus))) {
       // Silently keep order and table status tracking in sync without alerting cashier/owner
       set({
         knownOrderIds: currentKnownIds,
@@ -359,44 +235,38 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
       return;
     }
 
-    const rawItems = Array.isArray(event.items)
-      ? event.items
-      : Array.isArray(event.Items)
-      ? event.Items
-      : Array.isArray(details.items)
-      ? details.items
-      : Array.isArray(details.Items)
-      ? details.Items
-      : [];
-    const itemCount = rawItems.reduce((sum: number, it: any) => sum + (Number(it.quantity ?? it.Quantity) || 1), 0);
+    const items = Array.isArray(event.items) ? event.items : [];
+    const itemCount = items.reduce((sum: number, it: any) => sum + (Number(it.quantity) || 1), 0);
 
-    const customerName = String(
-      event.customerName ||
-      event.CustomerName ||
-      details.customerName ||
-      details.CustomerName ||
-      event.mobileNumber ||
-      details.mobileNumber ||
-      'Customer'
+    const tableName =
+      event.tableName ||
+      (event.tableId ? `Table #${event.tableId}` : event.orderTypeName || 'Counter / Takeaway');
+
+    const rawTableId = Number(
+      event.tableId ??
+      event.TableId ??
+      event.orderDetails?.tableId ??
+      event.orderDetails?.TableId ??
+      0
     );
+
+    const customerName = event.customerName || event.mobileNumber || 'Customer';
 
     const pickupToken =
       event.pickupToken ||
-      event.PickupToken ||
-      details.pickupToken ||
-      details.PickupToken ||
+      event.orderDetails?.pickupToken ||
+      event.orderData?.pickupToken ||
       (event.tokenNumber ? String(event.tokenNumber) : undefined);
     const tokenNumber =
       event.tokenNumber ??
-      event.TokenNumber ??
-      details.tokenNumber ??
-      details.TokenNumber ??
+      event.orderDetails?.tokenNumber ??
+      event.orderData?.tokenNumber ??
       pickupToken;
 
     const stations = Array.from(
       new Set(
-        rawItems
-          .map((it: any) => it.stationName || it.StationName || it.stationCode || it.StationCode)
+        items
+          .map((it: any) => it.stationName || it.stationCode)
           .filter(Boolean)
       )
     ).join(', ');
@@ -404,10 +274,12 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
     const totalAmount = Number(
       event.totalAmount ??
       event.TotalAmount ??
-      details.totalAmount ??
-      details.TotalAmount ??
-      details.grandTotal ??
-      details.GrandTotal ??
+      event.orderDetails?.totalAmount ??
+      event.orderDetails?.TotalAmount ??
+      event.orderDetails?.grandTotal ??
+      event.orderDetails?.GrandTotal ??
+      event.orderData?.totalAmount ??
+      event.orderData?.TotalAmount ??
       event.amount ??
       event.Amount ??
       event.grandTotal ??
@@ -415,28 +287,23 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
       0
     );
 
-    const formattedItemsList =
-      rawItems.length > 0
-        ? rawItems
-            .slice(0, 3)
-            .map((it: any) => `${it.quantity || it.Quantity || 1}x ${it.itemName || it.ItemName || it.name || 'Item'}`)
-            .join(', ') + (rawItems.length > 3 ? ` +${rawItems.length - 3} more` : '')
-        : '';
-
     const itemsSummary =
       isBillRequest
         ? `🧾 Final bill requested for ${tableName}${totalAmount > 0 ? ` • ₹${totalAmount.toLocaleString('en-IN')}` : ''}`
-        : eventType === 'SETTLED'
-        ? `✅ Order #${orderId} settled${totalAmount > 0 ? ` • ₹${totalAmount.toLocaleString('en-IN')}` : ''}${formattedItemsList ? ` (${formattedItemsList})` : ''}`
-        : eventType === 'CANCELLED'
-        ? `❌ Order #${orderId} cancelled${formattedItemsList ? ` • ${formattedItemsList}` : ''}`
-        : eventType === 'STATUS_CHANGED'
-        ? formattedItemsList
-          ? `Status → ${newStatus} • ${formattedItemsList}`
-          : details.itemsSummary || `Order #${orderId} status updated to ${newStatus}`
         : isAddOn
-        ? `➕ Add-On Round #${roundNumber}: ${formattedItemsList || 'New items added'}`
-        : formattedItemsList || details.itemsSummary || 'New order received';
+        ? `➕ Added Round #${roundNumber}: ` +
+          (items.length > 0
+            ? items
+                .slice(0, 3)
+                .map((it: any) => `${it.quantity || 1}x ${it.itemName || it.name || 'Item'}`)
+                .join(', ') + (items.length > 3 ? ` +${items.length - 3} more` : '')
+            : 'Additional items ordered')
+        : items.length > 0
+        ? items
+            .slice(0, 3)
+            .map((it: any) => `${it.quantity || 1}x ${it.itemName || it.name || 'Item'}`)
+            .join(', ') + (items.length > 3 ? ` +${items.length - 3} more` : '')
+        : event.orderDetails?.itemsSummary || (eventType === 'STATUS_CHANGED' ? `Order status updated to ${newStatus}` : 'Order update');
 
     const notifItem: OrderNotificationItem = {
       id: `notif_${orderId}_${Date.now()}`,
@@ -444,45 +311,26 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
       tableId: rawTableId > 0 ? rawTableId : undefined,
       tableName,
       customerName: isBillRequest ? `Pre-Bill: ${tableName}` : customerName,
-      customerPhone:
-        event.mobileNumber ||
-        event. customerPhone ||
-        event.CustomerPhone ||
-        details.mobileNumber ||
-        details.customerPhone ||
-        details.CustomerPhone,
+      customerPhone: event.mobileNumber || event.orderDetails?.mobileNumber,
       totalAmount,
       itemCount: itemCount > 0 ? itemCount : 1,
       itemsSummary,
-      orderStatus: isBillRequest ? 'BILL_REQUESTED' : isSettledStatus ? 'Settled' : newStatus,
+      orderStatus: isBillRequest ? 'BILL_REQUESTED' : newStatus,
       oldStatus,
       eventType,
       isAddOn,
-      roundNumber: roundNumber > 1 ? roundNumber : undefined,
-      orderTypeId: event.orderTypeId || details.orderTypeId,
-      orderTypeName:
-        event.orderTypeName ||
-        event.OrderTypeName ||
-        event.deliveryType ||
-        event.DeliveryType ||
-        details.orderTypeName ||
-        details.OrderTypeName,
+      roundNumber,
+      orderTypeId: event.orderTypeId || event.orderDetails?.orderTypeId,
+      orderTypeName: event.orderTypeName || event.deliveryType || event.orderDetails?.orderTypeName,
       pickupToken: pickupToken ? String(pickupToken) : undefined,
       tokenNumber: tokenNumber !== undefined ? tokenNumber : undefined,
       stations: stations || undefined,
-      createdAt:
-        event.createdDateUtc ||
-        event.CreatedDateUtc ||
-        event.createdAt ||
-        event.CreatedAt ||
-        details.createdDateUtc ||
-        details. createdAt ||
-        new Date().toISOString(),
+      createdAt: event.createdDateUtc || event.createdAt || new Date().toISOString(),
       timestamp: Date.now(),
       isRead: false,
     };
 
-    logger.info('POS', 'SIGNALR_ALERT', `⚡ [SignalR Alert] Order #${orderId} -> ${notifItem.orderStatus} (${eventType})`);
+    logger.info('POS', 'SIGNALR_ALERT', `⚡ [SignalR Alert] Order #${orderId} -> ${newStatus} (${eventType})`);
 
     // 1. Play in-app audio chime & vibration
     playOrderNotificationSound(state.soundEnabled);
@@ -533,26 +381,6 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
     const fallbackToCounter = Boolean(data.fallbackToCounter || data.FallbackToCounter || activeWaiters === 0);
     const isBillRequest = reqType.includes('BILL') || Boolean(data.isBillRequest || data.IsBillRequest);
 
-    const eventType: 'CALL_WAITER' | 'REQUEST_WATER' | 'REQUEST_BILL' =
-      reqType.includes('WATER')
-        ? 'REQUEST_WATER'
-        : isBillRequest
-        ? 'REQUEST_BILL'
-        : 'CALL_WAITER';
-
-    const state = get();
-    // Deduplicate rapid multi-channel SignalR broadcasts (e.g. OnBillRequested + BillRequested + ServiceRequestCreated)
-    const duplicateRecent = state.notifications.find((n) => {
-      if (Date.now() - n.timestamp > 3000) return false;
-      if (reqId && n.id.startsWith(`service_${reqId}_`)) return true;
-      if (n.eventType === eventType && rawTableId > 0 && n.tableId === rawTableId) return true;
-      if (n.eventType === eventType && rawOrderId > 0 && n.orderId === rawOrderId) return true;
-      return false;
-    });
-    if (duplicateRecent) {
-      return;
-    }
-
     const totalAmount = Number(
       data.totalAmount ??
       data.TotalAmount ??
@@ -578,11 +406,16 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
 
     const itemsSummary = isBillRequest
       ? `🧾 Final bill requested for ${tableName}${totalAmount > 0 ? ` • ₹${totalAmount.toLocaleString('en-IN')}` : ''}`
-      : reqType.includes('WATER')
-      ? `💧 Water refill requested at ${tableName}`
       : fallbackToCounter
       ? `🚨 Table needs assistance! (0 active waiters on floor - Please assist from counter)`
       : `🛎️ Guest called waiter (${activeWaiters} staff active on floor)`;
+
+    const eventType: 'CALL_WAITER' | 'REQUEST_WATER' | 'REQUEST_BILL' =
+      reqType.includes('WATER')
+        ? 'REQUEST_WATER'
+        : isBillRequest
+        ? 'REQUEST_BILL'
+        : 'CALL_WAITER';
 
     const notifItem: OrderNotificationItem = {
       id: `service_${reqId}_${Date.now()}`,
@@ -596,17 +429,18 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
       totalAmount,
       itemCount: 1,
       itemsSummary,
-      orderStatus: isBillRequest ? 'BILL_REQUESTED' : reqType.includes('WATER') ? 'WATER_REQUESTED' : (fallbackToCounter ? 'ATTEND_COUNTER' : 'WAITER_CALLED'),
+      orderStatus: isBillRequest ? 'BILL_REQUESTED' : (fallbackToCounter ? 'ATTEND_COUNTER' : 'WAITER_CALLED'),
       eventType,
       createdAt: data.createdDateUtc || data.CreatedDateUtc || new Date().toISOString(),
       timestamp: Date.now(),
       isRead: false,
     };
 
+    const state = get();
     // Replace any previous notification for the exact same service request or exact same orderId or same table bill request
     const filtered = state.notifications.filter((n) => {
       if (reqId && n.id.startsWith(`service_${reqId}_`)) return false;
-      if (notifItem.orderId > 0 && n.orderId === notifItem.orderId && n.eventType === eventType) return false;
+      if (notifItem.orderId > 0 && n.orderId === notifItem.orderId) return false;
       if (isBillRequest && notifItem.tableId && n.tableId === notifItem.tableId && n.eventType === 'REQUEST_BILL') return false;
       return true;
     });
@@ -767,7 +601,15 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
         itemsSummary,
         orderStatus: currentStatus,
         oldStatus: prevStatus,
-        eventType: isNew ? 'NEW_ORDER' : 'STATUS_CHANGED',
+        eventType: statusUpper.includes('BILL')
+          ? 'REQUEST_BILL'
+          : statusUpper === 'SETTLED' || statusUpper === 'PAID'
+          ? 'SETTLED'
+          : statusUpper === 'CANCELLED'
+          ? 'CANCELLED'
+          : isNew && !isKitchenPrepStatus
+          ? 'NEW_ORDER'
+          : 'STATUS_CHANGED',
         orderTypeId: order.orderTypeId,
         orderTypeName: order.orderTypeName,
         pickupToken: pickupToken ? String(pickupToken) : undefined,

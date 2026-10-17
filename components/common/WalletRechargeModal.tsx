@@ -67,11 +67,17 @@ export const WalletRechargeModal: React.FC<WalletRechargeModalProps> = ({
         WebWalletService.getStatement(currentRestId),
       ]);
 
+      let loadedWallet: RestaurantWalletDTO | null = null;
       if (wRes.status === 'fulfilled') {
+        loadedWallet = wRes.value;
         setWallet(wRes.value);
       }
-      if (txRes.status === 'fulfilled') {
-        setTransactions(txRes.value || []);
+      if (txRes.status === 'fulfilled' && txRes.value && txRes.value.length > 0) {
+        setTransactions(txRes.value);
+      } else if (loadedWallet?.recentTransactions && loadedWallet.recentTransactions.length > 0) {
+        setTransactions(loadedWallet.recentTransactions);
+      } else {
+        setTransactions([]);
       }
     } catch (err) {
       console.warn('Failed to load wallet data in modal', err);
@@ -415,7 +421,7 @@ export const WalletRechargeModal: React.FC<WalletRechargeModalProps> = ({
               ) : (
                 <div className="divide-y divide-[#E7E1DA]/60 dark:divide-[#2B3540]/60 max-h-72 overflow-y-auto rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540]">
                   {transactions.map((tx) => {
-                    const isCredit = (tx.direction || tx.transactionType)?.toUpperCase() === 'CREDIT';
+                    const isCredit = tx.direction === 'CREDIT';
                     return (
                       <div key={tx.id} className="p-3.5 flex items-center justify-between text-xs hover:bg-black/5 dark:hover:bg-white/5 transition-colors">
                         <div className="flex items-center gap-3 min-w-0">
@@ -432,7 +438,7 @@ export const WalletRechargeModal: React.FC<WalletRechargeModalProps> = ({
                           </div>
                           <div className="min-w-0">
                             <p className="font-bold text-[#1E2930] dark:text-[#F3F4F6] truncate">
-                              {tx.description || (isCredit ? 'Wallet Top-Up' : 'Commission Deduction')}
+                              {tx.description || (isCredit ? 'Wallet Top-Up' : 'Platform Fee Deduction')}
                             </p>
                             <p className="text-[10px] text-[#667085] mt-0.5">
                               {new Date(tx.createdAt).toLocaleDateString('en-IN', {
@@ -441,21 +447,24 @@ export const WalletRechargeModal: React.FC<WalletRechargeModalProps> = ({
                                 hour: '2-digit',
                                 minute: '2-digit',
                               })}{' '}
-                              • Ref: {tx.paymentReference || 'Direct'}
+                              {tx.orderId ? `• Order #${tx.orderId}` : `• Ref: ${tx.paymentReference || tx.id}`}
                             </p>
                           </div>
                         </div>
 
-                        <div className="text-right shrink-0">
+                        <div className="text-right shrink-0 ml-3">
                           <p
                             className={`font-black ${
                               isCredit ? 'text-emerald-600' : 'text-red-600'
                             }`}
                           >
-                            {isCredit ? '+' : '-'}₹{Number(tx.amount).toLocaleString('en-IN')}
+                            {isCredit ? '+' : '-'}₹{Number(tx.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </p>
                           <p className="text-[10px] text-[#667085]">
-                            Bal: ₹{Number(tx.balanceAfter).toLocaleString('en-IN')}
+                            ₹{Number(tx.balanceBefore || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} →{' '}
+                            <strong className="text-[#1E2930] dark:text-[#F3F4F6]">
+                              ₹{Number(tx.balanceAfter || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </strong>
                           </p>
                         </div>
                       </div>

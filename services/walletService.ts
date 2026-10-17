@@ -1,15 +1,10 @@
 import { apiClient } from '@shared/core/network/apiClient';
+import { WalletRemoteDataSource } from '@shared/data/datasources/WalletRemoteDataSource';
+import { WalletRepositoryImpl } from '@shared/data/repositories/WalletRepositoryImpl';
+import { IWalletRepository } from '@shared/domain/repositories/IWalletRepository';
 
-export interface RestaurantWalletDTO {
-  restaurantId: number;
-  balance: number;
-  lowBalanceThreshold: number;
-  totalRecharged: number;
-  totalCommissionPaid: number;
-  status: 'HEALTHY' | 'LOW_BALANCE' | 'EXHAUSTED' | string;
-  currency: string;
-  lastUpdated: string;
-}
+export const walletRemoteDataSource = new WalletRemoteDataSource();
+export const walletRepository: IWalletRepository = new WalletRepositoryImpl(walletRemoteDataSource);
 
 export interface WalletTransactionDTO {
   id: string;
@@ -19,8 +14,22 @@ export interface WalletTransactionDTO {
   balanceBefore: number;
   balanceAfter: number;
   description: string;
+  orderId?: string;
   paymentReference?: string;
   createdAt: string;
+}
+
+export interface RestaurantWalletDTO {
+  restaurantId: number;
+  balance: number;
+  lowBalanceThreshold: number;
+  totalRecharged: number;
+  totalCommissionPaid: number;
+  totalRefunded?: number;
+  status: 'HEALTHY' | 'LOW_BALANCE' | 'EXHAUSTED' | string;
+  currency: string;
+  lastUpdated: string;
+  recentTransactions?: WalletTransactionDTO[];
 }
 
 export interface WalletStatementResponseDTO {
@@ -29,6 +38,59 @@ export interface WalletStatementResponseDTO {
 }
 
 export class WebWalletService {
+  private static mapTransactionDto(t: any): WalletTransactionDTO {
+    const rawType = String(t.transactionType || t.TransactionType || '').trim();
+    const rawDir = String(t.direction || t.Direction || '').trim().toUpperCase();
+    const balanceBefore = Number(t.balanceBefore ?? t.BalanceBefore ?? 0);
+    const balanceAfter = Number(t.balanceAfter ?? t.BalanceAfter ?? 0);
+    const rawDesc = String(t.description || t.Description || t.reason || t.Reason || 'Wallet Ledger Entry');
+    const desc = rawDesc.replace(/\bCommission\b/gi, 'Platform Fee');
+
+    const upperType = rawType.toUpperCase();
+    const lowerDesc = desc.toLowerCase();
+
+    const isCredit =
+      rawDir === 'CREDIT' ||
+      (rawDir !== 'DEBIT' &&
+        (upperType.includes('CREDIT') ||
+          upperType.includes('RECHARGE') ||
+          upperType.includes('REFUND') ||
+          upperType.includes('BONUS') ||
+          lowerDesc.includes('top-up') ||
+          lowerDesc.includes('recharge') ||
+          lowerDesc.includes('refund') ||
+          lowerDesc.includes('bonus') ||
+          (balanceAfter > balanceBefore && balanceBefore >= 0)));
+
+    const direction: 'CREDIT' | 'DEBIT' =
+      rawDir === 'CREDIT' || rawDir === 'DEBIT' ? rawDir : isCredit ? 'CREDIT' : 'DEBIT';
+
+    const orderIdRaw = t.orderId ?? t.OrderId;
+    const orderId = orderIdRaw !== undefined && orderIdRaw !== null && String(orderIdRaw).trim() !== ''
+      ? String(orderIdRaw).trim()
+      : undefined;
+
+    const paymentRefRaw =
+      t.paymentReference ||
+      t.PaymentReference ||
+      t.paymentGatewayRef ||
+      t.PaymentGatewayRef ||
+      (orderId ? `ORD-${orderId}` : undefined);
+
+    return {
+      id: String(t.id || t.Id || t.transactionId || `WTX_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`),
+      transactionType: rawType || (direction === 'CREDIT' ? 'RECHARGE' : 'PLATFORM_FEE'),
+      direction,
+      amount: Number(t.amount ?? t.Amount ?? 0),
+      balanceBefore,
+      balanceAfter,
+      description: desc,
+      orderId,
+      paymentReference: paymentRefRaw ? String(paymentRefRaw) : undefined,
+      createdAt: t.createdAt || t.CreatedAt || t.transactionDate || t.TransactionDate || new Date().toISOString(),
+    };
+  }
+
   static async getWallet(restaurantId: number): Promise<RestaurantWalletDTO> {
     if (!restaurantId || restaurantId <= 0) {
       return {
@@ -37,9 +99,11 @@ export class WebWalletService {
         lowBalanceThreshold: 200,
         totalRecharged: 0,
         totalCommissionPaid: 0,
+        totalRefunded: 0,
         status: 'EXHAUSTED',
         currency: 'INR',
         lastUpdated: new Date().toISOString(),
+        recentTransactions: [],
       };
     }
 
@@ -47,9 +111,13 @@ export class WebWalletService {
       const response = await apiClient.get(`/Restaurant/${restaurantId}/Wallet`, {
         headers: { 'X-Restaurant-Id': restaurantId.toString() },
       });
-      const data = response.data || {};
+      const data = response.data?.data || response.data || {};
       const balance = Number(data.balance ?? data.Balance ?? 0);
       const threshold = Number(data.lowBalanceThreshold ?? data.LowBalanceThreshold ?? 200);
+      const rawRecent = data.recentTransactions || data.RecentTransactions || [];
+      const recentTransactions = Array.isArray(rawRecent)
+        ? rawRecent.map((t: any) => this.mapTransactionDto(t))
+        : [];
 
       return {
         restaurantId,
@@ -57,9 +125,11 @@ export class WebWalletService {
         lowBalanceThreshold: threshold,
         totalRecharged: Number(data.totalRecharged ?? data.TotalRecharged ?? 0),
         totalCommissionPaid: Number(data.totalCommissionPaid ?? data.TotalCommissionPaid ?? 0),
+        totalRefunded: Number(data.totalRefunded ?? data.TotalRefunded ?? 0),
         status: balance <= 0 ? 'EXHAUSTED' : balance < threshold ? 'LOW_BALANCE' : 'HEALTHY',
-        currency: data.currency || 'INR',
-        lastUpdated: data.lastUpdated || new Date().toISOString(),
+        currency: data.currency || data.Currency || 'INR',
+        lastUpdated: data.lastUpdated || data.LastUpdated || new Date().toISOString(),
+        recentTransactions,
       };
     } catch {
       return {
@@ -68,11 +138,85 @@ export class WebWalletService {
         lowBalanceThreshold: 200,
         totalRecharged: 0,
         totalCommissionPaid: 0,
+        totalRefunded: 0,
         status: 'EXHAUSTED',
         currency: 'INR',
         lastUpdated: new Date().toISOString(),
+        recentTransactions: [],
       };
     }
+  }
+
+  private static parseFilterDateBounds(fromDate?: string, toDate?: string): {
+    fromMs?: number;
+    toMs?: number;
+    fromIso?: string;
+    toIso?: string;
+  } {
+    let fromMs: number | undefined;
+    let toMs: number | undefined;
+
+    if (fromDate && fromDate.trim()) {
+      const s = fromDate.trim();
+      const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+      const d = ymd
+        ? new Date(Number(ymd[1]), Number(ymd[2]) - 1, Number(ymd[3]), 0, 0, 0, 0)
+        : new Date(s);
+      if (!isNaN(d.getTime())) {
+        fromMs = d.getTime();
+      }
+    }
+
+    if (toDate && toDate.trim()) {
+      const s = toDate.trim();
+      const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+      const d = ymd
+        ? new Date(Number(ymd[1]), Number(ymd[2]) - 1, Number(ymd[3]), 23, 59, 59, 999)
+        : new Date(s);
+      if (!isNaN(d.getTime())) {
+        toMs = d.getTime();
+      }
+    }
+
+    if (fromMs !== undefined && toMs !== undefined && fromMs > toMs) {
+      const tmp = fromMs;
+      fromMs = new Date(toMs).setHours(0, 0, 0, 0);
+      toMs = new Date(tmp).setHours(23, 59, 59, 999);
+    }
+
+    return {
+      fromMs,
+      toMs,
+      fromIso: fromMs !== undefined ? new Date(fromMs).toISOString() : undefined,
+      toIso: toMs !== undefined ? new Date(toMs).toISOString() : undefined,
+    };
+  }
+
+  private static filterTransactionsList(
+    items: WalletTransactionDTO[],
+    fromMs?: number,
+    toMs?: number,
+    direction?: string,
+    transactionType?: string
+  ): WalletTransactionDTO[] {
+    return items.filter((tx) => {
+      if (fromMs !== undefined || toMs !== undefined) {
+        const txTime = new Date(tx.createdAt).getTime();
+        if (!isNaN(txTime)) {
+          if (fromMs !== undefined && txTime < fromMs) return false;
+          if (toMs !== undefined && txTime > toMs) return false;
+        }
+      }
+      if (direction && direction.trim()) {
+        if (tx.direction.toUpperCase() !== direction.trim().toUpperCase()) return false;
+      }
+      if (transactionType && transactionType.trim()) {
+        const want = transactionType.trim().toUpperCase();
+        const actual = (tx.transactionType || '').toUpperCase();
+        if (!actual.includes(want)) return false;
+      }
+      return true;
+    });
   }
 
   static async getStatement(
@@ -80,34 +224,67 @@ export class WebWalletService {
     fromDate?: string,
     toDate?: string,
     pageNumber: number = 1,
-    pageSize: number = 30
+    pageSize: number = 100,
+    direction?: string,
+    transactionType?: string
   ): Promise<WalletTransactionDTO[]> {
     if (!restaurantId || restaurantId <= 0) return [];
+
+    const { fromMs, toMs, fromIso, toIso } = this.parseFilterDateBounds(fromDate, toDate);
+
     try {
       const params: Record<string, any> = { pageNumber, pageSize };
-      if (fromDate) params.fromDate = fromDate;
-      if (toDate) params.toDate = toDate;
+      if (fromIso) params.fromDate = fromIso;
+      if (toIso) params.toDate = toIso;
+      if (direction) params.direction = direction;
+      if (transactionType) params.transactionType = transactionType;
 
       const response = await apiClient.get(`/Restaurant/${restaurantId}/Wallet/Statement`, {
         params,
         headers: { 'X-Restaurant-Id': restaurantId.toString() },
       });
 
-      const rawItems = response.data?.items || response.data?.Items || (Array.isArray(response.data) ? response.data : []);
-      return rawItems.map((t: any) => ({
-        id: String(t.id || t.Id || t.transactionId || `WTX_${Math.random()}`),
-        transactionType: t.transactionType || t.TransactionType || (t.direction === 'CREDIT' ? 'RECHARGE' : 'ORDER_COMMISSION'),
-        direction: (t.direction || t.Direction || 'DEBIT').toUpperCase(),
-        amount: Number(t.amount ?? t.Amount ?? 0),
-        balanceBefore: Number(t.balanceBefore ?? t.BalanceBefore ?? 0),
-        balanceAfter: Number(t.balanceAfter ?? t.BalanceAfter ?? 0),
-        description: t.description || t.Description || 'Wallet Ledger',
-        paymentReference: t.paymentReference || t.PaymentReference || t.orderId || t.OrderId,
-        createdAt: t.createdAt || t.CreatedAt || t.transactionDate || t.TransactionDate || new Date().toISOString(),
-      }));
+      const payload = response.data?.data || response.data;
+      const rawItems =
+        payload?.transactions ||
+        payload?.Transactions ||
+        payload?.items ||
+        payload?.Items ||
+        (Array.isArray(payload) ? payload : null);
+
+      if (Array.isArray(rawItems) && rawItems.length > 0) {
+        const mapped = rawItems.map((t: any) => this.mapTransactionDto(t));
+        return this.filterTransactionsList(mapped, fromMs, toMs, direction, transactionType);
+      }
     } catch {
-      return [];
+      // Fall through to getWallet recentTransactions fallback
     }
+
+    // Fallback to recentTransactions from main Wallet endpoint, filtered by the requested criteria
+    try {
+      const wallet = await this.getWallet(restaurantId);
+      if (wallet.recentTransactions && wallet.recentTransactions.length > 0) {
+        return this.filterTransactionsList(
+          wallet.recentTransactions,
+          fromMs,
+          toMs,
+          direction,
+          transactionType
+        );
+      }
+    } catch {}
+
+    return [];
+  }
+
+  static async exportStatementCsv(
+    restaurantId: number,
+    fromDate?: string,
+    toDate?: string
+  ): Promise<string> {
+    if (!restaurantId || restaurantId <= 0) return '';
+    const { fromIso, toIso } = this.parseFilterDateBounds(fromDate, toDate);
+    return await walletRepository.exportStatement(restaurantId, fromIso || fromDate, toIso || toDate);
   }
 
   static async initiateRecharge(

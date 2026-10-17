@@ -3,6 +3,7 @@ import {
   SubscriptionPlan,
   UserSubscriptionStatus,
   SubscriptionLifecycleState,
+  RestaurantSubscriptionHistory,
 } from '@/types/subscription';
 import { SubscriptionService } from '@/services/subscriptionService';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
@@ -11,8 +12,10 @@ import { WalletEvents } from '@shared/core/utils/walletEvents';
 interface SubscriptionStoreState {
   subscription: UserSubscriptionStatus | null;
   plans: SubscriptionPlan[];
+  history: RestaurantSubscriptionHistory[];
   isLoading: boolean;
   isPlansLoading: boolean;
+  isHistoryLoading: boolean;
   error: string | null;
   hasLoaded: boolean;
 
@@ -27,12 +30,13 @@ interface SubscriptionStoreState {
   // UI Flow State
   isRenewalModalOpen: boolean;
   selectedPlan: SubscriptionPlan | null;
-  activeModalTab: 'renew' | 'explore';
+  activeModalTab: 'renew' | 'explore' | 'history';
 
   // Actions
   fetchSubscriptionStatus: (restaurantId?: number) => Promise<UserSubscriptionStatus | null>;
   fetchPlans: () => Promise<SubscriptionPlan[]>;
-  openRenewalModal: (plan?: SubscriptionPlan, initialTab?: 'renew' | 'explore') => void;
+  fetchSubscriptionHistory: (restaurantId?: number) => Promise<RestaurantSubscriptionHistory[]>;
+  openRenewalModal: (plan?: SubscriptionPlan, initialTab?: 'renew' | 'explore' | 'history') => void;
   closeRenewalModal: () => void;
   setExpired: (expired: boolean) => void;
   assignPlan: (
@@ -73,8 +77,10 @@ interface SubscriptionStoreState {
 export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) => ({
   subscription: null,
   plans: [],
+  history: [],
   isLoading: false,
   isPlansLoading: false,
+  isHistoryLoading: false,
   error: null,
   hasLoaded: false,
 
@@ -195,7 +201,28 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
     }
   },
 
-  openRenewalModal: (plan?: SubscriptionPlan, initialTab?: 'renew' | 'explore') => {
+  fetchSubscriptionHistory: async (restaurantId?: number) => {
+    const authRestId = useAuthStore.getState().activeRestaurant?.restaurantId;
+    const fallbackRestId = useAuthStore.getState().restaurants?.[0]?.restaurantId;
+    const targetRestId = restaurantId || authRestId || fallbackRestId || 0;
+    if (!targetRestId || targetRestId <= 0) {
+      set({ history: [], isHistoryLoading: false });
+      return [];
+    }
+
+    try {
+      set({ isHistoryLoading: true });
+      const historyData = await SubscriptionService.getSubscriptionHistory(targetRestId);
+      const validHistory = Array.isArray(historyData) ? historyData : [];
+      set({ history: validHistory, isHistoryLoading: false });
+      return validHistory;
+    } catch {
+      set({ isHistoryLoading: false });
+      return [];
+    }
+  },
+
+  openRenewalModal: (plan?: SubscriptionPlan, initialTab?: 'renew' | 'explore' | 'history') => {
     const hasSub = Boolean(get().subscription);
     set({
       isRenewalModalOpen: true,
@@ -231,6 +258,7 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
           console.warn('Error emitting WalletEvents on assignPlan:', e);
         }
         await get().fetchSubscriptionStatus(restaurantId);
+        await get().fetchSubscriptionHistory(restaurantId);
         set({ isRenewalModalOpen: false });
       } else {
         set({ error: res.message || 'Failed to activate plan' });
@@ -307,8 +335,10 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
     set({
       subscription: null,
       plans: [],
+      history: [],
       isLoading: false,
       isPlansLoading: false,
+      isHistoryLoading: false,
       error: null,
       hasLoaded: false,
       lifecycleState: 'NONE',

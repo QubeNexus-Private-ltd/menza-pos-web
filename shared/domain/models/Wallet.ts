@@ -21,6 +21,10 @@ export interface WalletTransaction {
   description: string;
   orderId?: string;
   paymentReference?: string;
+  invoiceNumber?: string;
+  baseAmount?: number;
+  taxAmount?: number;
+  taxPercentage?: number;
   createdAt: string;
 }
 

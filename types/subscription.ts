@@ -1,3 +1,5 @@
+import { PlatformGstInfo } from './wallet';
+
 export interface SubscriptionPlanEntitlementItem {
   id?: number;
   subscriptionConfigurationId?: number;
@@ -33,6 +35,7 @@ export interface SubscriptionPlan {
   allowDelivery?: boolean;
   allowKds?: boolean;
   allowOnlinePayment?: boolean;
+  allowSmsNotifications?: boolean;
   isActive: boolean;
   features?: string[];
   maxOutlets?: number;
@@ -65,14 +68,25 @@ export interface UserSubscriptionStatus {
   lifecycleState?: SubscriptionLifecycleState;
   status: string;
   amountPaid?: number;
+  baseAmount?: number;
+  taxAmount?: number;
+  taxPercentage?: number;
+  invoiceNumber?: string;
   paymentReferenceNo?: string;
   isAutoRenew?: boolean;
+  effectiveCommissionPercentage?: number;
+  effectiveFlatCommissionPerOrder?: number;
+  effectiveMaxCommissionCap?: number;
+  effectiveMinCommissionFloor?: number;
   entitlements?: SubscriptionPlanEntitlementItem[];
   hasQueuedRenewal?: boolean;
   effectiveCoverageEndDate?: string;
   totalDaysRemaining?: number;
   currentCycleDaysRemaining?: number;
   queuedRenewalDays?: number;
+  restaurantName?: string;
+  restaurantGstNumber?: string;
+  platformGst?: PlatformGstInfo;
 }
 
 export interface RestaurantSubscriptionHistory {
@@ -89,6 +103,10 @@ export interface RestaurantSubscriptionHistory {
   endDate: string;
   previousEndDate?: string;
   amountPaid: number;
+  baseAmount?: number;
+  taxAmount?: number;
+  taxPercentage?: number;
+  invoiceNumber?: string;
   paymentReferenceNo?: string;
   effectiveCommissionPercentage?: number;
   effectiveFlatCommissionPerOrder?: number;
@@ -99,5 +117,8 @@ export interface RestaurantSubscriptionHistory {
   actionSource?: string;
   actorUserId?: number;
   remarks?: string;
+  restaurantName?: string;
+  restaurantGstNumber?: string;
+  platformGst?: PlatformGstInfo;
   createdDateUtc: string;
 }

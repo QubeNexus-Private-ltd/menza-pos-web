@@ -48,6 +48,60 @@ interface DynamicEntitlementState {
   featureFlatFeePerOrder: string;
 }
 
+const CANONICAL_TOGGLE_ORDER: Record<string, number> = {
+  IsTableOrderingEnabled: 1,
+  IsCounterOrderingEnabled: 2,
+  IsSelfPickupEnabled: 3,
+  IsDeliveryEnabled: 4,
+  IsKdsEnabled: 5,
+  IsSmsNotificationsEnabled: 6,
+  AllowOnlinePayment: 7,
+  AllowPayAtTable: 8,
+  AllowCashOnDelivery: 9,
+  AutoAcceptOrders: 10,
+  IsPaymentRequiredForTableOrder: 11,
+  IsPaymentRequiredForPickupOrder: 12,
+  IsPaymentRequiredForDeliveryOrder: 13,
+};
+
+const FRIENDLY_FEATURE_NAMES: Record<string, { name: string; category: string; desc: string }> = {
+  IsTableOrderingEnabled: {
+    name: 'Table QR Ordering',
+    category: 'Ordering Channels',
+    desc: 'Dine-in customer ordering via interactive QR table scans',
+  },
+  IsCounterOrderingEnabled: {
+    name: 'Express Counter POS',
+    category: 'Ordering Channels',
+    desc: 'Walk-in cash counter & express terminal billing',
+  },
+  IsSelfPickupEnabled: {
+    name: 'Self-Pickup / Takeaway',
+    category: 'Ordering Channels',
+    desc: 'Customer takeaway & parcel order management',
+  },
+  IsDeliveryEnabled: {
+    name: 'Direct Home Delivery',
+    category: 'Ordering Channels',
+    desc: 'Direct delivery dispatch & rider address tracking',
+  },
+  IsKdsEnabled: {
+    name: 'Kitchen Display System (KDS)',
+    category: 'Operations',
+    desc: 'Live paperless kitchen tickets and chef order screens',
+  },
+  IsSmsNotificationsEnabled: {
+    name: 'SMS & WhatsApp Notifications',
+    category: 'Notifications',
+    desc: 'Automated order confirmation, live tracking link & settled bills via WhatsApp & SMS',
+  },
+  AllowOnlinePayment: {
+    name: 'Online Payment Gateway',
+    category: 'Payments',
+    desc: 'Accept UPI, credit/debit cards, and netbanking payments',
+  },
+};
+
 const DEFAULT_ENTITLEMENTS: DynamicEntitlementState[] = [
   {
     orderConfigId: 1,
@@ -95,6 +149,16 @@ const DEFAULT_ENTITLEMENTS: DynamicEntitlementState[] = [
     configName: 'Kitchen Display System (KDS)',
     category: 'Operations',
     description: 'Live paperless kitchen tickets and chef order screens',
+    isAllowed: true,
+    featureCommissionPercentage: '0',
+    featureFlatFeePerOrder: '0',
+  },
+  {
+    orderConfigId: 13,
+    configKey: 'IsSmsNotificationsEnabled',
+    configName: 'SMS & WhatsApp Notifications',
+    category: 'Notifications',
+    description: 'Automated order confirmation, live tracking link & settled bills via WhatsApp & SMS',
     isAllowed: true,
     featureCommissionPercentage: '0',
     featureFlatFeePerOrder: '0',
@@ -191,17 +255,26 @@ export default function SuperAdminPlansPage() {
     try {
       const masterList = await masterDataSource.getMasterOrderConfigs();
       if (Array.isArray(masterList) && masterList.length > 0) {
-        const features: DynamicEntitlementState[] = [];
+        const featuresMap = new Map<string, DynamicEntitlementState>();
+
+        // Pre-populate with defaults so nothing is ever missing
+        DEFAULT_ENTITLEMENTS.forEach((def) => {
+          featuresMap.set(def.configKey.toLowerCase(), { ...def });
+        });
+
         masterList.forEach((master: any) => {
           const detailsList = master.details || master.Details || [];
           if (Array.isArray(detailsList) && detailsList.length > 0) {
             detailsList.forEach((detail: any) => {
-              features.push({
+              const key = detail.configKey || detail.ConfigKey || '';
+              if (!key) return;
+              const meta = FRIENDLY_FEATURE_NAMES[key];
+              featuresMap.set(key.toLowerCase(), {
                 orderConfigId: detail.id || detail.Id || 0,
-                configKey: detail.configKey || detail.ConfigKey || '',
-                configName: detail.description || detail.Description || detail.configKey || detail.ConfigKey || 'Feature',
-                category: detail.category || detail.Category || master.configName || master.ConfigName || 'Ordering Channels',
-                description: detail.description || detail.Description || '',
+                configKey: key,
+                configName: meta?.name || detail.description || detail.Description || key || 'Feature',
+                category: meta?.category || detail.category || detail.Category || master.configName || 'Ordering Channels',
+                description: meta?.desc || detail.description || detail.Description || '',
                 isAllowed: true,
                 featureCommissionPercentage: '0',
                 featureFlatFeePerOrder: '0',
@@ -209,8 +282,15 @@ export default function SuperAdminPlansPage() {
             });
           }
         });
-        if (features.length > 0) {
-          setDynamicEntitlements(features);
+
+        const sortedFeatures = Array.from(featuresMap.values()).sort((a, b) => {
+          const orderA = CANONICAL_TOGGLE_ORDER[a.configKey] ?? 99;
+          const orderB = CANONICAL_TOGGLE_ORDER[b.configKey] ?? 99;
+          return orderA - orderB;
+        });
+
+        if (sortedFeatures.length > 0) {
+          setDynamicEntitlements(sortedFeatures);
         }
       }
     } catch {
@@ -396,6 +476,7 @@ export default function SuperAdminPlansPage() {
         allowDelivery: dynamicEntitlements.find((d) => d.configKey.includes('Delivery'))?.isAllowed ?? true,
         allowKds: dynamicEntitlements.find((d) => d.configKey.includes('Kds'))?.isAllowed ?? true,
         allowOnlinePayment: dynamicEntitlements.find((d) => d.configKey.includes('Payment'))?.isAllowed ?? true,
+        allowSmsNotifications: dynamicEntitlements.find((d) => d.configKey.toLowerCase().includes('sms'))?.isAllowed ?? true,
         isActive: true,
         entitlements: dynamicEntitlements.map((item) => ({
           orderConfigId: item.orderConfigId,
@@ -584,6 +665,11 @@ export default function SuperAdminPlansPage() {
                               {p.allowOnlinePayment && (
                                 <span className="rounded px-1.5 py-0.5 text-[9px] font-semibold bg-amber-500/10 text-amber-600">
                                   PG
+                                </span>
+                              )}
+                              {p.allowSmsNotifications && (
+                                <span className="rounded px-1.5 py-0.5 text-[9px] font-semibold bg-sky-500/10 text-sky-600">
+                                  SMS / WhatsApp
                                 </span>
                               )}
                             </div>

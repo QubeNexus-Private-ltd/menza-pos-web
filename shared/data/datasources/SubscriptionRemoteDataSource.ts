@@ -38,6 +38,7 @@ export class SubscriptionRemoteDataSource {
           allowDelivery: checkEntitlement('IsDeliveryEnabled'),
           allowKds: checkEntitlement('IsKdsEnabled'),
           allowOnlinePayment: checkEntitlement('AllowOnlinePayment'),
+          allowSmsNotifications: checkEntitlement('IsSmsNotificationsEnabled'),
           isActive: Boolean(item.isActive ?? item.IsActive ?? true),
           entitlements: entitlements.map((e: any) => ({
             id: e.id || e.Id,
@@ -182,6 +183,8 @@ export class SubscriptionRemoteDataSource {
         AllowKds: plan.allowKds ?? true,
         allowOnlinePayment: plan.allowOnlinePayment ?? true,
         AllowOnlinePayment: plan.allowOnlinePayment ?? true,
+        allowSmsNotifications: plan.allowSmsNotifications ?? true,
+        AllowSmsNotifications: plan.allowSmsNotifications ?? true,
         isActive: plan.isActive ?? true,
         IsActive: plan.isActive ?? true,
       };

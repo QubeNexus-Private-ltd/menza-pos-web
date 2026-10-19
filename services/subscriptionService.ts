@@ -51,6 +51,7 @@ export class SubscriptionService {
           allowDelivery: checkEntitlement('IsDeliveryEnabled'),
           allowKds: checkEntitlement('IsKdsEnabled'),
           allowOnlinePayment: checkEntitlement('AllowOnlinePayment'),
+          allowSmsNotifications: checkEntitlement('IsSmsNotificationsEnabled'),
           isActive: Boolean(item.isActive ?? item.IsActive ?? true),
           entitlements: entitlements.map((e: any) => ({
             id: e.id || e.Id,
@@ -143,6 +144,37 @@ export class SubscriptionService {
         const currentCycleDaysRemaining = Number(activeItem.currentCycleDaysRemaining ?? activeItem.CurrentCycleDaysRemaining ?? daysRemaining);
         const queuedRenewalDays = Number(activeItem.queuedRenewalDays ?? activeItem.QueuedRenewalDays ?? 0);
 
+        const amountPaid = Number(activeItem.amountPaid ?? activeItem.AmountPaid ?? 0);
+        let baseAmount = activeItem.baseAmount !== undefined && activeItem.baseAmount !== null
+          ? Number(activeItem.baseAmount)
+          : activeItem.BaseAmount !== undefined && activeItem.BaseAmount !== null
+          ? Number(activeItem.BaseAmount)
+          : undefined;
+        let taxAmount = activeItem.taxAmount !== undefined && activeItem.taxAmount !== null
+          ? Number(activeItem.taxAmount)
+          : activeItem.TaxAmount !== undefined && activeItem.TaxAmount !== null
+          ? Number(activeItem.TaxAmount)
+          : undefined;
+        let taxPercentage = activeItem.taxPercentage !== undefined && activeItem.taxPercentage !== null
+          ? Number(activeItem.taxPercentage)
+          : activeItem.TaxPercentage !== undefined && activeItem.TaxPercentage !== null
+          ? Number(activeItem.TaxPercentage)
+          : undefined;
+
+        if (amountPaid > 0) {
+          if (baseAmount === undefined) {
+            baseAmount = Math.round((amountPaid / 1.18) * 100) / 100;
+          }
+          if (taxAmount === undefined) {
+            taxAmount = Math.round((amountPaid - baseAmount) * 100) / 100;
+          }
+          if (taxPercentage === undefined) {
+            taxPercentage = 18;
+          }
+        }
+
+        const invoiceNumber = activeItem.invoiceNumber || activeItem.InvoiceNumber || undefined;
+
         return {
           subscriptionId: activeItem.id || activeItem.Id || activeItem.subscriptionConfigurationId || 1,
           subscriptionConfigurationId: activeItem.subscriptionConfigurationId || activeItem.SubscriptionConfigurationId || undefined,
@@ -155,14 +187,56 @@ export class SubscriptionService {
           graceDaysRemaining,
           lifecycleState,
           status: isExpired ? 'Expired' : isInGracePeriod ? 'Grace Period' : rawStatus === 'PENDING' ? 'Pending' : 'Active',
-          amountPaid: Number(activeItem.amountPaid ?? activeItem.AmountPaid ?? 0),
+          amountPaid,
+          baseAmount,
+          taxAmount,
+          taxPercentage,
+          invoiceNumber,
           paymentReferenceNo: activeItem.paymentReferenceNo || activeItem.PaymentReferenceNo,
-          entitlements: activeItem.entitlements || activeItem.Entitlements || [],
+          effectiveCommissionPercentage:
+            activeItem.effectiveCommissionPercentage !== undefined
+              ? Number(activeItem.effectiveCommissionPercentage)
+              : activeItem.EffectiveCommissionPercentage !== undefined
+              ? Number(activeItem.EffectiveCommissionPercentage)
+              : undefined,
+          effectiveFlatCommissionPerOrder:
+            activeItem.effectiveFlatCommissionPerOrder !== undefined
+              ? Number(activeItem.effectiveFlatCommissionPerOrder)
+              : activeItem.EffectiveFlatCommissionPerOrder !== undefined
+              ? Number(activeItem.EffectiveFlatCommissionPerOrder)
+              : undefined,
+          effectiveMaxCommissionCap:
+            activeItem.effectiveMaxCommissionCap !== undefined
+              ? Number(activeItem.effectiveMaxCommissionCap)
+              : activeItem.EffectiveMaxCommissionCap !== undefined
+              ? Number(activeItem.EffectiveMaxCommissionCap)
+              : undefined,
+          effectiveMinCommissionFloor:
+            activeItem.effectiveMinCommissionFloor !== undefined
+              ? Number(activeItem.effectiveMinCommissionFloor)
+              : activeItem.EffectiveMinCommissionFloor !== undefined
+              ? Number(activeItem.EffectiveMinCommissionFloor)
+              : undefined,
+          entitlements: (Array.isArray(activeItem.entitlements || activeItem.Entitlements)
+            ? (activeItem.entitlements || activeItem.Entitlements)
+            : []
+          ).map((e: any) => ({
+            id: e.id ?? e.Id,
+            subscriptionConfigurationId: e.subscriptionConfigurationId ?? e.SubscriptionConfigurationId,
+            orderConfigId: Number(e.orderConfigId ?? e.OrderConfigId ?? 0),
+            configKey: String(e.configKey || e.ConfigKey || ''),
+            isAllowed: Boolean(e.isAllowed ?? e.IsAllowed ?? true),
+            featureCommissionPercentage: Number(e.featureCommissionPercentage ?? e.FeatureCommissionPercentage ?? 0),
+            featureFlatFeePerOrder: Number(e.featureFlatFeePerOrder ?? e.FeatureFlatFeePerOrder ?? 0),
+          })),
           hasQueuedRenewal,
           effectiveCoverageEndDate,
           totalDaysRemaining: hasQueuedRenewal ? totalDaysRemaining : daysRemaining,
           currentCycleDaysRemaining: hasQueuedRenewal ? currentCycleDaysRemaining : daysRemaining,
           queuedRenewalDays,
+          restaurantName: activeItem.restaurantName || activeItem.RestaurantName || undefined,
+          restaurantGstNumber: activeItem.restaurantGstNumber || activeItem.RestaurantGstNumber || undefined,
+          platformGst: activeItem.platformGst || activeItem.PlatformGst || undefined,
         };
       }
 
@@ -255,6 +329,7 @@ export class SubscriptionService {
         allowDelivery: plan.allowDelivery ?? true,
         allowKds: plan.allowKds ?? true,
         allowOnlinePayment: plan.allowOnlinePayment ?? true,
+        allowSmsNotifications: plan.allowSmsNotifications ?? true,
         isActive: plan.isActive ?? true,
       };
       const response = await apiClient.put(`/Subscription/Configuration/${id}`, payload);
@@ -317,7 +392,71 @@ export class SubscriptionService {
     try {
       const response = await apiClient.get(`/Subscription/History/Restaurant/${restaurantId}`);
       const data = response.data;
-      return Array.isArray(data) ? data : (data?.items || data?.data || []);
+      const list = Array.isArray(data) ? data : (data?.items || data?.data || []);
+      return list.map((item: any) => {
+        const amountPaid = Number(item.amountPaid ?? item.AmountPaid ?? 0);
+        let baseAmount = item.baseAmount !== undefined && item.baseAmount !== null
+          ? Number(item.baseAmount)
+          : item.BaseAmount !== undefined && item.BaseAmount !== null
+          ? Number(item.BaseAmount)
+          : undefined;
+        let taxAmount = item.taxAmount !== undefined && item.taxAmount !== null
+          ? Number(item.taxAmount)
+          : item.TaxAmount !== undefined && item.TaxAmount !== null
+          ? Number(item.TaxAmount)
+          : undefined;
+        let taxPercentage = item.taxPercentage !== undefined && item.taxPercentage !== null
+          ? Number(item.taxPercentage)
+          : item.TaxPercentage !== undefined && item.TaxPercentage !== null
+          ? Number(item.TaxPercentage)
+          : undefined;
+
+        if (amountPaid > 0) {
+          if (baseAmount === undefined) {
+            baseAmount = Math.round((amountPaid / 1.18) * 100) / 100;
+          }
+          if (taxAmount === undefined) {
+            taxAmount = Math.round((amountPaid - baseAmount) * 100) / 100;
+          }
+          if (taxPercentage === undefined) {
+            taxPercentage = 18;
+          }
+        }
+
+        return {
+          id: Number(item.id || item.Id || 0),
+          restaurantSubscriptionRelationshipId: Number(item.restaurantSubscriptionRelationshipId || item.RestaurantSubscriptionRelationshipId || 0),
+          restaurantId: Number(item.restaurantId || item.RestaurantId || restaurantId),
+          subscriptionConfigurationId: Number(item.subscriptionConfigurationId || item.SubscriptionConfigurationId || 0),
+          subscriptionCode: item.subscriptionCode || item.SubscriptionCode,
+          subscriptionName: item.subscriptionName || item.SubscriptionName,
+          eventType: item.eventType || item.EventType || 'ACTIVATED',
+          previousStatus: item.previousStatus || item.PreviousStatus,
+          newStatus: item.newStatus || item.NewStatus || 'ACTIVE',
+          startDate: item.startDate || item.StartDate || new Date().toISOString(),
+          endDate: item.endDate || item.EndDate || new Date().toISOString(),
+          previousEndDate: item.previousEndDate || item.PreviousEndDate,
+          amountPaid,
+          baseAmount,
+          taxAmount,
+          taxPercentage,
+          invoiceNumber: item.invoiceNumber || item.InvoiceNumber || undefined,
+          paymentReferenceNo: item.paymentReferenceNo || item.PaymentReferenceNo,
+          effectiveCommissionPercentage: Number(item.effectiveCommissionPercentage ?? item.EffectiveCommissionPercentage ?? 0),
+          effectiveFlatCommissionPerOrder: Number(item.effectiveFlatCommissionPerOrder ?? item.EffectiveFlatCommissionPerOrder ?? 0),
+          effectiveMaxCommissionCap: Number(item.effectiveMaxCommissionCap ?? item.EffectiveMaxCommissionCap ?? 0),
+          supersededBySubscriptionId: item.supersededBySubscriptionId || item.SupersededBySubscriptionId,
+          proratedRefundAmount: item.proratedRefundAmount !== undefined ? Number(item.proratedRefundAmount) : undefined,
+          walletTransactionRef: item.walletTransactionRef || item.WalletTransactionRef,
+          actionSource: item.actionSource || item.ActionSource || '',
+          actorUserId: item.actorUserId || item.ActorUserId,
+          remarks: item.remarks || item.Remarks,
+          restaurantName: item.restaurantName || item.RestaurantName || undefined,
+          restaurantGstNumber: item.restaurantGstNumber || item.RestaurantGstNumber || undefined,
+          platformGst: item.platformGst || item.PlatformGst || undefined,
+          createdDateUtc: item.createdDateUtc || item.CreatedDateUtc || new Date().toISOString(),
+        };
+      });
     } catch {
       return [];
     }

@@ -82,6 +82,12 @@ export function StorefrontQrModal({
           </button>
         </div>
 
+        {/* Permanent Expiry Notice */}
+        <div className="rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 px-3 py-2 text-xs text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5 font-medium">
+          <Sparkles className="h-4 w-4 text-emerald-600 shrink-0" />
+          <span><strong>Permanent Link (Never Expires):</strong> Ideal for social media bios, flyers, WhatsApp, and takeaway packaging.</span>
+        </div>
+
         {/* Printable Standee Card */}
         <div
           id="printable-store-qr"

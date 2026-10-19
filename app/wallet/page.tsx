@@ -26,6 +26,7 @@ import { WebWalletService, RestaurantWalletDTO, WalletTransactionDTO } from '@/s
 import { PaymentGatewayService, isRazorpayActive } from '@/payments/paymentGatewayService.web';
 import { PdfLedgerGenerator } from '@shared/core/utils/pdfLedgerGenerator';
 import { WalletEvents } from '@shared/core/utils/walletEvents';
+import { TaxInvoiceModal, TaxInvoiceItem } from '@/components/invoice/TaxInvoiceModal';
 
 type LedgerFilterTab = 'ALL' | 'CREDIT' | 'DEBIT' | 'REFUND';
 type LedgerCategoryFilter = 'ALL' | 'PLATFORM_FEE' | 'RECHARGE' | 'REFUND' | 'BONUS' | 'ADJUSTMENT';
@@ -117,6 +118,64 @@ export default function WalletPage() {
   const [rechargeAmount, setRechargeAmount] = useState<number>(1000);
   const [isRecharging, setIsRecharging] = useState(false);
   const [paymentSuccess, setPaymentSuccess] = useState(false);
+
+  // Tax Invoice Modal
+  const [selectedInvoice, setSelectedInvoice] = useState<TaxInvoiceItem | null>(null);
+  const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
+
+  const handleOpenInvoice = (tx: WalletTransactionDTO) => {
+    const rawDigits = tx.id.replace(/[^0-9]/g, '');
+    const seqStr = rawDigits ? rawDigits.slice(-5).padStart(5, '0') : '00001';
+    const invNumber = tx.invoiceNumber || `MZ/26-27/W${seqStr}`;
+
+    const recipientGst =
+      wallet?.restaurantGstNumber ||
+      (activeRestaurant as any)?.gstNumber ||
+      (activeRestaurant as any)?.gstin ||
+      undefined;
+
+    const pGst = wallet?.platformGst;
+
+    const invoiceItem: TaxInvoiceItem = {
+      type: 'WALLET_RECHARGE',
+      invoiceNumber: invNumber,
+      invoiceDate: tx.createdAt,
+      paymentReference: tx.paymentReference,
+      orderId: tx.orderId,
+
+      // Supplier (Menza Platform)
+      supplierLegalName: pGst?.platformLegalName,
+      supplierTradeName: pGst?.platformTradeName,
+      supplierGstin: pGst?.platformGstin,
+      supplierPan: pGst?.platformPan,
+      supplierStateCode: pGst?.platformStateCode,
+      supplierStateName: pGst?.platformStateName,
+      supplierAddress: pGst?.platformAddress,
+      supplierEmail: pGst?.supportEmail,
+      supplierWebsite: pGst?.websiteUrl,
+
+      // Restaurant (Recipient)
+      restaurantName: wallet?.restaurantName || activeRestaurant?.restaurantName || 'Restaurant Partner',
+      restaurantId: currentRestId,
+      outletAddress: (activeRestaurant as any)?.address || (activeRestaurant as any)?.outletAddress || (activeRestaurant as any)?.restaurantAddress,
+      ownerName: (activeRestaurant as any)?.ownerName || user?.name,
+      contactPhone: user?.mobile || (activeRestaurant as any)?.ownerMobile || (activeRestaurant as any)?.phone,
+      customerEmail: (user as any)?.email,
+      customerGstin: recipientGst,
+
+      itemTitle: 'Prepaid Platform Fee & SMS Top-Up Wallet Recharge',
+      itemDescription: 'IT Business Support Services & prepaid credit top-up for order platform fees and transactional customer SMS',
+      sacCode: pGst?.walletSacCode || '998599',
+      totalAmount: tx.amount,
+      baseAmount: tx.baseAmount,
+      taxAmount: tx.taxAmount,
+      taxPercentage: tx.taxPercentage || pGst?.defaultGstPercentage || 18,
+      cgstPercentage: pGst?.cgstPercentage || (tx.taxPercentage ? tx.taxPercentage / 2 : 9),
+      sgstPercentage: pGst?.sgstPercentage || (tx.taxPercentage ? tx.taxPercentage / 2 : 9),
+    };
+    setSelectedInvoice(invoiceItem);
+    setInvoiceModalOpen(true);
+  };
 
   const loadData = useCallback(
     async (background: boolean = false) => {
@@ -536,11 +595,7 @@ export default function WalletPage() {
       if (verifyRes.success) {
         setPaymentSuccess(true);
         WalletEvents.emit();
-        setTimeout(() => {
-          setRechargeModalOpen(false);
-          setPaymentSuccess(false);
-          loadData(true);
-        }, 1500);
+        loadData(true);
       } else {
         alert(verifyRes.message || 'Recharge verification pending.');
       }
@@ -552,6 +607,20 @@ export default function WalletPage() {
   };
 
   const isHealthy = (wallet?.balance || 0) >= (wallet?.lowBalanceThreshold || 200);
+  const recipientGst =
+    wallet?.restaurantGstNumber ||
+    (activeRestaurant as any)?.gstNumber ||
+    (activeRestaurant as any)?.gstin ||
+    undefined;
+
+  const platformGstInfo = wallet?.platformGst;
+  const gstRate = platformGstInfo?.defaultGstPercentage ?? 18;
+  const cgstRate = platformGstInfo?.cgstPercentage ?? gstRate / 2;
+  const sgstRate = platformGstInfo?.sgstPercentage ?? gstRate / 2;
+  const rechargeBaseAmount = Math.round((rechargeAmount / (1 + gstRate / 100)) * 100) / 100;
+  const rechargeTaxAmount = Math.round((rechargeAmount - rechargeBaseAmount) * 100) / 100;
+  const rechargeCgstAmount = Math.round((rechargeBaseAmount * (cgstRate / 100)) * 100) / 100;
+  const rechargeSgstAmount = Math.round((rechargeTaxAmount - rechargeCgstAmount) * 100) / 100;
 
   return (
     <AuthGuard>
@@ -608,6 +677,24 @@ export default function WalletPage() {
               >
                 <Download className="h-4 w-4 text-emerald-600" />
                 <span>{exportingCsv ? 'Exporting...' : 'Export CSV'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const latestCredit = transactions.find((t) => t.direction === 'CREDIT');
+                  if (latestCredit) {
+                    handleOpenInvoice(latestCredit);
+                  } else {
+                    alert('No wallet recharge credits found yet. Top up your wallet to generate and download a GST Tax Invoice.');
+                  }
+                }}
+                className="flex items-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 px-3.5 py-2 text-xs font-bold text-emerald-700 dark:text-emerald-400 transition-colors shadow-xs cursor-pointer"
+                title="Download / View Latest GST Tax Invoice"
+              >
+                <FileText className="h-4 w-4 text-emerald-600" />
+                <span>Tax Invoice</span>
+                <Download className="h-3.5 w-3.5 opacity-80" />
               </button>
 
               <button
@@ -702,6 +789,40 @@ export default function WalletPage() {
                 </p>
               </div>
             </div>
+          </div>
+
+          {/* GST Platform Supplier & Restaurant GSTIN Disclosure Card */}
+          <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs shadow-xs">
+            <div className="flex items-start sm:items-center gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-500/10 text-[#DE8626] font-black text-xs">
+                GST
+              </div>
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                    Menza Platform Supplier:
+                  </span>
+                  <span className="font-semibold text-[#1E2930] dark:text-[#E2E8F0]">
+                    {platformGstInfo?.platformLegalName || 'Menza Technologies Private Limited'}
+                  </span>
+                  <span className="font-mono font-black text-[#DE8626] bg-amber-500/10 px-2 py-0.5 rounded border border-[#DE8626]/30">
+                    GSTIN: {platformGstInfo?.platformGstin || '27AABCM8821F1ZX'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                  Inclusive GST {gstRate}% (CGST {cgstRate}% + SGST {sgstRate}%) • Tax Invoice issued on every recharge
+                </p>
+              </div>
+            </div>
+
+            {recipientGst ? (
+              <div className="flex items-center gap-2 self-start md:self-center shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-[#E7E1DA] dark:border-[#2B3540]">
+                <span className="text-[11px] text-[#667085] dark:text-[#94A3B8] font-semibold">Billed Restaurant GSTIN:</span>
+                <span className="font-mono font-bold text-xs bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 px-2.5 py-1 rounded-xl">
+                  {recipientGst}
+                </span>
+              </div>
+            ) : null}
           </div>
 
           {/* Statement & Ledger Passbook */}
@@ -909,7 +1030,8 @@ export default function WalletPage() {
                         <th className="pb-3 px-3 font-bold text-right">Amount</th>
                         <th className="pb-3 px-3 font-bold text-right">Opening Bal</th>
                         <th className="pb-3 px-3 font-bold text-right">Closing Bal</th>
-                        <th className="pb-3 pl-3 font-bold text-right">Date & Time</th>
+                        <th className="pb-3 px-3 font-bold text-right">Date & Time</th>
+                        <th className="pb-3 pl-3 font-bold text-center">Tax Invoice</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#E7E1DA]/60 dark:divide-[#2B3540]/60">
@@ -929,7 +1051,7 @@ export default function WalletPage() {
                               <div className="font-mono text-[11px] font-bold text-[#1E2930] dark:text-[#F3F4F6]">
                                 {tx.id}
                               </div>
-                              <div className="flex flex-wrap items-center gap-1 mt-1">
+                              <div className="flex flex-wrap items-center gap-1.5 mt-1">
                                 {tx.orderId && (
                                   <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-bold text-[#DE8626]">
                                     <Receipt className="h-3 w-3" />
@@ -940,6 +1062,17 @@ export default function WalletPage() {
                                   <span className="font-mono text-[10px] text-[#667085] dark:text-[#94A3B8]">
                                     Ref: {tx.paymentReference}
                                   </span>
+                                )}
+                                {(isCredit && (tx.invoiceNumber || tx.transactionType.toUpperCase().includes('RECHARGE'))) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenInvoice(tx)}
+                                    className="inline-flex items-center gap-1 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 text-[10px] font-mono font-bold transition-all cursor-pointer shadow-xs"
+                                    title="View & Print GST Tax Invoice"
+                                  >
+                                    <FileText className="h-3 w-3 text-emerald-600" />
+                                    <span>{tx.invoiceNumber || 'Tax Invoice'}</span>
+                                  </button>
                                 )}
                               </div>
                             </td>
@@ -1004,7 +1137,7 @@ export default function WalletPage() {
                             </td>
 
                             {/* Date & Time */}
-                            <td className="py-3.5 pl-3 align-top text-right text-[#667085] dark:text-[#94A3B8] whitespace-nowrap">
+                            <td className="py-3.5 px-3 align-top text-right text-[#667085] dark:text-[#94A3B8] whitespace-nowrap">
                               {validDate ? (
                                 <div>
                                   <div className="font-semibold text-[#1E2930] dark:text-[#F3F4F6]">
@@ -1023,6 +1156,24 @@ export default function WalletPage() {
                                 </div>
                               ) : (
                                 tx.createdAt
+                              )}
+                            </td>
+
+                            {/* Dedicated Tax Invoice Download / View Column */}
+                            <td className="py-3.5 pl-3 align-middle text-center whitespace-nowrap">
+                              {isCredit ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenInvoice(tx)}
+                                  className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 px-3 py-1.5 text-xs font-bold transition-all cursor-pointer shadow-xs hover:scale-105 active:scale-95"
+                                  title="Download / View Tax Invoice"
+                                >
+                                  <FileText className="h-3.5 w-3.5 text-emerald-600" />
+                                  <span>Invoice</span>
+                                  <Download className="h-3 w-3 opacity-80" />
+                                </button>
+                              ) : (
+                                <span className="text-[11px] text-[#667085] dark:text-[#94A3B8]">—</span>
                               )}
                             </td>
                           </tr>
@@ -1116,12 +1267,56 @@ export default function WalletPage() {
               </div>
 
               {paymentSuccess ? (
-                <div className="py-8 text-center space-y-2">
+                <div className="py-8 text-center space-y-4">
                   <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600 mx-auto">
                     <CheckCircle2 className="h-7 w-7" />
                   </div>
-                  <h4 className="text-base font-bold text-emerald-600">Recharge Successful!</h4>
-                  <p className="text-xs text-[#667085]">Your wallet has been credited with ₹{rechargeAmount}</p>
+                  <div>
+                    <h4 className="text-base font-bold text-emerald-600">Recharge Successful!</h4>
+                    <p className="text-xs text-[#667085]">Your wallet has been credited with ₹{rechargeAmount}</p>
+                  </div>
+
+                  <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const latestCredit = transactions.find((t) => t.direction === 'CREDIT');
+                        if (latestCredit) {
+                          handleOpenInvoice(latestCredit);
+                        } else {
+                          handleOpenInvoice({
+                            id: `MZ-TX-${Date.now()}`,
+                            restaurantId: currentRestId || '',
+                            amount: rechargeAmount,
+                            baseAmount: rechargeBaseAmount,
+                            taxAmount: rechargeTaxAmount,
+                            taxPercentage: gstRate,
+                            direction: 'CREDIT',
+                            transactionType: 'WALLET_RECHARGE',
+                            description: 'Wallet top-up',
+                            balanceBefore: wallet?.balance || 0,
+                            balanceAfter: (wallet?.balance || 0) + rechargeAmount,
+                            createdAt: new Date().toISOString(),
+                          } as any);
+                        }
+                      }}
+                      className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 px-4 py-2.5 text-xs font-bold text-white shadow-md transition-colors cursor-pointer"
+                    >
+                      <FileText className="h-4 w-4" />
+                      <span>Download Tax Invoice</span>
+                      <Download className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRechargeModalOpen(false);
+                        setPaymentSuccess(false);
+                      }}
+                      className="w-full sm:w-auto rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] px-4 py-2.5 text-xs font-semibold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5"
+                    >
+                      Done
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="space-y-4 text-xs">
@@ -1156,6 +1351,47 @@ export default function WalletPage() {
                     />
                   </div>
 
+                  {/* GST Bifurcated Breakdown Card */}
+                  <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-3.5 space-y-2">
+                    <div className="flex items-center justify-between text-[11px] font-bold text-[#1E2930] dark:text-[#F3F4F6] border-b border-[#E7E1DA] dark:border-[#2B3540] pb-1.5">
+                      <span>GST Tax Invoice Breakdown</span>
+                    </div>
+
+                    <div className="space-y-1 text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                      <div className="flex justify-between">
+                        <span>Net Value (Taxable Base)</span>
+                        <span className="font-mono font-semibold text-[#1E2930] dark:text-[#F3F4F6]">₹{formatCurrency(rechargeBaseAmount)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Central GST (CGST @ {cgstRate}%)</span>
+                        <span className="font-mono">₹{formatCurrency(rechargeCgstAmount)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>State GST (SGST @ {sgstRate}%)</span>
+                        <span className="font-mono">₹{formatCurrency(rechargeSgstAmount)}</span>
+                      </div>
+                      <div className="flex justify-between font-bold text-[#1E2930] dark:text-[#F3F4F6] pt-1 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60">
+                        <span>Total Payable (incl. {gstRate}% GST)</span>
+                        <span className="font-mono text-[#DE8626] font-extrabold">₹{formatCurrency(rechargeAmount)}</span>
+                      </div>
+                    </div>
+
+                    <div className="pt-2 border-t border-[#E7E1DA] dark:border-[#2B3540] text-[10px] space-y-1 text-[#667085] dark:text-[#94A3B8]">
+                      <div className="flex items-center justify-between">
+                        <span>Paying to: <strong>{platformGstInfo?.platformLegalName || 'Menza Technologies Pvt Ltd'}</strong></span>
+                        <span className="font-mono font-bold text-[#DE8626]">GSTIN: {platformGstInfo?.platformGstin || '27AABCM8821F1ZX'}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span>Billed to: <strong>{wallet?.restaurantName || activeRestaurant?.restaurantName || 'Restaurant Partner'}</strong></span>
+                        {recipientGst ? (
+                          <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                            GSTIN: {recipientGst}
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="rounded-xl bg-amber-500/5 border border-amber-500/20 p-3 text-[11px] text-[#667085] dark:text-[#94A3B8]">
                     <div className="flex items-center gap-1.5 font-bold text-[#DE8626] mb-1">
                       <ShieldCheck className="h-4 w-4" />
@@ -1186,6 +1422,13 @@ export default function WalletPage() {
             </div>
           </div>
         )}
+
+        {/* GST Tax Invoice Modal */}
+        <TaxInvoiceModal
+          isOpen={invoiceModalOpen}
+          onClose={() => setInvoiceModalOpen(false)}
+          invoice={selectedInvoice}
+        />
       </AppShell>
     </AuthGuard>
   );

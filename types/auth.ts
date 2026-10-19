@@ -14,6 +14,8 @@ export interface UserRestaurantDetail {
   isActive?: boolean;
   ownerName?: string;
   ownerMobile?: string;
+  gstNumber?: string;
+  gstin?: string;
 }
 
 export type RestaurantDetail = UserRestaurantDetail;

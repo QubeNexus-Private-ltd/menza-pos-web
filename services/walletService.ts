@@ -2,6 +2,7 @@ import { apiClient } from '@shared/core/network/apiClient';
 import { WalletRemoteDataSource } from '@shared/data/datasources/WalletRemoteDataSource';
 import { WalletRepositoryImpl } from '@shared/data/repositories/WalletRepositoryImpl';
 import { IWalletRepository } from '@shared/domain/repositories/IWalletRepository';
+import { PlatformGstInfo } from '@/types/wallet';
 
 export const walletRemoteDataSource = new WalletRemoteDataSource();
 export const walletRepository: IWalletRepository = new WalletRepositoryImpl(walletRemoteDataSource);
@@ -16,6 +17,10 @@ export interface WalletTransactionDTO {
   description: string;
   orderId?: string;
   paymentReference?: string;
+  invoiceNumber?: string;
+  baseAmount?: number;
+  taxAmount?: number;
+  taxPercentage?: number;
   createdAt: string;
 }
 
@@ -29,6 +34,9 @@ export interface RestaurantWalletDTO {
   status: 'HEALTHY' | 'LOW_BALANCE' | 'EXHAUSTED' | string;
   currency: string;
   lastUpdated: string;
+  restaurantName?: string;
+  restaurantGstNumber?: string;
+  platformGst?: PlatformGstInfo;
   recentTransactions?: WalletTransactionDTO[];
 }
 
@@ -77,16 +85,64 @@ export class WebWalletService {
       t.PaymentGatewayRef ||
       (orderId ? `ORD-${orderId}` : undefined);
 
+    const amount = Number(t.amount ?? t.Amount ?? 0);
+    const rawInvoiceNo = t.invoiceNumber || t.InvoiceNumber || undefined;
+    let invoiceNumber = rawInvoiceNo ? String(rawInvoiceNo).trim() : undefined;
+    let cleanDesc = desc;
+
+    // Fallback extraction if embedded in description: [INV:MZ/26-27/W00001]
+    if (!invoiceNumber && desc.includes('[INV:')) {
+      const match = desc.match(/\[INV:([^\]]+)\]/i);
+      if (match && match[1]) {
+        invoiceNumber = match[1].trim();
+        cleanDesc = desc.replace(/\[INV:[^\]]+\]/i, '').trim();
+      }
+    }
+
+    let baseAmount = t.baseAmount !== undefined && t.baseAmount !== null
+      ? Number(t.baseAmount)
+      : t.BaseAmount !== undefined && t.BaseAmount !== null
+      ? Number(t.BaseAmount)
+      : undefined;
+
+    let taxAmount = t.taxAmount !== undefined && t.taxAmount !== null
+      ? Number(t.taxAmount)
+      : t.TaxAmount !== undefined && t.TaxAmount !== null
+      ? Number(t.TaxAmount)
+      : undefined;
+
+    let taxPercentage = t.taxPercentage !== undefined && t.taxPercentage !== null
+      ? Number(t.taxPercentage)
+      : t.TaxPercentage !== undefined && t.TaxPercentage !== null
+      ? Number(t.TaxPercentage)
+      : undefined;
+
+    if (isCredit && amount > 0) {
+      if (baseAmount === undefined) {
+        baseAmount = Math.round((amount / 1.18) * 100) / 100;
+      }
+      if (taxAmount === undefined) {
+        taxAmount = Math.round((amount - baseAmount) * 100) / 100;
+      }
+      if (taxPercentage === undefined) {
+        taxPercentage = 18;
+      }
+    }
+
     return {
       id: String(t.id || t.Id || t.transactionId || `WTX_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`),
       transactionType: rawType || (direction === 'CREDIT' ? 'RECHARGE' : 'PLATFORM_FEE'),
       direction,
-      amount: Number(t.amount ?? t.Amount ?? 0),
+      amount,
       balanceBefore,
       balanceAfter,
-      description: desc,
+      description: cleanDesc,
       orderId,
       paymentReference: paymentRefRaw ? String(paymentRefRaw) : undefined,
+      invoiceNumber,
+      baseAmount,
+      taxAmount,
+      taxPercentage,
       createdAt: t.createdAt || t.CreatedAt || t.transactionDate || t.TransactionDate || new Date().toISOString(),
     };
   }
@@ -129,6 +185,9 @@ export class WebWalletService {
         status: balance <= 0 ? 'EXHAUSTED' : balance < threshold ? 'LOW_BALANCE' : 'HEALTHY',
         currency: data.currency || data.Currency || 'INR',
         lastUpdated: data.lastUpdated || data.LastUpdated || new Date().toISOString(),
+        restaurantName: data.restaurantName || data.RestaurantName || undefined,
+        restaurantGstNumber: data.restaurantGstNumber || data.RestaurantGstNumber || undefined,
+        platformGst: data.platformGst || data.PlatformGst || undefined,
         recentTransactions,
       };
     } catch {

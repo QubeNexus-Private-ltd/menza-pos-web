@@ -1,3 +1,20 @@
+export interface PlatformGstInfo {
+  platformLegalName: string;
+  platformTradeName: string;
+  platformGstin: string;
+  platformPan: string;
+  platformStateCode: string;
+  platformStateName: string;
+  platformAddress: string;
+  supportEmail: string;
+  websiteUrl: string;
+  defaultGstPercentage: number;
+  cgstPercentage: number;
+  sgstPercentage: number;
+  walletSacCode: string;
+  subscriptionSacCode: string;
+}
+
 export interface WalletTransactionDTO {
   transactionId: number;
   restaurantId: number;
@@ -6,6 +23,10 @@ export interface WalletTransactionDTO {
   category: 'RECHARGE' | 'SMS_DISPATCH' | 'WHATSAPP_ALERT' | 'COMMISSION' | string;
   description: string;
   closingBalance: number;
+  invoiceNumber?: string;
+  baseAmount?: number;
+  taxAmount?: number;
+  taxPercentage?: number;
   createdAt: string;
 }
 
@@ -14,6 +35,9 @@ export interface RestaurantWalletDTO {
   balance: number;
   currency: string;
   lastUpdated: string;
+  restaurantName?: string;
+  restaurantGstNumber?: string;
+  platformGst?: PlatformGstInfo;
   recentTransactions: WalletTransactionDTO[];
 }
 
@@ -23,3 +47,4 @@ export interface InitiateWalletRechargeRequest {
   paymentMode?: string;
   redirectUrl?: string;
 }
+

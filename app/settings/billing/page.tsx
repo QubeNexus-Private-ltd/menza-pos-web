@@ -22,6 +22,7 @@ import {
   RotateCcw,
   Layers,
   FileText,
+  Download,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
@@ -33,6 +34,7 @@ import {
   RestaurantSubscriptionHistory,
 } from '@/types/subscription';
 import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
+import { TaxInvoiceModal, TaxInvoiceItem } from '@/components/invoice/TaxInvoiceModal';
 
 export default function SubscriptionBillingPage() {
   const router = useRouter();
@@ -43,6 +45,120 @@ export default function SubscriptionBillingPage() {
   const [activeSub, setActiveSub] = useState<UserSubscriptionStatus | null>(null);
   const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
   const [history, setHistory] = useState<RestaurantSubscriptionHistory[]>([]);
+
+  // Tax Invoice Modal State
+  const [selectedInvoice, setSelectedInvoice] = useState<TaxInvoiceItem | null>(null);
+  const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
+
+  const handleOpenActiveSubInvoice = () => {
+    if (!activeSub) return;
+    const rawId = String(activeSub.subscriptionId || activeSub.subscriptionConfigurationId || 1);
+    const seqStr = rawId.replace(/[^0-9]/g, '').slice(-5).padStart(5, '0');
+    const invNumber = activeSub.invoiceNumber || `MZ/26-27/S${seqStr}`;
+
+    const recipientGst =
+      activeSub.restaurantGstNumber ||
+      (activeRestaurant as any)?.gstNumber ||
+      (activeRestaurant as any)?.gstin ||
+      undefined;
+
+    const pGst = activeSub.platformGst;
+
+    const invoiceItem: TaxInvoiceItem = {
+      type: 'SUBSCRIPTION',
+      invoiceNumber: invNumber,
+      invoiceDate: activeSub.startDate || new Date().toISOString(),
+      paymentReference: activeSub.paymentReferenceNo,
+
+      // Supplier (Menza Platform)
+      supplierLegalName: pGst?.platformLegalName,
+      supplierTradeName: pGst?.platformTradeName,
+      supplierGstin: pGst?.platformGstin,
+      supplierPan: pGst?.platformPan,
+      supplierStateCode: pGst?.platformStateCode,
+      supplierStateName: pGst?.platformStateName,
+      supplierAddress: pGst?.platformAddress,
+      supplierEmail: pGst?.supportEmail,
+      supplierWebsite: pGst?.websiteUrl,
+
+      // Restaurant (Recipient)
+      restaurantName: activeSub.restaurantName || activeRestaurant?.restaurantName || 'Restaurant Partner',
+      restaurantId: currentRestId,
+      outletAddress: (activeRestaurant as any)?.address || (activeRestaurant as any)?.outletAddress || (activeRestaurant as any)?.restaurantAddress,
+      ownerName: (activeRestaurant as any)?.ownerName,
+      contactPhone: (activeRestaurant as any)?.ownerMobile || (activeRestaurant as any)?.phone,
+      customerGstin: recipientGst,
+
+      itemTitle: `Menza POS Software Subscription - ${activeSub.planName}`,
+      itemDescription: 'Software as a Service (SaaS) Cloud POS, QR Table Ordering, KDS & Operating System Licensing',
+      sacCode: pGst?.subscriptionSacCode || '997331',
+      coverageStart: activeSub.startDate,
+      coverageEnd: activeSub.endDate || activeSub.expiryDate,
+      totalAmount: activeSub.amountPaid ?? 0,
+      baseAmount: activeSub.baseAmount,
+      taxAmount: activeSub.taxAmount,
+      taxPercentage: activeSub.taxPercentage || pGst?.defaultGstPercentage || 18,
+      cgstPercentage: pGst?.cgstPercentage || (activeSub.taxPercentage ? activeSub.taxPercentage / 2 : 9),
+      sgstPercentage: pGst?.sgstPercentage || (activeSub.taxPercentage ? activeSub.taxPercentage / 2 : 9),
+    };
+    setSelectedInvoice(invoiceItem);
+    setInvoiceModalOpen(true);
+  };
+
+  const handleOpenHistoryInvoice = (item: RestaurantSubscriptionHistory) => {
+    const rawId = String(item.id || item.restaurantSubscriptionRelationshipId || 1);
+    const seqStr = rawId.replace(/[^0-9]/g, '').slice(-5).padStart(5, '0');
+    const invNumber = item.invoiceNumber || `MZ/26-27/S${seqStr}`;
+
+    const recipientGst =
+      item.restaurantGstNumber ||
+      activeSub?.restaurantGstNumber ||
+      (activeRestaurant as any)?.gstNumber ||
+      (activeRestaurant as any)?.gstin ||
+      undefined;
+
+    const pGst = item.platformGst || activeSub?.platformGst;
+
+    const invoiceItem: TaxInvoiceItem = {
+      type: 'SUBSCRIPTION',
+      invoiceNumber: invNumber,
+      invoiceDate: item.createdDateUtc || item.startDate,
+      paymentReference: item.paymentReferenceNo || item.walletTransactionRef,
+
+      // Supplier (Menza Platform)
+      supplierLegalName: pGst?.platformLegalName,
+      supplierTradeName: pGst?.platformTradeName,
+      supplierGstin: pGst?.platformGstin,
+      supplierPan: pGst?.platformPan,
+      supplierStateCode: pGst?.platformStateCode,
+      supplierStateName: pGst?.platformStateName,
+      supplierAddress: pGst?.platformAddress,
+      supplierEmail: pGst?.supportEmail,
+      supplierWebsite: pGst?.websiteUrl,
+
+      // Restaurant (Recipient)
+      restaurantName: item.restaurantName || activeSub?.restaurantName || activeRestaurant?.restaurantName || 'Restaurant Partner',
+      restaurantId: currentRestId,
+      outletAddress: (activeRestaurant as any)?.address || (activeRestaurant as any)?.outletAddress || (activeRestaurant as any)?.restaurantAddress,
+      ownerName: (activeRestaurant as any)?.ownerName,
+      contactPhone: (activeRestaurant as any)?.ownerMobile || (activeRestaurant as any)?.phone,
+      customerGstin: recipientGst,
+
+      itemTitle: `Menza POS Software Subscription - ${item.subscriptionName || item.subscriptionCode || 'Plan'}`,
+      itemDescription: 'Software as a Service (SaaS) Cloud POS, QR Table Ordering, KDS & Operating System Licensing',
+      sacCode: pGst?.subscriptionSacCode || '997331',
+      coverageStart: item.startDate,
+      coverageEnd: item.endDate,
+      totalAmount: item.amountPaid,
+      baseAmount: item.baseAmount,
+      taxAmount: item.taxAmount,
+      taxPercentage: item.taxPercentage || pGst?.defaultGstPercentage || 18,
+      cgstPercentage: pGst?.cgstPercentage || (item.taxPercentage ? item.taxPercentage / 2 : 9),
+      sgstPercentage: pGst?.sgstPercentage || (item.taxPercentage ? item.taxPercentage / 2 : 9),
+    };
+    setSelectedInvoice(invoiceItem);
+    setInvoiceModalOpen(true);
+  };
 
   const loadData = useCallback(async () => {
     if (!currentRestId) return;
@@ -182,6 +298,18 @@ export default function SubscriptionBillingPage() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2.5">
+              {activeSub && (
+                <button
+                  type="button"
+                  onClick={handleOpenActiveSubInvoice}
+                  className="inline-flex items-center gap-1.5 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 px-4 py-2.5 text-xs font-bold text-emerald-700 dark:text-emerald-400 transition-all hover:scale-[1.02] active:scale-[0.98] shadow-xs cursor-pointer"
+                  title="Download / View Subscription Tax Invoice"
+                >
+                  <FileText className="h-3.5 w-3.5 text-emerald-600" />
+                  <span>Download Tax Invoice</span>
+                  <Download className="h-3.5 w-3.5 opacity-80" />
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => useSubscriptionStore.getState().openRenewalModal(undefined, 'renew')}
@@ -240,6 +368,15 @@ export default function SubscriptionBillingPage() {
                     Outlet: <strong>{activeRestaurant?.restaurantName || 'Active Store'}</strong> •{' '}
                     {matchedPlan?.description || 'Seamless POS billing, kitchen KOT routing, and analytics'}
                   </p>
+                  <div className="flex items-center gap-2 flex-wrap text-[11px] text-[#667085] dark:text-[#94A3B8] mt-1.5">
+                    <span>Menza Supplier: <strong className="font-mono text-[#DE8626]">{activeSub?.platformGst?.platformGstin || '27AABCM8821F1ZX'}</strong> ({activeSub?.platformGst?.platformLegalName || 'Menza Technologies Pvt Ltd'})</span>
+                    {(activeSub?.restaurantGstNumber || (activeRestaurant as any)?.gstNumber || (activeRestaurant as any)?.gstin) ? (
+                      <>
+                        <span>•</span>
+                        <span>Billed Store GSTIN: <strong className="font-mono text-emerald-600 dark:text-emerald-400">{activeSub?.restaurantGstNumber || (activeRestaurant as any)?.gstNumber || (activeRestaurant as any)?.gstin}</strong></span>
+                      </>
+                    ) : null}
+                  </div>
                 </div>
               </div>
 
@@ -313,17 +450,38 @@ export default function SubscriptionBillingPage() {
                 </span>
               </div>
 
-              <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-4">
-                <div className="flex items-center gap-2 text-xs font-semibold text-[#667085] dark:text-[#94A3B8]">
-                  <CreditCard className="h-4 w-4 text-emerald-600" />
-                  <span>Amount Paid</span>
+              <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-4 flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between text-xs font-semibold text-[#667085] dark:text-[#94A3B8]">
+                    <div className="flex items-center gap-2">
+                      <CreditCard className="h-4 w-4 text-emerald-600" />
+                      <span>Amount Paid</span>
+                    </div>
+                    {Number(activeSub?.amountPaid || 0) > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleOpenActiveSubInvoice}
+                        className="inline-flex items-center gap-1 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-bold transition-all cursor-pointer shadow-xs"
+                        title="Download / View GST Tax Invoice"
+                      >
+                        <FileText className="h-3 w-3 text-emerald-600" />
+                        <span>Tax Invoice</span>
+                        <Download className="h-2.5 w-2.5 opacity-80" />
+                      </button>
+                    )}
+                  </div>
+                  <p className="mt-1.5 text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                    ₹{Number(activeSub?.amountPaid ?? matchedPlan?.finalPrice ?? matchedPlan?.price ?? 0).toLocaleString('en-IN')}
+                  </p>
                 </div>
-                <p className="mt-1.5 text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
-                  ₹{Number(activeSub?.amountPaid ?? matchedPlan?.finalPrice ?? matchedPlan?.price ?? 0).toLocaleString('en-IN')}
-                </p>
-                <span className="text-[11px] text-[#667085]">
-                  Billing Cycle: {matchedPlan?.billingCycle || `${planDurationDays} Days`}
-                </span>
+                <div className="pt-1 flex items-center justify-between text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                  <span>Billing Cycle: {matchedPlan?.billingCycle || `${planDurationDays} Days`}</span>
+                  {activeSub?.invoiceNumber && (
+                    <span className="font-mono text-[10px] text-emerald-600 font-semibold">
+                      {activeSub.invoiceNumber}
+                    </span>
+                  )}
+                </div>
               </div>
 
               <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-4">
@@ -565,21 +723,40 @@ export default function SubscriptionBillingPage() {
                           Coverage: <strong>{formatDate(item.startDate)}</strong> → <strong>{formatDate(item.endDate)}</strong>
                           {item.paymentReferenceNo ? ` • Payment Ref: ${item.paymentReferenceNo}` : ''}
                         </p>
+                        {item.baseAmount && item.taxAmount ? (
+                          <p className="text-[10px] text-[#667085] dark:text-[#94A3B8]">
+                            Taxable Value: ₹{Number(item.baseAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })} + GST ({item.taxPercentage || 18}%): ₹{Number(item.taxAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          </p>
+                        ) : null}
                         {item.remarks && (
                           <p className="text-[11px] text-[#667085] italic">{item.remarks}</p>
                         )}
                       </div>
 
-                      <div className="text-left sm:text-right shrink-0">
+                      <div className="text-left sm:text-right shrink-0 space-y-1">
                         <span className="text-[10px] font-semibold uppercase text-[#667085] block">
                           Amount Paid
                         </span>
-                        <span className="text-base font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                        <span className="text-base font-black text-[#1E2930] dark:text-[#F3F4F6] block">
                           ₹{Number(item.amountPaid || 0).toLocaleString('en-IN')}
                         </span>
-                        <span className="block text-[10px] text-emerald-600 font-bold uppercase">
-                          {item.newStatus || 'ACTIVE'}
-                        </span>
+                        <div className="flex items-center gap-2 sm:justify-end">
+                          <span className="text-[10px] text-emerald-600 font-bold uppercase">
+                            {item.newStatus || 'ACTIVE'}
+                          </span>
+                          {item.amountPaid > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenHistoryInvoice(item)}
+                              className="inline-flex items-center gap-1 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-mono font-bold transition-all cursor-pointer shadow-xs"
+                              title="Download / View GST Tax Invoice"
+                            >
+                              <FileText className="h-3 w-3 text-emerald-600" />
+                              <span>{item.invoiceNumber || 'Tax Invoice'}</span>
+                              <Download className="h-2.5 w-2.5 opacity-80" />
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   );
@@ -588,6 +765,13 @@ export default function SubscriptionBillingPage() {
             )}
           </div>
         </div>
+
+        {/* GST Tax Invoice Modal */}
+        <TaxInvoiceModal
+          isOpen={invoiceModalOpen}
+          onClose={() => setInvoiceModalOpen(false)}
+          invoice={selectedInvoice}
+        />
       </AppShell>
     </AuthGuard>
   );

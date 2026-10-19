@@ -32,6 +32,7 @@ export interface SubscriptionPlan {
   allowDelivery?: boolean;
   allowKds?: boolean;
   allowOnlinePayment?: boolean;
+  allowSmsNotifications?: boolean;
   isActive?: boolean;
   features?: string[];
   entitlements?: SubscriptionPlanEntitlementItem[];

@@ -29,3 +29,17 @@ export function decryptIdentifier(token: string): string {
   }
   return res;
 }
+
+export function encryptTimeBoundIdentifier(id: number | string, ttlMinutes: number = 5): string {
+  if (!id) return '';
+  const expUnix = Math.floor(Date.now() / 1000) + ttlMinutes * 60;
+  const payload = `t_${id}_${expUnix}`;
+  const prefix = 'mzt_';
+  const key = 0x5a;
+  const bytes = [];
+  for (let i = 0; i < payload.length; i++) {
+    bytes.push(payload.charCodeAt(i) ^ key);
+  }
+  const hex = bytes.map((b) => b.toString(16).padStart(2, '0')).join('');
+  return `${prefix}${hex}`;
+}

@@ -500,12 +500,12 @@ export default function OrderTrackingPage() {
             <div className="divide-y divide-gray-100 dark:divide-gray-800">
               {order.items?.map((item: PublicOrderItemTrackingDTO, idx: number) => (
                 <div key={idx} className="py-3 flex items-start justify-between gap-3">
-                  <div className="space-y-0.5">
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-sm text-gray-900 dark:text-white">
+                  <div className="space-y-0.5 flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-bold text-sm text-gray-900 dark:text-white break-words">
                         {item.itemName}
                       </span>
-                      <span className="text-xs px-2 py-0.5 rounded font-semibold bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300">
+                      <span className="text-xs px-2 py-0.5 rounded font-semibold bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 shrink-0">
                         x{item.quantity}
                       </span>
                     </div>
@@ -519,7 +519,7 @@ export default function OrderTrackingPage() {
                     </span>
                   </div>
 
-                  <span className="font-bold text-sm text-gray-900 dark:text-white">
+                  <span className="font-bold text-sm text-gray-900 dark:text-white shrink-0">
                     ₹{item.totalAmount.toFixed(2)}
                   </span>
                 </div>

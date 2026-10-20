@@ -14,6 +14,8 @@ import {
   Clock,
   Flame,
   PackageCheck,
+  PackageX,
+  Boxes,
   Tag,
   FolderPlus,
   Upload,
@@ -31,6 +33,7 @@ import {
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
 import { DishImage } from '@/components/common/DishImage';
+import { parseDietaryIsVeg } from '@/utils/dietary';
 import { ManageVariantsModal } from '@/components/menu/ManageVariantsModal';
 import { SearchableCategorySelect } from '@/components/menu/SearchableCategorySelect';
 import { WebImageUploadService } from '@/services/imageUploadService';
@@ -180,7 +183,7 @@ export default function MenuCatalogPage() {
             portionDisplay: it.portionDisplay || it.PortionDisplay || (it.unitName ? `${it.quantity && it.quantity > 0 ? it.quantity : 1} ${it.unitName}` : undefined),
             unitId: it.unitId ? Number(it.unitId) : undefined,
             unitName: it.unitName || '',
-            isVeg: it.isVeg !== undefined ? Boolean(it.isVeg) : true,
+            isVeg: parseDietaryIsVeg(it),
             isSpicy: Boolean(it.isSpicy),
             isAvailable: it.isAvailable !== undefined ? Boolean(it.isAvailable) : (it.isActive !== undefined ? Boolean(it.isActive) : true),
             preparationTimeMinutes: Number(it.preparationTimeMinutes || it.PreparationTimeMinutes || 15),
@@ -202,7 +205,7 @@ export default function MenuCatalogPage() {
   // Reset page to 1 whenever filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [selectedCategory, stockFilter, vegFilter, searchQuery, itemsPerPage]);
+  }, [selectedCategory, stockFilter, searchQuery, itemsPerPage]);
 
   // Toggle item availability
   const handleToggleStatus = async (item: MenuItem) => {
@@ -537,6 +540,8 @@ export default function MenuCatalogPage() {
   // Operational Counts
   const inStockCount = useMemo(() => items.filter((x) => x.isAvailable !== false).length, [items]);
   const outOfStockCount = useMemo(() => items.length - inStockCount, [items, inStockCount]);
+  const vegCount = useMemo(() => items.filter((x) => parseDietaryIsVeg(x)).length, [items]);
+  const nonVegCount = useMemo(() => items.length - vegCount, [items, vegCount]);
 
   // Only categories that have items for this restaurant, deduplicated by name
   const visibleCategories = useMemo(() => {
@@ -572,9 +577,9 @@ export default function MenuCatalogPage() {
       if (stockFilter === 'instock' && item.isAvailable === false) return false;
       if (stockFilter === 'outofstock' && item.isAvailable !== false) return false;
 
-      // Dietary Veg Filter
-      if (vegFilter === 'VEG' && !item.isVeg) return false;
-      if (vegFilter === 'NON_VEG' && item.isVeg) return false;
+      // Dietary Veg Filter (Uses parseDietaryIsVeg for robust type normalization)
+      if (vegFilter === 'VEG' && !parseDietaryIsVeg(item)) return false;
+      if (vegFilter === 'NON_VEG' && parseDietaryIsVeg(item)) return false;
 
       // Real-time Text Search (matches name, description, unit, category, code, price)
       if (searchQuery.trim()) {
@@ -747,78 +752,92 @@ export default function MenuCatalogPage() {
               )}
             </div>
 
-            {/* Quick 3-way Stock Switcher (Identical to Menza) */}
-            <div className="flex items-center gap-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-1 text-xs shrink-0">
-              <button
-                type="button"
-                onClick={() => setStockFilter('all')}
-                className={`rounded-lg px-3 py-1 font-bold transition-all ${
-                  stockFilter === 'all'
-                    ? 'bg-white dark:bg-[#1B2127] text-[#1E2930] dark:text-[#F3F4F6] shadow-xs'
-                    : 'text-[#667085]'
-                }`}
-              >
-                All ({items.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setStockFilter('instock')}
-                className={`flex items-center gap-1.5 rounded-lg px-3 py-1 font-bold transition-all ${
-                  stockFilter === 'instock'
-                    ? 'bg-emerald-600 text-white shadow-xs'
-                    : 'text-[#667085] hover:text-emerald-600'
-                }`}
-              >
-                <span>🟢</span>
-                <span>{inStockCount}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setStockFilter('outofstock')}
-                className={`flex items-center gap-1.5 rounded-lg px-3 py-1 font-bold transition-all ${
-                  stockFilter === 'outofstock'
-                    ? 'bg-red-600 text-white shadow-xs'
-                    : 'text-[#667085] hover:text-red-600'
-                }`}
-              >
-                <span>🔴</span>
-                <span>{outOfStockCount}</span>
-              </button>
-            </div>
+            {/* Quick 3-way Stock Switcher (Distinct Inventory Theme - Blue/Slate) */}
+            <div className="flex flex-wrap sm:flex-nowrap items-center gap-2">
+              <div className="flex items-center gap-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-1 text-xs shrink-0">
+                <span className="hidden sm:inline-flex items-center gap-1 px-1.5 text-[10px] font-bold text-[#667085] uppercase tracking-wider">
+                  <Boxes className="h-3.5 w-3.5 text-[#667085]" />
+                  Stock:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setStockFilter('all')}
+                  className={`rounded-lg px-2.5 py-1 font-bold transition-all ${
+                    stockFilter === 'all'
+                      ? 'bg-[#1E2930] dark:bg-white text-white dark:text-[#1E2930] shadow-xs'
+                      : 'text-[#667085] hover:text-[#1E2930] dark:hover:text-[#F3F4F6]'
+                  }`}
+                >
+                  All ({items.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStockFilter('instock')}
+                  className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 font-bold transition-all ${
+                    stockFilter === 'instock'
+                      ? 'bg-blue-600 dark:bg-blue-600 text-white shadow-xs'
+                      : 'text-[#667085] hover:text-blue-600 dark:hover:text-blue-400'
+                  }`}
+                >
+                  <PackageCheck className="h-3.5 w-3.5" />
+                  <span>In Stock ({inStockCount})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStockFilter('outofstock')}
+                  className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 font-bold transition-all ${
+                    stockFilter === 'outofstock'
+                      ? 'bg-slate-700 dark:bg-slate-600 text-white shadow-xs'
+                      : 'text-[#667085] hover:text-slate-700 dark:hover:text-slate-300'
+                  }`}
+                >
+                  <PackageX className="h-3.5 w-3.5" />
+                  <span>Out of Stock ({outOfStockCount})</span>
+                </button>
+              </div>
 
-            {/* Veg / Non-Veg Toggle Filter */}
-            <div className="flex items-center gap-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-1 text-xs shrink-0">
-              <button
-                type="button"
-                onClick={() => setVegFilter('ALL')}
-                className={`rounded-lg px-3 py-1 font-bold transition-all ${
-                  vegFilter === 'ALL'
-                    ? 'bg-white dark:bg-[#1B2127] text-[#1E2930] dark:text-[#F3F4F6] shadow-xs'
-                    : 'text-[#667085]'
-                }`}
-              >
-                All
-              </button>
-              <button
-                type="button"
-                onClick={() => setVegFilter('VEG')}
-                className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 font-bold transition-all ${
-                  vegFilter === 'VEG' ? 'bg-emerald-600 text-white shadow-xs' : 'text-[#667085]'
-                }`}
-              >
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
-                Veg
-              </button>
-              <button
-                type="button"
-                onClick={() => setVegFilter('NON_VEG')}
-                className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 font-bold transition-all ${
-                  vegFilter === 'NON_VEG' ? 'bg-red-600 text-white shadow-xs' : 'text-[#667085]'
-                }`}
-              >
-                <span className="h-1.5 w-1.5 rounded-full bg-red-300" />
-                Non-Veg
-              </button>
+              {/* Veg / Non-Veg Dietary Filter (Authentic Dietary Marks & Accurate Counts) */}
+              <div className="flex items-center gap-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-1 text-xs shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setVegFilter('ALL')}
+                  className={`rounded-lg px-2.5 py-1 font-bold transition-all ${
+                    vegFilter === 'ALL'
+                      ? 'bg-[#1E2930] dark:bg-white text-white dark:text-[#1E2930] shadow-xs'
+                      : 'text-[#667085] hover:text-[#1E2930] dark:hover:text-[#F3F4F6]'
+                  }`}
+                >
+                  All
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVegFilter('VEG')}
+                  className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 font-bold transition-all ${
+                    vegFilter === 'VEG'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'text-[#667085] hover:text-emerald-700 dark:hover:text-emerald-400'
+                  }`}
+                >
+                  <span className="flex h-3.5 w-3.5 items-center justify-center rounded-[3px] border border-emerald-600 bg-white dark:bg-[#151A20]">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-600" />
+                  </span>
+                  <span>Veg ({vegCount})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setVegFilter('NON_VEG')}
+                  className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 font-bold transition-all ${
+                    vegFilter === 'NON_VEG'
+                      ? 'bg-rose-700 text-white shadow-xs'
+                      : 'text-[#667085] hover:text-rose-700 dark:hover:text-rose-400'
+                  }`}
+                >
+                  <span className="flex h-3.5 w-3.5 items-center justify-center rounded-[3px] border border-rose-700 bg-white dark:bg-[#151A20]">
+                    <span className="h-1.5 w-1.5 rounded-full bg-rose-700" />
+                  </span>
+                  <span>Non-Veg ({nonVegCount})</span>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -921,7 +940,7 @@ export default function MenuCatalogPage() {
               <h3 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">No Menu Items Found</h3>
               <p className="mt-1 text-xs text-[#667085] dark:text-[#94A3B8] max-w-sm mx-auto">
                 {searchQuery || selectedCategory || stockFilter !== 'all' || vegFilter !== 'ALL'
-                  ? 'Try adjusting your search query, dietary filter, or active category.'
+                  ? 'Try adjusting your search query, stock filter, or active category.'
                   : 'Start setting up your restaurant menu by adding your first dish.'}
               </p>
               <div className="mt-5 flex items-center justify-center gap-3">

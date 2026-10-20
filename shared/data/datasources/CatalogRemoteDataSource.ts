@@ -1,3 +1,4 @@
+import { parseDietaryIsVeg } from '../../core/utils/dietary';
 import { apiClient } from '../../core/network/apiClient';
 import { Category } from '../../domain/models/Category';
 import { MenuItem } from '../../domain/models/Item';
@@ -98,7 +99,7 @@ export class CatalogRemoteDataSource {
         price: Number(item.price ?? item.Price ?? 0),
         categoryId: item.categoryId ?? item.CategoryId,
         categoryName: item.categoryName ?? item.CategoryName,
-        isVeg: item.isVeg !== undefined ? Boolean(item.isVeg) : item.IsVeg !== undefined ? Boolean(item.IsVeg) : true,
+        isVeg: parseDietaryIsVeg(item),
         isAvailable: item.isAvailable !== undefined ? Boolean(item.isAvailable) : item.IsAvailable !== undefined ? Boolean(item.IsAvailable) : Boolean(item.isActive ?? item.IsActive ?? true),
         imageUrl: item.imageUrl || item.ImageUrl || item.image || item.Image || item.itemImage || item.ItemImage || item.photoUrl || item.PhotoUrl || '',
         kitchenStationId: item.kitchenStationId ?? item.KitchenStationId ?? undefined,

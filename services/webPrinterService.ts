@@ -2,7 +2,11 @@ import { PaperWidth, ReceiptData, EscPosBuilder } from '@shared/core/printer/Esc
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { RestaurantConfigRemoteDataSource } from '@shared/data/datasources/RestaurantConfigRemoteDataSource';
 import { usePosCatalogStore } from '@/stores/usePosCatalogStore';
+import { WebBluetoothPrinterService } from './webBluetoothPrinterService';
+import { RawBtPrinterService } from './rawBtPrinterService';
 import QRCode from 'qrcode';
+
+export type PrintChannel = 'auto' | 'web_bluetooth' | 'rawbt' | 'web_serial' | 'browser_spooler';
 
 export interface PrintOptions {
   paperWidth?: PaperWidth;
@@ -419,40 +423,116 @@ export class WebPrinterService {
   }
 
   /**
-   * Print a Customer Tax Receipt
+   * Print a Customer Tax Receipt across Desktop and Mobile browsers.
+   * Smart dispatcher routes through Web Bluetooth, Web Serial, Android RawBT, or Browser Spooler.
    */
   static async printReceipt(data: ReceiptData, paperWidth: PaperWidth = '58mm'): Promise<boolean> {
     const enrichedData = await this.enrichReceiptData(data);
+    const channel = this.getPrintChannel();
 
-    if (this.isSerialConnected()) {
-      try {
-        if (!enrichedData.logoBitmap && enrichedData.logoUrl) {
+    const getEscPosBytes = async (): Promise<number[]> => {
+      if (!enrichedData.logoBitmap && enrichedData.logoUrl) {
+        try {
           enrichedData.logoBitmap = await this.rasterizeLogoFromUrl(enrichedData.logoUrl, paperWidth);
-        }
-        const bytes = EscPosBuilder.buildReceipt(enrichedData, paperWidth);
+        } catch {}
+      }
+      return EscPosBuilder.buildReceipt(enrichedData, paperWidth);
+    };
+
+    // 1. Direct Web Bluetooth (BLE)
+    if (channel === 'web_bluetooth' || (channel === 'auto' && this.isBluetoothConnected())) {
+      try {
+        const bytes = await getEscPosBytes();
+        await this.printDirectBluetooth(bytes);
+        return true;
+      } catch (err) {
+        console.warn('Direct Bluetooth print failed, falling back to next driver:', err);
+        if (channel === 'web_bluetooth') throw err;
+      }
+    }
+
+    // 2. Direct Web Serial (COM port on Desktop USB)
+    if (channel === 'web_serial' || (channel === 'auto' && this.isSerialConnected())) {
+      try {
+        const bytes = await getEscPosBytes();
         await this.printDirectSerial(bytes);
         return true;
       } catch (err) {
         console.warn('Direct serial print failed, falling back to print spooler:', err);
+        if (channel === 'web_serial') throw err;
       }
     }
+
+    // 3. Android Mobile Browser (RawBT protocol for Classic Bluetooth SPP / USB OTG)
+    if (
+      channel === 'rawbt' ||
+      (channel === 'auto' && this.isAndroid() && !this.isSerialConnected() && !this.isBluetoothConnected())
+    ) {
+      try {
+        const bytes = await getEscPosBytes();
+        const res = await this.printDirectRawBt(bytes);
+        if (res.success) return true;
+      } catch (err) {
+        console.warn('RawBT Android print failed, falling back to print spooler:', err);
+        if (channel === 'rawbt') throw err;
+      }
+    }
+
+    // 4. Default: HTML Iframe / DOM print spooler
     const html = await this.generateReceiptHtml(enrichedData, paperWidth);
     return this.dispatchPrint(html, paperWidth, `Receipt-#${enrichedData.orderNumber || enrichedData.orderId}`);
   }
 
   /**
-   * Print a Kitchen Order Ticket (KOT)
+   * Print a Kitchen Order Ticket (KOT) across Desktop and Mobile browsers.
    */
   static async printKot(data: ReceiptData, paperWidth: PaperWidth = '58mm'): Promise<boolean> {
-    if (this.isSerialConnected()) {
+    const channel = this.getPrintChannel();
+
+    const getEscPosBytes = (): number[] => {
+      return EscPosBuilder.buildKot(data, paperWidth);
+    };
+
+    // 1. Direct Web Bluetooth (BLE)
+    if (channel === 'web_bluetooth' || (channel === 'auto' && this.isBluetoothConnected())) {
       try {
-        const bytes = EscPosBuilder.buildKot(data, paperWidth);
+        const bytes = getEscPosBytes();
+        await this.printDirectBluetooth(bytes);
+        return true;
+      } catch (err) {
+        console.warn('Direct Bluetooth KOT print failed, falling back to next driver:', err);
+        if (channel === 'web_bluetooth') throw err;
+      }
+    }
+
+    // 2. Direct Web Serial (COM port on Desktop USB)
+    if (channel === 'web_serial' || (channel === 'auto' && this.isSerialConnected())) {
+      try {
+        const bytes = getEscPosBytes();
         await this.printDirectSerial(bytes);
         return true;
       } catch (err) {
-        console.warn('Direct serial print failed, falling back to print spooler:', err);
+        console.warn('Direct serial KOT print failed, falling back to print spooler:', err);
+        if (channel === 'web_serial') throw err;
       }
     }
+
+    // 3. Android Mobile Browser (RawBT protocol for Classic Bluetooth SPP / USB OTG)
+    if (
+      channel === 'rawbt' ||
+      (channel === 'auto' && this.isAndroid() && !this.isSerialConnected() && !this.isBluetoothConnected())
+    ) {
+      try {
+        const bytes = getEscPosBytes();
+        const res = await this.printDirectRawBt(bytes);
+        if (res.success) return true;
+      } catch (err) {
+        console.warn('RawBT Android KOT print failed, falling back to print spooler:', err);
+        if (channel === 'rawbt') throw err;
+      }
+    }
+
+    // 4. Default: HTML Iframe / DOM print spooler
     const html = this.generateKotHtml(data, paperWidth);
     return this.dispatchPrint(html, paperWidth, `KOT-#${data.orderNumber || data.orderId}`);
   }
@@ -597,6 +677,112 @@ export class WebPrinterService {
     };
 
     return this.printKot(testData, paperWidth);
+  }
+
+  private static readonly STORAGE_KEY_PRINT_CHANNEL = '@menza_printer_print_channel';
+
+  /**
+   * Get preferred print connection channel ('auto' | 'web_bluetooth' | 'rawbt' | 'web_serial' | 'browser_spooler')
+   */
+  static getPrintChannel(): PrintChannel {
+    if (typeof window !== 'undefined') {
+      try {
+        const val = window.localStorage.getItem(this.STORAGE_KEY_PRINT_CHANNEL) as PrintChannel;
+        if (val && ['auto', 'web_bluetooth', 'rawbt', 'web_serial', 'browser_spooler'].includes(val)) {
+          return val;
+        }
+      } catch {}
+    }
+    return 'auto';
+  }
+
+  /**
+   * Save preferred print connection channel
+   */
+  static setPrintChannel(channel: PrintChannel): void {
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem(this.STORAGE_KEY_PRINT_CHANNEL, channel);
+      } catch {}
+    }
+  }
+
+  /**
+   * Check if running on mobile device (Android or iOS)
+   */
+  static isMobile(): boolean {
+    return RawBtPrinterService.getInstance().isMobile();
+  }
+
+  /**
+   * Check if running on Android
+   */
+  static isAndroid(): boolean {
+    return RawBtPrinterService.getInstance().isAndroid();
+  }
+
+  /**
+   * Check if running on Apple iOS (Safari / WebKit)
+   */
+  static isIOS(): boolean {
+    if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+    return /iPhone|iPad|iPod/i.test(navigator.userAgent);
+  }
+
+  /**
+   * Check if Web Bluetooth API is supported (Chrome Android / Chromium Desktop)
+   */
+  static isWebBluetoothSupported(): boolean {
+    return WebBluetoothPrinterService.getInstance().isSupported();
+  }
+
+  /**
+   * Check if Web Bluetooth printer is connected
+   */
+  static isBluetoothConnected(): boolean {
+    return WebBluetoothPrinterService.getInstance().isConnected();
+  }
+
+  /**
+   * Get connected Bluetooth printer name
+   */
+  static getConnectedBluetoothDeviceName(): string | null {
+    return WebBluetoothPrinterService.getInstance().getConnectedDeviceName();
+  }
+
+  /**
+   * Scan & connect to nearby Bluetooth thermal printer via Web Bluetooth API
+   */
+  static async requestBluetoothDevice(): Promise<{ success: boolean; deviceName?: string; message: string }> {
+    return WebBluetoothPrinterService.getInstance().requestDevice();
+  }
+
+  /**
+   * Disconnect active Web Bluetooth session
+   */
+  static async disconnectBluetoothDevice(): Promise<void> {
+    return WebBluetoothPrinterService.getInstance().disconnect();
+  }
+
+  /**
+   * Send ESC/POS binary data directly to connected Web Bluetooth printer
+   */
+  static async printDirectBluetooth(bytes: number[] | Uint8Array): Promise<boolean> {
+    return WebBluetoothPrinterService.getInstance().print(bytes);
+  }
+
+  /**
+   * Send ESC/POS binary data to Android RawBT print service (WebSocket or Intent)
+   */
+  static async printDirectRawBt(bytes: number[] | Uint8Array): Promise<{ success: boolean; method: 'websocket' | 'intent'; message: string }> {
+    return RawBtPrinterService.getInstance().print(bytes);
+  }
+
+  /**
+   * Play Store URL for RawBT
+   */
+  static getRawBtPlayStoreUrl(): string {
+    return RawBtPrinterService.getInstance().getRawBtPlayStoreUrl();
   }
 
   private static serialPort: any = null;

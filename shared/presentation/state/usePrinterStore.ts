@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BluetoothPrinterService, BluetoothDevice } from '../../data/datasources/BluetoothPrinterService';
 import { PaperWidth, ReceiptData, EscPosBuilder } from '../../core/printer/EscPosBuilder';
+
+export type PrintChannel = 'auto' | 'web_bluetooth' | 'rawbt' | 'web_serial' | 'browser_spooler';
 import { logger } from '../../core/logging';
 
 const STORAGE_KEYS = {
@@ -10,6 +12,7 @@ const STORAGE_KEYS = {
   AUTO_PRINT_RECEIPT: '@menza_printer_auto_print_receipt',
   AUTO_PRINT_KOT: '@menza_printer_auto_print_kot',
   CUSTOM_FOOTER: '@menza_printer_custom_footer',
+  PRINT_CHANNEL: '@menza_printer_print_channel',
 };
 
 interface PrinterState {
@@ -25,6 +28,7 @@ interface PrinterState {
   autoPrintReceipt: boolean;
   autoPrintKot: boolean;
   customFooter: string;
+  printChannel: PrintChannel;
   isInitialized: boolean;
   lastErrorMessage: string | null;
 
@@ -40,6 +44,7 @@ interface PrinterState {
   setAutoPrintReceipt: (enabled: boolean) => Promise<void>;
   setAutoPrintKot: (enabled: boolean) => Promise<void>;
   setCustomFooter: (footer: string) => Promise<void>;
+  setPrintChannel: (channel: PrintChannel) => Promise<void>;
   ensureConnection: () => Promise<boolean>;
   printReceipt: (data: ReceiptData) => Promise<boolean>;
   printKot: (data: ReceiptData) => Promise<boolean>;
@@ -64,18 +69,20 @@ export const usePrinterStore = create<PrinterState>((set, get) => ({
   autoPrintReceipt: true,
   autoPrintKot: true,
   customFooter: 'Thank you! Please visit again.',
+  printChannel: 'auto',
   isInitialized: false,
   lastErrorMessage: null,
 
   init: async () => {
     try {
       // 1. Load preferences from AsyncStorage
-      const [savedDeviceRaw, paperWidthRaw, autoPrintRaw, autoKotRaw, footerRaw] = await Promise.all([
+      const [savedDeviceRaw, paperWidthRaw, autoPrintRaw, autoKotRaw, footerRaw, channelRaw] = await Promise.all([
         AsyncStorage.getItem(STORAGE_KEYS.SAVED_DEVICE),
         AsyncStorage.getItem(STORAGE_KEYS.PAPER_WIDTH),
         AsyncStorage.getItem(STORAGE_KEYS.AUTO_PRINT_RECEIPT),
         AsyncStorage.getItem(STORAGE_KEYS.AUTO_PRINT_KOT),
         AsyncStorage.getItem(STORAGE_KEYS.CUSTOM_FOOTER),
+        AsyncStorage.getItem(STORAGE_KEYS.PRINT_CHANNEL),
       ]);
 
       const savedDevice = savedDeviceRaw ? JSON.parse(savedDeviceRaw) : null;
@@ -83,6 +90,7 @@ export const usePrinterStore = create<PrinterState>((set, get) => ({
       const autoPrintReceipt = autoPrintRaw !== null ? autoPrintRaw === 'true' : true;
       const autoPrintKot = autoKotRaw !== null ? autoKotRaw === 'true' : true;
       const customFooter = footerRaw || 'Thank you! Please visit again.';
+      const printChannel = (channelRaw as PrintChannel) || 'auto';
 
       set({
         savedDevice,
@@ -90,6 +98,7 @@ export const usePrinterStore = create<PrinterState>((set, get) => ({
         autoPrintReceipt,
         autoPrintKot,
         customFooter,
+        printChannel,
         isInitialized: true,
       });
 
@@ -272,6 +281,11 @@ export const usePrinterStore = create<PrinterState>((set, get) => ({
   setAutoPrintKot: async (enabled: boolean) => {
     set({ autoPrintKot: enabled });
     await AsyncStorage.setItem(STORAGE_KEYS.AUTO_PRINT_KOT, String(enabled));
+  },
+
+  setPrintChannel: async (channel: PrintChannel) => {
+    set({ printChannel: channel });
+    await AsyncStorage.setItem(STORAGE_KEYS.PRINT_CHANNEL, channel);
   },
 
   setCustomFooter: async (footer: string) => {

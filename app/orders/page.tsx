@@ -793,11 +793,11 @@ export default function OrdersPage() {
                               <span>Qty</span>
                             </div>
                             {items.slice(0, 3).map((item, idx) => (
-                              <div key={idx} className="flex items-center justify-between text-xs">
-                                <span className="text-[#1E2930] dark:text-[#F3F4F6] truncate max-w-[190px]">
+                              <div key={idx} className="flex items-start justify-between gap-2 text-xs">
+                                <span className="text-[#1E2930] dark:text-[#F3F4F6] break-words flex-1 min-w-0">
                                   {item.itemName}
                                 </span>
-                                <span className="font-extrabold text-[#667085]">
+                                <span className="font-extrabold text-[#667085] shrink-0">
                                   {item.quantity}x
                                 </span>
                               </div>
@@ -1419,9 +1419,9 @@ export default function OrdersPage() {
 
                 <div className="py-2 border-t border-b border-dashed border-[#E7E1DA] dark:border-[#2B3540] space-y-1">
                   {(Array.isArray(receiptModalOrder.items) ? receiptModalOrder.items : []).map((it, idx) => (
-                    <div key={idx} className="flex justify-between text-[11px]">
-                      <span>{it.quantity}x {it.itemName}</span>
-                      <span>₹{it.totalPrice || (it.quantity * it.unitPrice)}</span>
+                    <div key={idx} className="flex justify-between items-start gap-2 text-[11px]">
+                      <span className="break-words flex-1 min-w-0">{it.quantity}x {it.itemName}</span>
+                      <span className="shrink-0">₹{it.totalPrice || (it.quantity * it.unitPrice)}</span>
                     </div>
                   ))}
                 </div>

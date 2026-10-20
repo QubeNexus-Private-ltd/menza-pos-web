@@ -73,8 +73,8 @@ export function QuickNumpadModal({
       >
         {/* Header */}
         <div className="flex items-start justify-between">
-          <div className="flex-1 pr-2">
-            <h3 className="text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6] truncate">
+          <div className="flex-1 pr-2 min-w-0">
+            <h3 className="text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6] break-words">
               {itemName}
             </h3>
             {description && (

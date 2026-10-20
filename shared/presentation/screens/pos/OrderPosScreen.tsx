@@ -1397,7 +1397,6 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
                           styles.dishCardName,
                           !isAvailable && styles.dishCardNameDisabled,
                         ]}
-                        numberOfLines={1}
                       >
                         {dish.itemName}
                       </Text>
@@ -1750,14 +1749,14 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
                         </View>
                       )}
                       <View style={{ flex: 1, marginLeft: 8 }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 5 }}>
                           <View
                             style={[
                               styles.dishVegDotSmall,
-                              { backgroundColor: item.isVeg ? '#17845A' : '#DC2626' },
+                              { backgroundColor: item.isVeg ? '#17845A' : '#DC2626', marginTop: 3 },
                             ]}
                           />
-                          <Text style={styles.cartDrawerItemName} numberOfLines={1}>
+                          <Text style={[styles.cartDrawerItemName, { flex: 1 }]}>
                             {item.itemName}
                           </Text>
                         </View>
@@ -2112,7 +2111,7 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
           <View style={styles.qtyModalCard}>
             <View style={styles.qtyModalHeader}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.qtyModalDishName} numberOfLines={1}>
+                <Text style={styles.qtyModalDishName}>
                   {qtyModalItem?.itemName}
                 </Text>
                 {Boolean(qtyModalItem?.description) && (

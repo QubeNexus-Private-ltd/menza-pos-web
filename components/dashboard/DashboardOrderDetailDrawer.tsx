@@ -391,13 +391,13 @@ export const DashboardOrderDetailDrawer: React.FC<DashboardOrderDetailDrawerProp
               {Array.isArray(order.items) && order.items.length > 0 ? (
                 order.items.map((it, idx) => (
                   <div key={idx} className="p-3 flex items-start justify-between gap-3 bg-white dark:bg-[#1B2127]">
-                    <div className="flex items-start gap-2.5">
+                    <div className="flex items-start gap-2.5 flex-1 min-w-0">
                       <span className="flex h-5 w-5 items-center justify-center rounded-md bg-[#DE8626]/10 text-[#DE8626] font-extrabold text-[11px] shrink-0">
                         {it.quantity}x
                       </span>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6] break-words">
                             {it.itemName}
                           </span>
                           {it.stationCode && (

@@ -1205,7 +1205,7 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
                           <View style={[styles.vegBadge, { borderColor: item.isVeg ? '#17845A' : '#DC2626' }]}>
                             <View style={[styles.vegInnerDot, { backgroundColor: item.isVeg ? '#17845A' : '#DC2626' }]} />
                           </View>
-                          <Text style={styles.dishName} numberOfLines={1}>
+                          <Text style={styles.dishName}>
                             {item.itemName}
                           </Text>
 
@@ -2482,7 +2482,7 @@ const styles = StyleSheet.create({
   },
   dishTitleRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 6,
   },
   vegBadge: {
@@ -2492,6 +2492,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 2,
+    marginTop: 3,
   },
   vegInnerDot: {
     width: 4,

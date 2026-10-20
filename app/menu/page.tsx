@@ -981,7 +981,7 @@ export default function MenuCatalogPage() {
                       {/* Main Details */}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <h4 className="font-bold text-sm text-[#1E2930] dark:text-[#F3F4F6] truncate">
+                          <h4 className="font-bold text-sm text-[#1E2930] dark:text-[#F3F4F6] break-words">
                             {item.itemName}
                           </h4>
                           {item.isSpicy && (

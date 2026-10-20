@@ -1451,12 +1451,12 @@ export default function PosPage() {
                 {(activeTableOrder.items || []).map((it: any, idx: number) => (
                   <div
                     key={idx}
-                    className="flex justify-between items-center text-xs py-1 px-2.5 rounded-xl bg-white/70 dark:bg-[#1B2127]/70 border border-[#E7E1DA]/60 dark:border-[#2B3540]/60"
+                    className="flex justify-between items-start gap-2 text-xs py-1 px-2.5 rounded-xl bg-white/70 dark:bg-[#1B2127]/70 border border-[#E7E1DA]/60 dark:border-[#2B3540]/60"
                   >
-                    <span className="font-semibold text-[#1E2930] dark:text-[#F3F4F6]">
+                    <span className="font-semibold text-[#1E2930] dark:text-[#F3F4F6] break-words flex-1 min-w-0">
                       {it.quantity}x {it.itemName}
                     </span>
-                    <span className="font-bold text-[#DE8626]">
+                    <span className="font-bold text-[#DE8626] shrink-0">
                       ₹{((it.unitPrice || it.amount || 0) * (it.quantity || 1)).toFixed(2)}
                     </span>
                   </div>
@@ -1527,7 +1527,7 @@ export default function PosPage() {
 
                     {/* Name & Portions / Modifiers */}
                     <div className="min-w-0 flex-1">
-                      <h4 className="font-extrabold text-xs sm:text-[13px] text-[#1E2930] dark:text-[#F3F4F6] leading-snug line-clamp-2">
+                      <h4 className="font-extrabold text-xs sm:text-[13px] text-[#1E2930] dark:text-[#F3F4F6] leading-snug break-words">
                         {item.itemName}
                       </h4>
                       <div className="flex items-center gap-1.5 text-[10px] text-[#667085] dark:text-[#94A3B8] mt-0.5 flex-wrap">
@@ -2388,7 +2388,7 @@ export default function PosPage() {
                           {/* Card Details */}
                           <div className="p-2.5 sm:p-3 flex-1 flex flex-col justify-between">
                             <div>
-                              <h4 className="text-xs sm:text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6] line-clamp-1 leading-snug">
+                              <h4 className="text-xs sm:text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6] leading-snug break-words">
                                 {dish.itemName}
                               </h4>
                               {Boolean(dish.description) && (
@@ -2706,9 +2706,9 @@ export default function PosPage() {
                   </div>
                   <div className="border-t border-b border-dashed border-gray-400 my-2 py-1 space-y-1">
                     {orderSuccessData.items.map((i: any, idx: number) => (
-                      <div key={idx} className="flex justify-between text-[11px]">
-                        <span>{i.quantity}x {i.itemName}</span>
-                        <span>₹{((i.price || i.unitPrice) * i.quantity).toFixed(2)}</span>
+                      <div key={idx} className="flex justify-between items-start gap-2 text-[11px]">
+                        <span className="break-words flex-1 min-w-0">{i.quantity}x {i.itemName}</span>
+                        <span className="shrink-0">₹{((i.price || i.unitPrice) * i.quantity).toFixed(2)}</span>
                       </div>
                     ))}
                   </div>

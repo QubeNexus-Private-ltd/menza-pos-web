@@ -182,7 +182,7 @@ export function DishCustomizationModal({
       <div className="w-full max-w-lg rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] shadow-2xl flex flex-col max-h-[90vh] overflow-hidden animate-in fade-in zoom-in-95 duration-150">
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-[#E7E1DA] dark:border-[#2B3540]">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 min-w-0 flex-1 pr-2">
             <div className="relative h-12 w-12 rounded-xl overflow-hidden shrink-0 border border-[#E7E1DA] dark:border-[#2B3540]">
               <DishImage
                 src={item.imageUrl}
@@ -192,18 +192,18 @@ export function DishCustomizationModal({
                 fallbackIconSize={20}
               />
             </div>
-            <div>
-              <div className="flex items-center gap-1.5">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-start gap-1.5">
                 <span
-                  className={`h-2.5 w-2.5 rounded-full ${
+                  className={`mt-1 h-2.5 w-2.5 rounded-full shrink-0 ${
                     item.isVeg ? 'bg-emerald-500' : 'bg-red-500'
                   }`}
                 />
-                <h3 className="text-base font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                <h3 className="text-base font-extrabold text-[#1E2930] dark:text-[#F3F4F6] break-words">
                   {item.itemName}
                 </h3>
               </div>
-              <p className="text-xs text-[#667085] dark:text-[#94A3B8]">
+              <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-0.5">
                 Base: ₹{item.price} • {item.categoryName || 'Dish'}
               </p>
             </div>

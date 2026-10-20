@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   MessageSquare,
@@ -22,6 +22,10 @@ import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 export default function WhatsAppSettingsPage() {
   const router = useRouter();
   const { activeRestaurant, user } = useAuthStore();
+
+  useEffect(() => {
+    router.replace('/settings');
+  }, [router]);
 
   const [testPhone, setTestPhone] = useState(user?.mobile || '');
   const [customerName, setCustomerName] = useState(user?.name || 'Valued Guest');

@@ -14,7 +14,6 @@ import {
   Building2,
   FileText,
   LogOut,
-  MessageSquare,
   ChefHat,
   Wallet,
   Globe,
@@ -158,12 +157,6 @@ export default function SettingsHubPage() {
       icon: Store,
       title: 'Restaurant Profile & Taxes',
       desc: 'Configure outlet name, address, GST rates, service charges, and store hours',
-    },
-    {
-      href: '/settings/whatsapp',
-      icon: MessageSquare,
-      title: 'WhatsApp Messaging & Alerts',
-      desc: 'Automated receipt dispatches, Gupshup templates, and custom customer chat previews',
     },
     {
       href: '/settings/printer',

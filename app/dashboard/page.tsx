@@ -25,7 +25,6 @@ import {
   ChefHat,
   CalendarDays,
   Wallet,
-  MessageSquare,
   ReceiptIndianRupee as Receipt,
   Search,
   Eye,
@@ -816,15 +815,15 @@ export default function DashboardPage() {
               </div>
 
               <div
-                onClick={() => router.push('/settings/whatsapp')}
+                onClick={() => router.push('/settings/printer')}
                 className="group cursor-pointer rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-5 shadow-sm hover:shadow-md hover:border-[#DE8626] transition-all"
               >
-                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-green-500/10 text-green-600 mb-3 group-hover:scale-105 transition-transform">
-                  <MessageSquare className="h-5 w-5" />
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-500/10 text-[#DE8626] mb-3 group-hover:scale-105 transition-transform">
+                  <Printer className="h-5 w-5" />
                 </div>
-                <h4 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">WhatsApp Alerts</h4>
+                <h4 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">Thermal Printer & KOT</h4>
                 <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-1">
-                  Customer receipt delivery, Gupshup templates, and test messaging
+                  Receipt roll dimensions, Bluetooth & USB drivers, and automated billing
                 </p>
               </div>
             </div>

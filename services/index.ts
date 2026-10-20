@@ -17,3 +17,5 @@ export * from './reservationService';
 export * from './whatsAppService';
 export * from './bankService';
 export * from './salesService';
+export * from './webBluetoothPrinterService';
+export * from './rawBtPrinterService';

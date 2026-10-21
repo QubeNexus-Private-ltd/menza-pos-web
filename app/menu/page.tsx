@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   UtensilsCrossed,
   Search,
@@ -29,6 +30,8 @@ import {
   ChevronLeft,
   ChevronRight,
   IndianRupee,
+  Store,
+  AlertCircle,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
@@ -46,6 +49,14 @@ import { MenuItem } from '@shared/domain/models/Item';
 import { Category } from '@shared/domain/models/Category';
 import { UnitMaster } from '@shared/domain/models/MasterData';
 import { usePosCatalogStore } from '@/stores/usePosCatalogStore';
+import { SuperAdminRemoteDataSource } from '@shared/data/datasources/SuperAdminRemoteDataSource';
+import { SuperAdminRepositoryImpl } from '@shared/data/repositories/SuperAdminRepositoryImpl';
+import { SalesService } from '@/services/salesService';
+import { extractUserRoles } from '@shared/core/auth/rolePermissions';
+import { isSuperAdminUser, isSalesPersonUser } from '@/lib/auth/permissions';
+import { SearchableStoreSelect, StoreOption } from '@/components/common/SearchableStoreSelect';
+
+const superAdminRepo = new SuperAdminRepositoryImpl(new SuperAdminRemoteDataSource());
 
 const catalogDataSource = new CatalogRemoteDataSource();
 const masterDataSource = new MasterDataRemoteDataSource();
@@ -70,9 +81,157 @@ interface ExtendedMenuItem extends MenuItem {
   isSpicy?: boolean;
 }
 
-export default function MenuCatalogPage() {
-  const { activeRestaurant, restaurants } = useAuthStore();
-  const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
+function MenuCatalogContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const rawUrlRestId = searchParams.get('restaurantId') || searchParams.get('restId');
+
+  const { user, activeRestaurant, restaurants, setActiveRestaurant } = useAuthStore();
+
+  const extractedRoles = extractUserRoles(user, activeRestaurant);
+  const isSuperAdmin =
+    extractedRoles.some((r) => r.includes('superadmin') || r.includes('super_admin')) ||
+    user?.roles?.some((r) =>
+      typeof r === 'string' &&
+      ['SUPERADMIN', 'SUPER_ADMIN', 'SUPERADMINONLY'].includes(r.toUpperCase().replace(/[^A-Z]/g, ''))
+    ) ||
+    (typeof user?.roles?.[0] === 'string' && user.roles[0].toLowerCase().includes('superadmin'));
+
+  const isSalesPerson =
+    isSalesPersonUser(user?.roles) ||
+    extractedRoles.some((r) => r.includes('sales') || r.includes('partner'));
+
+  // Stores available for selection in the Store Switcher dropdown
+  const [availableStores, setAvailableStores] = useState<StoreOption[]>([]);
+  const [loadingStores, setLoadingStores] = useState(false);
+  const [selectedRestId, setSelectedRestId] = useState<number>(() => {
+    if (rawUrlRestId && Number(rawUrlRestId) > 0) return Number(rawUrlRestId);
+    return activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
+  });
+  const [accessWarning, setAccessWarning] = useState<string | null>(null);
+
+  const effectiveRestId = useMemo(() => {
+    if (selectedRestId > 0) return selectedRestId;
+    return activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
+  }, [selectedRestId, activeRestaurant, restaurants]);
+
+  // Alias currentRestId to effectiveRestId so all existing code works with zero regressions
+  const currentRestId = effectiveRestId;
+
+  // Sync effectiveRestId to global active rest id so apiClient includes X-Restaurant-Id header
+  useEffect(() => {
+    if (effectiveRestId > 0) {
+      (globalThis as any).__MENZA_ACTIVE_REST_ID__ = effectiveRestId;
+    }
+  }, [effectiveRestId]);
+
+  // Load available stores based on user role (SuperAdmin: all stores, SalesManager: onboarded stores only)
+  useEffect(() => {
+    let isCancelled = false;
+
+    const fetchStores = async () => {
+      setAccessWarning(null);
+
+      if (isSuperAdmin) {
+        setLoadingStores(true);
+        try {
+          const res = await superAdminRepo.getAllRestaurants(undefined, undefined, undefined, undefined, 1, 300);
+          if (!isCancelled && res?.items) {
+            const list: StoreOption[] = res.items.map((s) => ({
+              id: s.restaurantId,
+              name: s.restaurantName,
+              city: s.city,
+              address: s.address,
+              isActive: s.isActive,
+            }));
+            setAvailableStores(list);
+
+            if (rawUrlRestId && Number(rawUrlRestId) > 0) {
+              const targetId = Number(rawUrlRestId);
+              setSelectedRestId(targetId);
+            } else if (list.length > 0 && selectedRestId <= 0) {
+              setSelectedRestId(list[0].id);
+            }
+          }
+        } catch (err) {
+          console.warn('Failed to load stores for SuperAdmin:', err);
+        } finally {
+          if (!isCancelled) setLoadingStores(false);
+        }
+      } else if (isSalesPerson) {
+        setLoadingStores(true);
+        try {
+          const salesPersonId = (user as any)?.salesPersonId || (user as any)?.id || (user as any)?.userId || 0;
+          const acquired = await SalesService.getMyRestaurants(salesPersonId);
+          if (!isCancelled) {
+            const list: StoreOption[] = acquired.map((s) => ({
+              id: s.restaurantId,
+              name: s.restaurantName,
+              city: s.city,
+              address: s.state,
+              isActive: s.isActive,
+            }));
+            setAvailableStores(list);
+
+            if (rawUrlRestId && Number(rawUrlRestId) > 0) {
+              const targetId = Number(rawUrlRestId);
+              const isAllowed = list.some((s) => s.id === targetId);
+              if (isAllowed) {
+                setSelectedRestId(targetId);
+              } else {
+                setAccessWarning(`Access restricted: Restaurant #${targetId} was not onboarded by your partner account. Showing your onboarded outlet instead.`);
+                if (list.length > 0) {
+                  setSelectedRestId(list[0].id);
+                }
+              }
+            } else if (list.length > 0 && selectedRestId <= 0) {
+              setSelectedRestId(list[0].id);
+            }
+          }
+        } catch (err) {
+          console.warn('Failed to load onboarded stores for SalesManager:', err);
+        } finally {
+          if (!isCancelled) setLoadingStores(false);
+        }
+      } else if (restaurants && restaurants.length > 1) {
+        const list: StoreOption[] = restaurants.map((s) => ({
+          id: s.restaurantId,
+          name: s.restaurantName,
+          city: s.city,
+          address: s.address,
+          isActive: s.isActive,
+        }));
+        setAvailableStores(list);
+      }
+    };
+
+    fetchStores();
+    return () => {
+      isCancelled = true;
+    };
+  }, [isSuperAdmin, isSalesPerson, rawUrlRestId, (user as any)?.salesPersonId, (user as any)?.id, (user as any)?.userId]);
+
+  const handleStoreChange = (newRestId: number) => {
+    setSelectedRestId(newRestId);
+    setAccessWarning(null);
+    (globalThis as any).__MENZA_ACTIVE_REST_ID__ = newRestId;
+    const matched = restaurants.find((r) => r.restaurantId === newRestId);
+    if (matched) {
+      setActiveRestaurant(matched);
+    }
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      url.searchParams.set('restaurantId', String(newRestId));
+      window.history.replaceState(null, '', url.toString());
+    }
+  };
+
+  const currentStoreName = useMemo(() => {
+    const found = availableStores.find((s) => s.id === effectiveRestId);
+    if (found) return found.name;
+    if (activeRestaurant?.restaurantId === effectiveRestId) return activeRestaurant.restaurantName;
+    return `Outlet #${effectiveRestId}`;
+  }, [availableStores, effectiveRestId, activeRestaurant]);
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [items, setItems] = useState<ExtendedMenuItem[]>([]);
@@ -618,6 +777,88 @@ export default function MenuCatalogPage() {
     <AuthGuard>
       <AppShell>
         <div className="p-4 sm:p-6 lg:p-8 space-y-6 max-w-7xl mx-auto">
+          {/* Outlet Switcher Banner for SuperAdmin, SalesManager, Multi-Outlet Owners */}
+          {(isSuperAdmin || isSalesPerson || availableStores.length > 1) && (
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border border-[#DE8626]/30 bg-gradient-to-r from-amber-500/10 via-[#FAF7F2] to-amber-500/5 dark:from-amber-950/20 dark:via-[#1B2127] dark:to-transparent p-3.5 sm:p-4 shadow-sm">
+              <div className="flex items-center gap-3">
+                <div className="h-9 w-9 rounded-xl bg-[#DE8626]/20 text-[#DE8626] flex items-center justify-center shrink-0">
+                  <Store className="h-5 w-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-[#DE8626]">
+                      {isSuperAdmin
+                        ? 'SuperAdmin Platform Scope (All Outlets)'
+                        : isSalesPerson
+                        ? 'Partner Scope (Onboarded Outlets Only)'
+                        : 'Switch Outlet'}
+                    </span>
+                    {loadingStores && (
+                      <span className="text-[10px] text-[#667085] animate-pulse">Loading outlets...</span>
+                    )}
+                  </div>
+                  <p className="text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                    {isSuperAdmin
+                      ? 'Managing full catalog across all restaurants'
+                      : isSalesPerson
+                      ? 'Managing menu catalog for your onboarded outlet'
+                      : 'Managing menu for active outlet'}
+                  </p>
+                </div>
+              </div>
+
+                            <div className="w-full sm:w-auto min-w-[260px] sm:min-w-[340px]">
+                <SearchableStoreSelect
+                  stores={availableStores}
+                  value={effectiveRestId}
+                  onChange={handleStoreChange}
+                  disabled={loadingStores || availableStores.length === 0}
+                  placeholder="Type words to search outlet..."
+                  scopeLabel={
+                    isSuperAdmin
+                      ? 'Platform Outlet'
+                      : isSalesPerson
+                      ? 'Onboarded Outlet'
+                      : 'Switch Outlet'
+                  }
+                  className="w-full"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Access Warning (if non-onboarded restaurant attempted by SalesManager) */}
+          {accessWarning && (
+            <div className="rounded-2xl border border-amber-500/40 bg-amber-500/15 p-3.5 flex items-start gap-3 text-xs text-amber-800 dark:text-amber-300 font-bold shadow-xs">
+              <AlertCircle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+              <div className="space-y-0.5">
+                <p className="font-black">Access Notification</p>
+                <p className="font-medium text-amber-700 dark:text-amber-400">{accessWarning}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Empty State for SalesManager with 0 onboarded stores */}
+          {isSalesPerson && availableStores.length === 0 && !loadingStores && (
+            <div className="rounded-3xl border border-dashed border-[#DE8626]/40 bg-amber-500/5 p-8 text-center space-y-3">
+              <Store className="h-10 w-10 text-[#DE8626] mx-auto opacity-70" />
+              <h3 className="text-base font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                No Onboarded Outlets Yet
+              </h3>
+              <p className="text-xs text-[#667085] dark:text-[#94A3B8] max-w-md mx-auto">
+                As a Sales Partner / Manager, you can create and manage menu catalogs for restaurants that you onboard. Onboard your first restaurant to get started.
+              </p>
+              <button
+                type="button"
+                onClick={() => router.push('/superadmin/onboard')}
+                className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-700 px-4 py-2 text-xs font-black text-white shadow-md shadow-emerald-600/20 hover:opacity-95 transition-opacity"
+              >
+                <Plus className="h-4 w-4" />
+                <span>Onboard New Restaurant</span>
+              </button>
+            </div>
+          )}
+
           {/* Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
@@ -630,7 +871,7 @@ export default function MenuCatalogPage() {
                     Menu & Catalog
                   </h1>
                   <p className="text-xs sm:text-sm text-[#667085] dark:text-[#94A3B8]">
-                    {activeRestaurant?.restaurantName || 'Menza Bistro'} • {items.length} Dishes
+                    {currentStoreName} • {items.length} Dishes
                   </p>
                 </div>
               </div>
@@ -2053,5 +2294,19 @@ export default function MenuCatalogPage() {
         )}
       </AppShell>
     </AuthGuard>
+  );
+}
+
+export default function MenuCatalogPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex h-screen items-center justify-center bg-[#FAF7F2] dark:bg-[#111418]">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#DE8626]" />
+        </div>
+      }
+    >
+      <MenuCatalogContent />
+    </Suspense>
   );
 }

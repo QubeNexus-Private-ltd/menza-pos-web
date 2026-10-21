@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
+  Search,
   LayoutDashboard,
   ShoppingBag,
   UtensilsCrossed,
@@ -115,6 +116,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [outletMenuOpen, setOutletMenuOpen] = useState(false);
+  const [outletSearch, setOutletSearch] = useState('');
   const [notifDrawerOpen, setNotifDrawerOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [shiftModalOpen, setShiftModalOpen] = useState(false);
@@ -127,6 +129,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   const getPageSubtitle = () => {
+    if (pathname === '/menu') return isSuperAdmin ? 'Platform Menu Catalog Management' : isSalesPerson ? 'Partner Store Menu Management' : 'Menu Catalog • Live Items';
     if (isSuperAdmin) return 'SuperAdmin Platform Governance';
     if (isSalesPerson) return 'Sales Partner Portal';
     if (pathname === '/pos') return 'POS Terminal • Quick Billing';
@@ -192,6 +195,20 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
     : typeof user?.roles?.[0] === 'string'
     ? user.roles[0]
     : extractedRoles[0] || 'Owner';
+
+  const filteredRestaurants = useMemo(() => {
+    if (!outletSearch.trim()) return restaurants;
+    const terms = outletSearch.toLowerCase().trim().split(/\s+/).filter(Boolean);
+    return restaurants.filter((r) => {
+      const name = (r.restaurantName || '').toLowerCase();
+      const city = (r.city || '').toLowerCase();
+      const address = (r.address || '').toLowerCase();
+      const idStr = String(r.restaurantId);
+      return terms.every(
+        (term) => name.includes(term) || city.includes(term) || address.includes(term) || idStr.includes(term.replace('#', ''))
+      );
+    });
+  }, [restaurants, outletSearch]);
 
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
@@ -373,6 +390,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
     ? [
         { href: '/dashboard', label: 'Overview', icon: LayoutDashboard },
         { href: '/superadmin/directory', label: 'Outlets', icon: Building2 },
+        { href: '/menu', label: 'Menu Catalog', icon: UtensilsCrossed },
         { href: '/superadmin/sales', label: 'Sales Partners', icon: Users },
         { href: '/superadmin/onboard', label: 'Onboard Store', icon: Store },
         { href: '/superadmin/plans', label: 'Plans & Pricing', icon: Crown },
@@ -382,6 +400,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
     ? [
         { href: '/sales/earnings', label: 'My Earnings', icon: Wallet },
         { href: '/sales/restaurants', label: 'My Stores', icon: Store },
+        { href: '/menu', label: 'Menu Catalog', icon: UtensilsCrossed },
         { href: '/superadmin/onboard', label: 'Onboard Store', icon: Building2 },
       ]
     : [
@@ -660,8 +679,37 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                             Live
                           </span>
                         </div>
+
+                        {/* Search Input for Outlets */}
+                        {restaurants.length > 3 && (
+                          <div className="relative my-1 px-1">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#667085] pointer-events-none" />
+                            <input
+                              type="text"
+                              value={outletSearch}
+                              onChange={(e) => setOutletSearch(e.target.value)}
+                              placeholder="Type to search outlet..."
+                              className="w-full h-8 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] pl-8 pr-7 text-xs font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
+                            />
+                            {outletSearch && (
+                              <button
+                                type="button"
+                                onClick={() => setOutletSearch('')}
+                                className="absolute right-3 top-1/2 -translate-y-1/2 text-[#667085] hover:text-[#1E2930] p-0.5"
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            )}
+                          </div>
+                        )}
+
                         <div className="max-h-60 overflow-y-auto space-y-1">
-                          {restaurants.map((r) => {
+                          {filteredRestaurants.length === 0 ? (
+                            <div className="py-4 text-center text-xs text-[#667085]">
+                              No outlets matching &quot;{outletSearch}&quot;
+                            </div>
+                          ) : (
+                            filteredRestaurants.map((r: any) => {
                             const isSelected = r.restaurantId === activeRestaurant?.restaurantId;
                             return (
                               <button
@@ -680,7 +728,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                                 {isSelected && <Check className="h-4 w-4 shrink-0 text-[#DE8626]" />}
                               </button>
                             );
-                          })}
+                          }))}
                         </div>
                       </div>
                     )}

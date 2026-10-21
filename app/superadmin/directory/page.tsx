@@ -20,6 +20,7 @@ import {
   MapPin,
   ChevronDown,
   Sparkles,
+  UtensilsCrossed,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
@@ -775,6 +776,16 @@ export default function SuperAdminDirectoryPage() {
 
                           <td className="py-4 px-4 text-right">
                             <div className="flex items-center justify-end gap-2">
+                              {/* Manage Menu */}
+                              <button
+                                onClick={() => router.push(`/menu?restaurantId=${store.restaurantId}`)}
+                                title="Manage Menu Catalog for this outlet"
+                                className="inline-flex items-center gap-1 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-bold text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+                              >
+                                <UtensilsCrossed className="h-3 w-3" />
+                                <span>Menu</span>
+                              </button>
+
                               {/* Edit Config & Images */}
                               <button
                                 onClick={() => handleOpenEditConfigModal(store)}

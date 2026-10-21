@@ -33,13 +33,13 @@ export function isSalesPersonUser(roles?: any[]): boolean {
     if (typeof r === 'number') return r === 8;
     if (typeof r === 'string') {
       const norm = normalizeRole(r);
-      return norm === 'SALESPERSON' || norm === 'SALES' || norm === 'SALESPARTNER' || norm === 'PARTNER';
+      return norm === 'SALESPERSON' || norm === 'SALES' || norm === 'SALESPARTNER' || norm === 'PARTNER' || norm === 'SALESMANAGER';
     }
     if (typeof r === 'object' && r !== null) {
       const name = (r as any).roleName || (r as any).name || (r as any).role;
       if (typeof name === 'string') {
         const norm = normalizeRole(name);
-        return norm === 'SALESPERSON' || norm === 'SALES' || norm === 'SALESPARTNER' || norm === 'PARTNER';
+        return norm === 'SALESPERSON' || norm === 'SALES' || norm === 'SALESPARTNER' || norm === 'PARTNER' || norm === 'SALESMANAGER';
       }
       if ((r as any).roleId === 8 || (r as any).id === 8) return true;
     }

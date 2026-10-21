@@ -18,6 +18,7 @@ import {
   AlertTriangle,
   Building2,
   Calendar,
+  UtensilsCrossed,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
@@ -216,6 +217,7 @@ export default function SalesRestaurantsPage() {
                       <th className="py-3.5 px-4">Orders Processed</th>
                       <th className="py-3.5 px-4">Commission Earned</th>
                       <th className="py-3.5 px-4">Status</th>
+                      <th className="py-3.5 px-4 text-right">Menu Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[#E7E1DA]/60 dark:divide-[#2B3540]/60">
@@ -304,6 +306,19 @@ export default function SalesRestaurantsPage() {
                             <span className={`h-1.5 w-1.5 rounded-full ${store.isActive ? 'bg-emerald-500' : 'bg-red-500'}`} />
                             <span>{store.isActive ? 'Active' : 'Inactive'}</span>
                           </span>
+                        </td>
+
+                        {/* Manage Menu Action */}
+                        <td className="py-4 px-4 text-right">
+                          <button
+                            type="button"
+                            onClick={() => router.push(`/menu?restaurantId=${store.restaurantId}`)}
+                            title="Manage Menu Catalog for this outlet"
+                            className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1.5 text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/20 transition-colors shadow-xs"
+                          >
+                            <UtensilsCrossed className="h-3.5 w-3.5" />
+                            <span>Manage Menu</span>
+                          </button>
                         </td>
                       </tr>
                     ))}

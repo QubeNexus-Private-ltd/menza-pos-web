@@ -16,9 +16,11 @@ export class WebMenuService {
     }
   }
 
-  static async deleteCategory(id: number): Promise<boolean> {
+  static async deleteCategory(id: number, restaurantId?: number): Promise<boolean> {
     try {
-      const response = await apiClient.delete(`/CategoryMaster/${id}`);
+      const response = await apiClient.delete(`/CategoryMaster/${id}`, {
+        params: restaurantId ? { restaurantId } : undefined,
+      });
       return response.status === 200;
     } catch {
       return false;

@@ -6,6 +6,7 @@ import {
   Store,
   ArrowLeft,
   Save,
+  CreditCard,
   Check,
   Clock,
   Percent,
@@ -105,6 +106,7 @@ export default function RestaurantConfigPage() {
   const [sgstRate, setSgstRate] = useState('2.5');
   const [serviceChargeRate, setServiceChargeRate] = useState('0');
   const [isOpen, setIsOpen] = useState(true);
+  const [dineInPaymentMode, setDineInPaymentMode] = useState<'PREPAID' | 'POSTPAID'>('PREPAID');
 
   // States & Modals
   const [states, setStates] = useState<StateMaster[]>(FULL_STATE_MASTER_LIST);
@@ -173,6 +175,7 @@ export default function RestaurantConfigPage() {
         setGstNumber(c.gstNumber || '');
         setCgstRate(String(c.cgstPercentage ?? 2.5));
         setSgstRate(String(c.sgstPercentage ?? 2.5));
+        setDineInPaymentMode((c.dineInPaymentMode as any) || 'PREPAID');
       }
       if (op.status === 'fulfilled' && op.value) {
         setIsOpen(op.value.isOpen);
@@ -559,6 +562,93 @@ export default function RestaurantConfigPage() {
                     }`}
                   />
                 </button>
+              </div>
+            </div>
+
+            {/* Table QR Ordering & Billing Mode Card */}
+            <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-5 shadow-sm space-y-4">
+              <div>
+                <h3 className="text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6] flex items-center gap-2">
+                  <CreditCard className="h-4 w-4 text-[#DE8626]" />
+                  <span>Table QR Ordering & Billing Mode</span>
+                </h3>
+                <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-0.5">
+                  Choose whether in-store table diners must pay upfront online before food prep or pay their consolidated bill at checkout.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                {/* PREPAID OPTION (DEFAULT) */}
+                <div
+                  onClick={() => setDineInPaymentMode('PREPAID')}
+                  className={`cursor-pointer rounded-xl border p-4 transition-all relative ${
+                    dineInPaymentMode === 'PREPAID'
+                      ? 'border-emerald-500 bg-emerald-50/40 dark:bg-emerald-950/20 ring-1 ring-emerald-500'
+                      : 'border-[#E7E1DA] dark:border-[#2B3540] hover:border-emerald-400/50'
+                  }`}
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-start gap-3">
+                      <div className="h-8 w-8 rounded-lg bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 flex items-center justify-center font-bold shrink-0 mt-0.5">
+                        ⚡
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                            Prepaid (Pay & Order)
+                          </span>
+                          <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-300">
+                            Default / Recommended
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] mt-1 leading-relaxed">
+                          Customers pay online (UPI / Cards) upfront. Auto-fires to KDS. Eliminates unpaid bills and ghost orders 100%.
+                        </p>
+                      </div>
+                    </div>
+                    <div className={`h-4 w-4 rounded-full border flex items-center justify-center shrink-0 mt-0.5 ${
+                      dineInPaymentMode === 'PREPAID' ? 'border-emerald-600 bg-emerald-600' : 'border-[#94A3B8]'
+                    }`}>
+                      {dineInPaymentMode === 'PREPAID' && <div className="h-1.5 w-1.5 rounded-full bg-white" />}
+                    </div>
+                  </div>
+                </div>
+
+                {/* POSTPAID OPTION */}
+                <div
+                  onClick={() => setDineInPaymentMode('POSTPAID')}
+                  className={`cursor-pointer rounded-xl border p-4 transition-all relative ${
+                    dineInPaymentMode === 'POSTPAID'
+                      ? 'border-[#DE8626] bg-amber-50/40 dark:bg-amber-950/20 ring-1 ring-[#DE8626]'
+                      : 'border-[#E7E1DA] dark:border-[#2B3540] hover:border-amber-400/50'
+                  }`}
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-start gap-3">
+                      <div className="h-8 w-8 rounded-lg bg-amber-100 dark:bg-amber-900/40 text-[#DE8626] flex items-center justify-center font-bold shrink-0 mt-0.5">
+                        🍽️
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                            Postpaid (Pay Later)
+                          </span>
+                          <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-300">
+                            Multi-Round KOT
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] mt-1 leading-relaxed">
+                          Diners order to a table tab. Cashier confirms & fires KOT. Multi-round KOT enabled. Settle consolidated bill at the counter.
+                        </p>
+                      </div>
+                    </div>
+                    <div className={`h-4 w-4 rounded-full border flex items-center justify-center shrink-0 mt-0.5 ${
+                      dineInPaymentMode === 'POSTPAID' ? 'border-[#DE8626] bg-[#DE8626]' : 'border-[#94A3B8]'
+                    }`}>
+                      {dineInPaymentMode === 'POSTPAID' && <div className="h-1.5 w-1.5 rounded-full bg-white" />}
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
 

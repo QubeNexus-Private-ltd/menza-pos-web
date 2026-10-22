@@ -25,16 +25,16 @@ export function TableQrModal({
   const [qrData, setQrData] = useState<TableQrResponseDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
-  const [timeLeft, setTimeLeft] = useState<number>(300); // 5 mins in seconds
+  const [timeLeft, setTimeLeft] = useState<number>(900); // 15 mins in seconds
 
   const loadQr = useCallback(async () => {
     if (!tableId) return;
     setLoading(true);
     try {
       if (mode === 'rolling') {
-        const data = await WebTableQrService.getRollingTableQr(tableId, 5);
+        const data = await WebTableQrService.getRollingTableQr(tableId, 15);
         setQrData(data);
-        setTimeLeft(data?.ttlSeconds ?? 300);
+        setTimeLeft(data?.ttlSeconds ?? 900);
       } else {
         const data = await WebTableQrService.getTableQr(tableId, restaurantId);
         setQrData(data);
@@ -131,7 +131,7 @@ export function TableQrModal({
             }`}
           >
             <Clock className="h-3.5 w-3.5" />
-            <span>Dynamic (5m TTL)</span>
+            <span>Dynamic (15m TTL)</span>
           </button>
           <button
             type="button"
@@ -170,7 +170,7 @@ export function TableQrModal({
           </div>
         ) : (
           <div className="rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 px-3 py-2 text-[11px] text-emerald-800 dark:text-emerald-300">
-            📌 <strong>Physical Sticker QR:</strong> Valid for a few minutes upon initial guest scan; automatically stays active once order is placed until the bill is settled or cancelled.
+            📌 <strong>Physical Sticker QR:</strong> Valid for 15 minutes upon initial guest scan; automatically stays active once order is confirmed until the bill is settled or cancelled.
           </div>
         )}
 

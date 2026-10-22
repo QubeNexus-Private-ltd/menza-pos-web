@@ -23,6 +23,7 @@ export interface RestaurantConfig {
   walletBalance?: number;
   isActive?: boolean;
   businessProfile?: 'QSR_CAFE' | 'DINE_IN' | 'HYBRID';
+  dineInPaymentMode?: 'PREPAID' | 'POSTPAID';
   orderingMode?: 'SCHEDULE' | 'MANUAL';
   isAcceptingOrdersManual?: boolean;
   manualPauseUntilUtc?: string | null;

@@ -66,6 +66,7 @@ export class RestaurantConfigRemoteDataSource {
         bankerIfscCode: item.bankerIfscCode || item.BankerIfscCode || undefined,
         bankerBankName: item.bankerBankName || item.BankerBankName || undefined,
         businessProfile: (item.businessProfile || item.BusinessProfile || 'HYBRID') as any,
+        dineInPaymentMode: (item.dineInPaymentMode || item.DineInPaymentMode || 'PREPAID') as any,
         kitchenMode: (item.kitchenMode || item.KitchenMode || 'SINGLE_KITCHEN') as any,
         isKitchenActive: Boolean(item.isKitchenActive ?? item.IsKitchenActive ?? true),
         kitchenPausedUntilUtc: item.kitchenPausedUntilUtc ?? item.KitchenPausedUntilUtc ?? null,
@@ -95,6 +96,7 @@ export class RestaurantConfigRemoteDataSource {
         bankerAccountHolderName: (activeRest as any)?.bankerAccountHolderName || activeRest?.restaurantName || undefined,
         printUpiQrOnReceipts: (activeRest as any)?.printUpiQrOnReceipts ?? true,
         businessProfile: 'HYBRID',
+        dineInPaymentMode: 'PREPAID',
         kitchenMode: 'SINGLE_KITCHEN',
         isKitchenActive: true,
         isActive: true,
@@ -119,6 +121,7 @@ export class RestaurantConfigRemoteDataSource {
         cgstPercentage: typeof config.cgstPercentage === 'number' ? config.cgstPercentage : 2.5,
         kitchenMode: config.kitchenMode || 'SINGLE_KITCHEN',
         isKitchenActive: config.isKitchenActive !== undefined ? config.isKitchenActive : true,
+        dineInPaymentMode: config.dineInPaymentMode || 'PREPAID',
       };
 
       const response = await apiClient.put(`/RestaurantConfig/${targetId}`, payload, {

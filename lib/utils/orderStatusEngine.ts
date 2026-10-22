@@ -207,9 +207,9 @@ export function getNextRecommendedStatus(
 
     case OrderStatuses.Placed:
       return {
-        nextStatus: OrderStatuses.Preparing,
-        actionLabel: 'Send to Kitchen (Cook)',
-        buttonColor: 'bg-amber-600 hover:bg-amber-700 text-white',
+        nextStatus: OrderStatuses.Confirmed,
+        actionLabel: 'Confirm Order & Fire KOT',
+        buttonColor: 'bg-emerald-600 hover:bg-emerald-700 text-white',
       };
 
     case OrderStatuses.Confirmed:

@@ -64,6 +64,15 @@ const nextConfig = {
       },
     ],
   },
+  async redirects() {
+    return [
+      {
+        source: '/dinein/:path*',
+        destination: 'https://lemon-mud-097d55a00.7.azurestaticapps.net/dinein/:path*',
+        permanent: false,
+      },
+    ];
+  },
 };
 
 import { withAxiom } from 'next-axiom';

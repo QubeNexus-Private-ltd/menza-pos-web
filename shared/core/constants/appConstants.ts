@@ -1,5 +1,12 @@
 const DEFAULT_API_BASE_URL =
-  'https://restadmin20260810182511-b7gaaqbfesdxa3cu.centralindia-01.azurewebsites.net/api';
+  'https://menzaposapi20260927220419-efbdafa3buaccge8.centralindia-01.azurewebsites.net/api';
+
+function normalizeApiBaseUrl(raw?: string): string {
+  const url = (raw || '').trim();
+  if (!url) return DEFAULT_API_BASE_URL;
+  const stripped = url.replace(/\/+$/, '');
+  return stripped.endsWith('/api') ? stripped : stripped + '/api';
+}
 const DEFAULT_CUSTOMER_ORDERING_BASE_URL =
   'https://lemon-mud-097d55a00.7.azurestaticapps.net';
 
@@ -11,11 +18,12 @@ export const APP_CONSTANTS = {
     'Menza',
   APP_TAGLINE: 'Smart Multi-Tenant Restaurant Suite',
   // Live Azure Web API Endpoint (Configurable via .env, Vercel & EAS)
-  API_BASE_URL:
+  API_BASE_URL: normalizeApiBaseUrl(
     process.env.NEXT_PUBLIC_API_BASE_URL ||
+    process.env.NEXT_PUBLIC_API_URL ||
     process.env.EXPO_PUBLIC_API_BASE_URL ||
-    process.env.API_BASE_URL ||
-    DEFAULT_API_BASE_URL,
+    process.env.API_BASE_URL
+  ),
   // Configurable Customer QR Ordering Web App URL
   CUSTOMER_ORDERING_BASE_URL:
     process.env.NEXT_PUBLIC_CUSTOMER_ORDERING_BASE_URL ||
@@ -77,3 +85,6 @@ export const APP_CONSTANTS = {
     },
   ]
 };
+
+
+

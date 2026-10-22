@@ -1,7 +1,7 @@
 import axios, { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
 import { APP_CONSTANTS } from '@/lib/constants';
 
-const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+const baseURL = APP_CONSTANTS.API_BASE_URL;
 
 export const apiClient: AxiosInstance = axios.create({
   baseURL,

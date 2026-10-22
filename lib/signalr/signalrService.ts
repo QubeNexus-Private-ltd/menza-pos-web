@@ -1,4 +1,5 @@
 import * as signalR from '@microsoft/signalr';
+import { APP_CONSTANTS } from '@/lib/constants';
 
 let connection: signalR.HubConnection | null = null;
 let currentConnectedRestId: number | null = null;
@@ -12,7 +13,7 @@ const kitchenStatusListeners = new Set<(status: any) => void>();
 const walletBalanceListeners = new Set<(balance: any) => void>();
 
 function getHubUrl(restaurantId: number): string {
-  const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+  const apiBase = APP_CONSTANTS.API_BASE_URL;
   // Strip trailing /api or /api/
   const hostBase = apiBase.replace(/\/api\/?$/, '');
   return `${hostBase}/orderNotificationHub?restaurantId=${restaurantId}`;
@@ -180,3 +181,4 @@ export function onWalletBalanceChanged(callback: (balance: any) => void): () => 
   walletBalanceListeners.add(callback);
   return () => walletBalanceListeners.delete(callback);
 }
+

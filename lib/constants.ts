@@ -1,8 +1,22 @@
+function normalizeApiUrl(rawUrl?: string): string {
+  const fallback = 'https://menzaposapi20260927220419-efbdafa3buaccge8.centralindia-01.azurewebsites.net/api';
+  const url = (rawUrl || '').trim();
+  if (!url) return fallback;
+  const stripped = url.replace(/\/+$/, '');
+  return stripped.endsWith('/api') ? stripped : `${stripped}/api`;
+}
+
+const resolvedApiUrl = normalizeApiUrl(
+  process.env.NEXT_PUBLIC_API_URL ||
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  process.env.API_BASE_URL
+);
+
 export const APP_CONSTANTS = {
   APP_NAME: 'Menza Web POS',
   VERSION: '1.0.0',
-  DEFAULT_API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api',
-  API_BASE_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api',
+  DEFAULT_API_URL: resolvedApiUrl,
+  API_BASE_URL: resolvedApiUrl,
   STORAGE_KEYS: {
     AUTH_TOKEN: 'menza_auth_token',
     REFRESH_TOKEN: 'menza_refresh_token',

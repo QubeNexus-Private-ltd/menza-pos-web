@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Menza — One connected ecosystem for restaurant operations</title>
+<meta name="description" content="Menza connects billing, service and the kitchen. Menza POS, MenzaServe and Menza KDS help restaurants simplify daily operations. Book a demo.">
+<meta property="og:title" content="Menza — Smart Restaurant Management Ecosystem">
+<meta property="og:description" content="One connected ecosystem. Better restaurant operations.">
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;700;800&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{color-scheme:dark;--bk:#0e0d0c;--or:#E8892B;--or2:#F5B25E;--tx:#f5efe6;--mu:#b3a898;--ln:rgba(245,239,230,.16);
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+*{box-sizing:border-box;margin:0}
+html{scroll-padding-top:env(safe-area-inset-top,0px);scroll-behavior:smooth}
+body{background:var(--bk);color:var(--tx);font:400 18px/1.7 Inter,system-ui,sans-serif;overflow-x:hidden}
+h1,h2,.wm{font-family:Outfit,system-ui,sans-serif;line-height:1.02;letter-spacing:-.03em}
+a{color:inherit}:focus-visible{outline:3px solid var(--or2);outline-offset:4px}
+#c{position:fixed;inset:0;width:100%;height:100%;z-index:0;background:radial-gradient(70% 60% at 65% 45%,#2a1b0e,var(--bk))}
+main,header,footer{position:relative;z-index:1}
+header{position:fixed;top:0;left:0;right:0;z-index:5;display:flex;align-items:center;justify-content:space-between;padding:calc(16px + env(safe-area-inset-top,0px)) 5vw 16px;transition:padding .3s}
+header::before{content:"";position:absolute;inset:0;z-index:-1;background:rgba(14,13,12,.84);backdrop-filter:blur(14px);border-bottom:1px solid var(--ln);opacity:0;transition:opacity .3s}
+header.sc::before,header.open::before{opacity:1}
+#pg{position:absolute;left:0;bottom:-1px;height:2px;width:0;background:var(--or)}
+.wm{position:relative;z-index:2;font-weight:800;font-size:25px;text-decoration:none;display:flex;align-items:center;gap:9px}
+.wm svg{width:26px;height:26px}
+nav{display:flex;gap:32px;align-items:center;font-size:15px}
+nav a{text-decoration:none;color:var(--mu);transition:color .2s;position:relative}nav a:not(.btn)::after{content:"";position:absolute;left:0;right:0;bottom:-6px;height:2px;background:var(--or);transform:scaleX(0);transition:transform .25s}nav a:not(.btn):hover::after,nav a.on::after{transform:scaleX(1)}nav a:hover,nav a.on{color:var(--tx)}
+.menu{display:none;position:relative;z-index:2;background:none;border:0;width:44px;height:44px;cursor:pointer;color:var(--tx)}
+.menu i,.menu i::before{display:block;width:24px;height:2px;background:currentColor;margin:auto;position:relative;transition:transform .25s}.menu i::before{content:"";position:absolute;top:7px;left:0}
+header.open .menu i{transform:translateY(3px) rotate(45deg)}header.open .menu i::before{transform:translateY(-7px) rotate(-90deg)}
+.btn{position:relative;overflow:hidden;display:inline-block;background:var(--or);color:#140d05;font:700 15px Outfit,sans-serif;padding:14px 26px;border-radius:99px;text-decoration:none;border:0;cursor:pointer;transform:translate(var(--mx,0px),var(--my,0px));transition:transform .25s cubic-bezier(.2,.8,.2,1),background .2s,box-shadow .3s}
+.btn::after{content:"";position:absolute;top:0;left:-120%;width:55%;height:100%;background:linear-gradient(100deg,transparent,rgba(255,255,255,.55),transparent);transform:skewX(-20deg);transition:left .7s}.btn:hover::after{left:150%}
+.hero .btn:not(.ghost){animation:pu 2.6s infinite}@keyframes pu{0%{box-shadow:0 0 0 0 rgba(232,137,43,.55)}70%,100%{box-shadow:0 0 0 18px rgba(232,137,43,0)}}
+.trk{position:fixed;right:2.2vw;top:50%;transform:translateY(-50%);z-index:3;list-style:none;padding:0;display:grid;gap:18px;font:600 12px Outfit;color:#6a6055}
+.trk li{display:flex;align-items:center;justify-content:flex-end;gap:10px;transition:color .3s}.trk li::after{content:"";width:8px;height:8px;border-radius:50%;background:currentColor;transition:transform .3s}.trk li.on{color:var(--or2)}.trk li.on::after{transform:scale(1.6)}
+.stars{display:flex;gap:6px;margin-top:22px;font-size:36px;line-height:1}.stars span{color:#4a4036;display:inline-block}.act .stars span{animation:pop .6s both}.act .stars span:nth-child(2){animation-delay:.18s}.act .stars span:nth-child(3){animation-delay:.36s}.act .stars span:nth-child(4){animation-delay:.54s}.act .stars span:nth-child(5){animation-delay:.72s}
+@keyframes pop{0%{transform:scale(.3);color:#4a4036}60%{transform:scale(1.35)}100%{transform:scale(1);color:var(--or2)}}
+nav .btn{color:#140d05;padding:10px 20px}.btn:hover{background:var(--or2);transform:translate(var(--mx,0px),calc(var(--my,0px) - 2px))}.btn:active{transform:scale(.95)}
+.btn.ghost{background:none;color:var(--tx);box-shadow:inset 0 0 0 1.5px var(--ln)}.btn.ghost:hover{box-shadow:inset 0 0 0 1.5px var(--or);background:none}
+section{position:relative;min-height:110vh;padding:0 5vw;display:flex;flex-direction:column;justify-content:center}
+section::before{content:"";position:absolute;inset:0;background:linear-gradient(90deg,rgba(14,13,12,.9),rgba(14,13,12,.45) 45%,transparent 70%);pointer-events:none}
+.w{position:relative;max-width:440px}
+.k{font:700 15px Outfit;color:var(--or);margin-bottom:14px}
+h1{font-size:clamp(52px,7vw,104px);font-weight:800}
+h2{font-size:clamp(34px,3.8vw,54px);font-weight:700;margin-bottom:18px}
+.w p{color:var(--mu)}.w ul{list-style:none;margin-top:22px;padding:0}
+.w li{padding:11px 0;border-top:1px solid var(--ln)}
+.hero .w{max-width:620px}.hero .w p:not(.k){font-size:20px;max-width:40ch;margin:24px 0 34px}
+.row{display:flex;gap:14px;flex-wrap:wrap}
+ol.fl{list-style:none;padding:0;margin-top:26px;border-left:1px solid var(--ln)}
+ol.fl li{padding:6px 0 16px 22px;position:relative}ol.fl li::before{content:"";position:absolute;left:-5px;top:14px;width:9px;height:9px;border-radius:50%;background:var(--or)}
+ol.fl b{font:700 19px Outfit;display:block}ol.fl span{color:var(--mu);font-size:16px}
+form{display:grid;gap:14px;margin-top:26px}
+label{font-size:14px;color:var(--mu);display:grid;gap:4px}
+input{background:none;border:0;border-bottom:1px solid var(--ln);color:var(--tx);padding:10px 0;font:inherit;border-radius:0}
+input:focus{border-color:var(--or);outline:0}
+form .btn{justify-self:start;margin-top:10px}
+footer{padding:72px 5vw calc(28px + env(safe-area-inset-bottom,0px));background:var(--bk);color:var(--mu);font-size:15px;border-top:1px solid var(--ln)}
+.ft{display:grid;grid-template-columns:1.6fr 1fr 1fr 1fr;gap:40px}
+.ft>div{display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+.ft h3{font:700 15px Outfit;color:var(--tx);margin-bottom:6px}
+.ft a:not(.btn):not(.wm){text-decoration:none;transition:color .2s}.ft a:not(.btn):hover{color:var(--or2)}
+.ft .btn{color:#140d05}.fb p{max-width:28ch;margin-bottom:10px}.fb .wm{color:var(--tx)}
+.fbt{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-top:28px;padding-top:22px;border-top:1px solid var(--ln);font-size:13px}
+footer{overflow:hidden}.mq{margin:-72px -5vw 0;overflow:hidden;white-space:nowrap;border-bottom:1px solid var(--ln);padding:22px 0}.mq+.ft{margin-top:56px}
+.tr{display:inline-flex;align-items:center;animation:mq 28s linear infinite}.tr>*{margin-right:36px}.mq:hover .tr{animation-play-state:paused}@keyframes mq{to{transform:translateX(-50%)}}
+.tr span{font:800 clamp(28px,4vw,52px) Outfit,sans-serif;letter-spacing:-.02em;color:transparent;-webkit-text-stroke:1px rgba(245,239,230,.35)}.tr span:nth-of-type(3n){color:var(--or);-webkit-text-stroke:0}.tr i{width:10px;height:10px;border-radius:50%;background:var(--or)}
+.ft>div{opacity:0;transform:translateY(28px);transition:opacity .8s,transform .8s}footer.in .ft>div{opacity:1;transform:none}footer.in .ft>div:nth-child(2){transition-delay:.12s}footer.in .ft>div:nth-child(3){transition-delay:.24s}footer.in .ft>div:nth-child(4){transition-delay:.36s}
+.ft a:not(.btn):not(.wm):not(.top){position:relative}.ft a:not(.btn):not(.wm)::after{content:"";position:absolute;left:0;right:0;bottom:-2px;height:1px;background:var(--or2);transform:scaleX(0);transform-origin:left;transition:transform .3s}.ft a:not(.btn):not(.wm):hover::after{transform:scaleX(1)}
+.big{font:800 clamp(90px,24vw,360px)/.8 Outfit,sans-serif;letter-spacing:-.05em;margin-top:56px;color:transparent;-webkit-text-stroke:1.5px rgba(245,239,230,.2);background:linear-gradient(90deg,var(--or),var(--or2)) no-repeat;background-size:0% 100%;-webkit-background-clip:text;background-clip:text;transition:background-size 1.8s cubic-bezier(.2,.7,.2,1);user-select:none;white-space:nowrap}footer.in .big{background-size:100% 100%}
+.top{display:inline-flex;gap:8px;align-items:center;text-decoration:none}.top svg{width:16px;height:16px;transition:transform .3s}.top:hover svg{transform:translateY(-5px)}
+@media(prefers-reduced-motion:reduce){.tr,.hero .btn{animation:none!important}}
+@media(max-width:860px){
+.menu{display:block}.trk{display:none}.ft{grid-template-columns:1fr 1fr}.fb{grid-column:1/-1}
+nav{position:fixed;inset:0;z-index:1;flex-direction:column;justify-content:center;gap:28px;font:700 30px Outfit,sans-serif;background:rgba(14,13,12,.97);opacity:0;visibility:hidden;transition:opacity .25s,visibility .25s}header.open nav{opacity:1;visibility:visible}nav .btn{font-size:18px;padding:14px 28px}
+section{min-height:100svh;justify-content:flex-end;padding-bottom:9vh}
+section::before{background:linear-gradient(0deg,rgba(14,13,12,.94) 35%,transparent 75%)}
+.hero{justify-content:flex-end}.w{max-width:none}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{transition:none!important}}
+</style>
+</head>
+<body>
+<canvas id="c" aria-hidden="true"></canvas>
+<header>
+ <a class="wm" href="#top" aria-label="Menza home"><svg viewBox="0 0 24 24" fill="none" stroke="#E8892B" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 17h18M5 17a7 7 0 0 1 14 0M12 7V5"/></svg>menza</a>
+ <button class="menu" id="mb" aria-label="Menu" aria-expanded="false" aria-controls="nv"><i></i></button>
+ <nav id="nv" aria-label="Primary"><a href="#pos">Menza POS</a><a href="#serve">MenzaServe</a><a href="#kds">Menza KDS</a><a href="#journey">How it connects</a><a class="btn" href="#demo">Book a demo</a></nav>
+ <i id="pg"></i>
+</header>
+<ol class="trk" aria-hidden="true"><li>Scan</li><li>Order</li><li>Prepare</li><li>Serve</li><li>Rate</li></ol>
+<main>
+<section class="hero" id="top" data-k="0"><div class="w">
+ <h1>Order. Dine. Delight.</h1>
+ <p>One connected platform that links the counter, the service floor and the kitchen.</p>
+ <div class="row"><a class="btn" href="#demo">Book a demo</a><a class="btn ghost" href="#pos">Follow an order</a></div>
+</div></section>
+
+<section id="scan" data-k="1"><div class="w">
+ <p class="k">Step 1 · Scan</p><h2>A table. A QR code.</h2>
+ <p>A guest sits down and scans the QR code on the table. The menu is right there on their phone.</p>
+</div></section>
+
+<section id="pos" data-k="2"><div class="w">
+ <p class="k">Step 2 · Order · Menza POS</p><h2>They order. It travels.</h2>
+ <p>The guest places the order directly from the table. Menza POS manages orders, tables, billing, payments and restaurant operations from a centralized application, and the request moves on to the kitchen.
+</div></section>
+
+<section id="kds" data-k="3"><div class="w">
+ <p class="k">Step 3 · Prepare · Menza KDS</p><h2>The chef sees it instantly.</h2>
+ <p>The ticket appears on Menza KDS, a digital Kitchen Display System for the kitchen team.</p>
+ <ul><li>Manage incoming orders</li><li>Monitor preparation timers</li><li>Prioritize urgent tickets</li><li>Track ready orders</li></ul>
+</div></section>
+
+<section id="serve" data-k="4"><div class="w">
+ <p class="k">Step 4 · Serve · MenzaServe</p><h2>Ready. Deliver it.</h2>
+ <p>MenzaServe helps restaurant staff coordinate service workflows, monitor active orders and track order progress, so the finished dish reaches the right table.
+</div></section>
+
+<section id="journey" data-k="5"><div class="w">
+ <p class="k">Step 5 · Enjoy</p><h2>Enjoyed. Rated. Five stars.</h2>
+ <p>The guest enjoys the meal and rates the restaurant. One connected flow, from the first scan to the last smile.</p>
+ <div class="stars" role="img" aria-label="5 out of 5 stars"><span>★</span><span>★</span><span>★</span><span>★</span><span>★</span></div>
+</div></section>
+
+<section id="demo" data-k="6"><div class="w">
+ <p class="k">Book a demo</p><h2>One connected ecosystem. Better restaurant operations.</h2>
+ <form id="f">
+  <label>Restaurant<input name="r" required autocomplete="organization"></label>
+  <label>Email<input name="e" type="email" required autocomplete="email"></label>
+  <label>Phone (optional)<input name="p" type="tel" autocomplete="tel"></label>
+  <button class="btn" type="submit">Request a demo</button>
+ </form>
+</div></section>
+</main>
+<footer>
+ <div class="mq" aria-hidden="true"><div class="tr"><span>Order</span><i></i><span>Dine</span><i></i><span>Delight</span><i></i><span>Order</span><i></i><span>Dine</span><i></i><span>Delight</span><i></i><span>Order</span><i></i><span>Dine</span><i></i><span>Delight</span><i></i><span>Order</span><i></i><span>Dine</span><i></i><span>Delight</span><i></i></div></div>
+ <div class="ft">
+  <div class="fb"><a class="wm" href="#top">menza</a><p>One connected ecosystem. Better restaurant operations.</p><a class="btn" href="#demo">Book a demo</a></div>
+  <div><h3>Products</h3><a href="#pos">Menza POS</a><a href="#serve">MenzaServe</a><a href="#kds">Menza KDS</a><a href="#journey">How it connects</a></div>
+  <div><h3>Contact</h3><a href="mailto:admin@qubenexus.co.in">admin@qubenexus.co.in</a><a href="https://www.qubenexus.co.in">www.qubenexus.co.in</a><a href="https://www.instagram.com/qubenexus.pvt.ltd">@qubenexus.pvt.ltd</a></div>
+  <div><h3>Company</h3><span>QubeNexus Technologies Pvt. Ltd.</span><span>Innovate · Build · Grow</span></div>
+ </div>
+ <div class="big" aria-hidden="true">menza</div>
+ <div class="fbt"><span>© 2026 QubeNexus Technologies Pvt. Ltd. All rights reserved.</span><a class="top" href="#top">Back to top <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 14V2M3 7l5-5 5 5"/></svg></a></div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
+<script>
+(function(){
+var reduce=matchMedia('(prefers-reduced-motion:reduce)').matches,mob=innerWidth<860,secs=[].slice.call(document.querySelectorAll('[data-k]')),links=[].slice.call(document.querySelectorAll('nav a')),pg=document.getElementById('pg');
+document.getElementById('f').addEventListener('submit',function(e){e.preventDefault();var d=new FormData(e.target);
+location.href='mailto:admin@qubenexus.co.in?subject='+encodeURIComponent('Menza demo request – '+d.get('r'))+'&body='+encodeURIComponent('Restaurant: '+d.get('r')+'\nEmail: '+d.get('e')+'\nPhone: '+d.get('p'))});
+var hd=document.querySelector('header'),mb=document.getElementById('mb');
+function shut(){hd.classList.remove('open');mb.setAttribute('aria-expanded','false');document.body.style.overflow=''}
+mb.addEventListener('click',function(){var o=hd.classList.toggle('open');mb.setAttribute('aria-expanded',o);document.body.style.overflow=o?'hidden':''});
+links.forEach(function(a){a.addEventListener('click',shut)});addEventListener('keydown',function(e){if(e.key==='Escape')shut()});
+function onS(){pg.style.width=100*scrollY/(document.documentElement.scrollHeight-innerHeight)+'%';hd.classList.toggle('sc',scrollY>40)}
+addEventListener('scroll',onS,{passive:true});onS();
+var ft=document.querySelector('footer');new IntersectionObserver(function(es,o){es.forEach(function(e){if(e.isIntersecting){ft.classList.add('in');o.disconnect()}})},{threshold:.12}).observe(ft);
+if(!reduce&&matchMedia('(pointer:fine)').matches)[].forEach.call(document.querySelectorAll('.btn'),function(b){b.addEventListener('pointermove',function(e){var r=b.getBoundingClientRect();b.style.setProperty('--mx',(e.clientX-r.left-r.width/2)*.22+'px');b.style.setProperty('--my',(e.clientY-r.top-r.height/2)*.3+'px')});b.addEventListener('pointerleave',function(){b.style.removeProperty('--mx');b.style.removeProperty('--my')})});
+var R;try{R=new THREE.WebGLRenderer({canvas:document.getElementById('c'),antialias:!mob,powerPreference:'high-performance'})}catch(e){return}
+R.setPixelRatio(Math.min(devicePixelRatio,mob?1.25:1.75));R.outputEncoding=THREE.sRGBEncoding;R.shadowMap.enabled=!mob;
+var S=new THREE.Scene();S.background=new THREE.Color(0x0e0d0c);S.fog=new THREE.Fog(0x0e0d0c,80,160);
+var cam=new THREE.PerspectiveCamera(30,1,1,300);
+var M=function(c,r,m){return new THREE.MeshStandardMaterial({color:c,roughness:r==null?.7:r,metalness:m||0})};
+var timber=M(0x35231a,.5),ivory=M(0xe6dccb,.35),plaster=M(0x4a3d33,.9),slate=M(0x1f1c1a,.5),brass=M(0xc29542,.3,.9),copper=M(0xb5603a,.3,.9),steel=M(0xa4a9ae,.3,.85),leather=M(0x7a3414,.6),cloth=M(0xf3ece0,.9),
+glow=new THREE.MeshStandardMaterial({color:0xE8892B,emissive:0xE8892B,emissiveIntensity:1.4}),
+win=new THREE.MeshStandardMaterial({color:0x2a1608,emissive:0xff9f4a,emissiveIntensity:.7}),
+scr=new THREE.MeshStandardMaterial({color:0x120c07,emissive:0x4a260a,roughness:.3});
+function B(w,h,d,m,x,y,z,p){var o=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),m);o.position.set(x,y+h/2,z);o.castShadow=o.receiveShadow=true;(p||S).add(o);return o}
+function Y(rt,rb,h,m,x,y,z,p,sg){var o=new THREE.Mesh(new THREE.CylinderGeometry(rt,rb,h,sg||24),m);o.position.set(x,y+h/2,z);o.castShadow=true;(p||S).add(o);return o}
+/* floors */
+var cv=document.createElement('canvas');cv.width=cv.height=128;var k2=cv.getContext('2d');k2.fillStyle='#d2c8b6';k2.fillRect(0,0,128,128);k2.fillStyle='#262120';k2.fillRect(0,0,64,64);k2.fillRect(64,64,64,64);
+var ct=new THREE.CanvasTexture(cv);ct.wrapS=ct.wrapT=THREE.RepeatWrapping;ct.repeat.set(8,13);ct.encoding=THREE.sRGBEncoding;
+B(46,.4,26,timber,0,-.4,0);B(16,.05,26,new THREE.MeshStandardMaterial({map:ct,roughness:.35}),0,0,0);B(15,.05,26,slate,15.5,0,0);
+B(.15,.04,26,brass,-8,.04,0);B(.15,.04,26,brass,8,.04,0);
+/* shell: plaster walls, ivory wainscot, brass trim */
+B(46,10,.5,plaster,0,0,-13.25);B(.5,10,26,plaster,-23.25,0,0);B(46,3.2,.6,ivory,0,0,-13.2);B(.6,3.2,26,ivory,-23.2,0,0);B(46,.14,.7,brass,0,3.2,-13.2);B(46,.14,.7,brass,0,10,-13.2);
+[-4,3.8].forEach(function(x){B(3.4,6,.2,brass,x,3.6,-12.95);B(2.8,5.4,.22,win,x,3.8,-12.9);var d=new THREE.Mesh(new THREE.CylinderGeometry(1.4,1.4,.22,28),win);d.rotation.x=Math.PI/2;d.position.set(x,9.2,-12.9);S.add(d);B(.12,6,.3,brass,x,3.8,-12.8)});
+[-8,8,-21].forEach(function(x){Y(.5,.55,10,ivory,x,0,-12.4);Y(.7,.7,.3,brass,x,9.7,-12.4)});
+/* partition with pass */
+B(.5,10,9,plaster,8,0,-8.5);B(.5,2.8,8,plaster,8,7.2,0);B(.5,3.2,9,ivory,8,0,8.5);B(1.2,3.4,8,timber,8,0,0);B(1.7,.25,8,ivory,8,3.4,0);B(.4,.1,8,glow,8,7,0);
+/* POS: host bar */
+B(10,3.4,2.2,timber,-15,0,3);B(10.5,.25,2.7,ivory,-15,3.4,3);B(10.2,.12,.12,brass,-15,.9,4.25);
+[-18,-16,-14,-12].forEach(function(x){Y(.2,.2,1.8,brass,x,0,6.2,0,10);Y(.65,.65,.3,leather,x,1.8,6.2)});
+for(var s2=0;s2<3;s2++){B(9,.18,.8,timber,-15,4+s2*1.9,-12.5);for(var b=0;b<7;b++)Y(.17,.2,.9+(b%3)*.2,M([0x2d4a2b,0x8a5a1f,0x1e2b3a][(b+s2)%3],.3),-18.6+b*1.2,4.18+s2*1.9,-12.5,0,10)}
+B(1.4,.08,1,slate,-17,3.65,3.2);B(.12,.9,.12,brass,-17,3.65,3.5);var tp=B(1.5,1.1,.1,slate,-17,4.5,3.5);tp.rotation.x=-.25;B(1.2,.85,.04,scr,-17,4.6,3.57).rotation.x=-.25;
+B(1.1,.5,.9,slate,-13.5,3.65,3.1);B(1.1,.04,.1,glow,-13.5,4.1,3.55);
+function fig(x,z,ry,mat,hat){var g=new THREE.Group();g.position.set(x,0,z);g.rotation.y=ry;S.add(g);Y(.55,.75,2.4,mat,0,0,0,g,16);var h=new THREE.Mesh(new THREE.SphereGeometry(.45,16,12),cloth);h.position.y=3;g.add(h);if(hat){Y(.5,.42,.9,cloth,0,3.2,0,g,16);var t=new THREE.Mesh(new THREE.SphereGeometry(.6,12,10),cloth);t.position.y=4.2;g.add(t)}else B(1.1,.9,.08,cloth,0,.5,.6,g);return g}
+fig(-15,1.1,0,slate,0);
+/* dining: cloth tables, upholstered chairs */
+function table(x,z){Y(1.5,1.5,.12,cloth,x,2.4,z,0,32);Y(1.5,1.7,2.4,cloth,x,0,z,0,32);Y(.1,.1,.4,brass,x,2.52,z,0,10);Y(.04,.04,.3,glow,x,2.9,z,0,6);
+for(var a=0;a<3;a++){var t=a*2.1+x*.3,cx=x+Math.cos(t)*2.6,cz=z+Math.sin(t)*2.6;B(1.1,.2,1.1,leather,cx,1.5,cz);B(1.1,1.5,.15,timber,cx,1.7,cz+(Math.sin(t)>0?.5:-.5));[[-.45,-.45],[.45,-.45],[-.45,.45],[.45,.45]].forEach(function(l){B(.12,1.5,.12,timber,cx+l[0],0,cz+l[1])})}}
+[[-4,-6.5],[3,-7],[-4.5,2],[2.5,6.2],[-3.5,9]].forEach(function(p){table(p[0],p[1])});
+/* chandelier */
+var ch=new THREE.Group();ch.position.set(0,8.6,1);S.add(ch);var rg=new THREE.Mesh(new THREE.TorusGeometry(2.2,.1,8,40),brass);rg.rotation.x=Math.PI/2;ch.add(rg);
+for(var i=0;i<10;i++){var an=i/10*6.283,bl=new THREE.Mesh(new THREE.SphereGeometry(.2,10,8),glow);bl.position.set(Math.cos(an)*2.2,.3,Math.sin(an)*2.2);ch.add(bl)}
+Y(.05,.05,3,brass,0,8.6,1,0,6);
+/* service station */
+B(3.2,3,1.2,timber,5.5,0,3.6);B(3.4,.2,1.4,ivory,5.5,3,3.6);var sp=B(1.4,.9,.1,slate,5.5,3.3,3.4);sp.rotation.x=-.3;B(1.15,.7,.04,scr,5.5,3.4,3.46).rotation.x=-.3;var wg=fig(6.6,1.6,-.49,slate,0);
+/* kitchen: open range, copper pots */
+B(12,3.4,2.4,steel,16,0,-11.8);B(12.2,.2,2.6,M(0xc3c7cb,.25,.9),16,3.4,-11.8);
+for(var h=0;h<3;h++){B(1.6,.12,1.6,slate,12.5+h*3.2,3.6,-11.8);Y(.6,.55,.75,copper,12.5+h*3.2,3.72,-11.8)}
+B(9,1.2,3,steel,15.5,6.6,-11.4);B(2.2,2.6,2.2,steel,15.5,7.8,-11.8);
+B(6,3.4,2.6,steel,16.5,0,-3);B(6.2,.2,2.8,M(0xc3c7cb,.25,.9),16.5,3.4,-3);B(3,6.6,2.6,steel,21.2,0,-8);
+[[13,6],[18.5,6]].forEach(function(p){B(3.4,1.9,.15,slate,p[0],4.7,-12.85);B(3.1,1.6,.04,scr,p[0],4.85,-12.74);B(3.1,.07,.05,glow,p[0],4.78,-12.7)});
+fig(14.5,-9.2,0,cloth,1);fig(18.5,-5.6,3.14,cloth,1);
+Y(.9,.9,.1,cloth,8.6,3.62,.6,0,24);var cl=new THREE.Mesh(new THREE.SphereGeometry(.7,16,10,0,6.3,0,1.57),steel);cl.position.set(8.6,3.75,.6);S.add(cl);
+/* customer journey props */
+B(.3,.3,4,brass,-23,7,9.5);B(.3,7,.3,brass,-23,0,7.6);B(.3,7,.3,brass,-23,0,11.4);B(.12,7,3.4,win,-22.95,0,9.5);
+var cm=M(0x7a3b17,.6),cust=new THREE.Group();S.add(cust);Y(.55,.75,2.4,cm,0,0,0,cust,16);var h2=new THREE.Mesh(new THREE.SphereGeometry(.45,16,12),cloth);h2.position.y=3;cust.add(h2);
+var sit=new THREE.Group();sit.position.set(4.4,0,8);sit.rotation.y=-2.33;S.add(sit);Y(.55,.65,1.5,cm,0,1.7,0,sit,16);var h3=new THREE.Mesh(new THREE.SphereGeometry(.45,16,12),cloth);h3.position.y=3.65;sit.add(h3);
+var walk=new THREE.CatmullRomCurve3([[-22,0,9.5],[-14,0,11.4],[-4,0,11.4],[3,0,10.6],[5.2,0,9.4]].map(function(p){return new THREE.Vector3(p[0],p[1],p[2])}));
+var qc=document.createElement('canvas');qc.width=qc.height=64;var q2=qc.getContext('2d');q2.fillStyle='#fff';q2.fillRect(0,0,64,64);q2.fillStyle='#111';
+for(var a=0;a<13;a++)for(var b2=0;b2<13;b2++){var fd=(a<4&&b2<4)||(a>8&&b2<4)||(a<4&&b2>8);if(!fd&&((a*7+b2*13+a*b2)%3==0))q2.fillRect(6+a*4,6+b2*4,4,4)}
+[[6,6],[42,6],[6,42]].forEach(function(p){q2.fillStyle='#111';q2.fillRect(p[0],p[1],16,16);q2.fillStyle='#fff';q2.fillRect(p[0]+3,p[1]+3,10,10);q2.fillStyle='#111';q2.fillRect(p[0]+5,p[1]+5,6,6)});
+var qt=new THREE.CanvasTexture(qc);qt.encoding=THREE.sRGBEncoding;qt.magFilter=THREE.NearestFilter;B(1,.06,.3,brass,2.5,2.52,6.2);
+var qr=new THREE.Mesh(new THREE.PlaneGeometry(.9,.9),new THREE.MeshBasicMaterial({map:qt}));qr.position.set(2.5,3.05,6.2);qr.rotation.x=-.5;S.add(qr);
+var rp=new THREE.Mesh(new THREE.RingGeometry(.55,.62,40),new THREE.MeshBasicMaterial({color:0xF5B25E,transparent:true,opacity:0,side:2}));rp.position.set(2.5,3.05,6.3);rp.rotation.x=-.5;S.add(rp);
+var ph=new THREE.Group();ph.position.set(3.5,3.6,7.3);ph.rotation.set(.35,.6,0);S.add(ph);var pm=new THREE.MeshStandardMaterial({color:0x120c07,emissive:0xE8892B,emissiveIntensity:.1});B(.6,.08,1.1,slate,0,0,0,ph);var pf=new THREE.Mesh(new THREE.PlaneGeometry(.5,.95),pm);pf.rotation.x=-Math.PI/2;pf.position.y=.09;ph.add(pf);
+var dish=new THREE.Group();dish.position.set(3.5,2.52,5.5);S.add(dish);Y(.6,.6,.08,cloth,0,0,0,dish);var fo=new THREE.Mesh(new THREE.SphereGeometry(.36,14,10),copper);fo.scale.y=.6;fo.position.y=.28;dish.add(fo);dish.visible=false;
+var wc=new THREE.Group();wc.position.set(.8,2.3,.7);wg.add(wc);Y(.5,.5,.06,cloth,0,0,0,wc);var wd=new THREE.Mesh(new THREE.SphereGeometry(.4,14,8,0,6.3,0,1.57),steel);wd.position.y=.06;wc.add(wd);wc.visible=false;
+var sh=new THREE.Shape();for(var i=0;i<10;i++){var rr=i%2?.45:1,an=i*Math.PI/5+Math.PI/2;sh[i?'lineTo':'moveTo'](Math.cos(an)*rr,Math.sin(an)*rr)}
+var sgm=new THREE.ExtrudeGeometry(sh,{depth:.25,bevelEnabled:false}),stars=[0,1,2,3,4].map(function(i){var m=new THREE.Mesh(sgm,glow);m.position.set(.2+i*1.5,9.2,6.6);m.scale.setScalar(.001);S.add(m);return m});
+/* lights */
+S.add(new THREE.HemisphereLight(0x7a6652,0x1a1512,1));
+var dl=new THREE.DirectionalLight(0xffe0bd,.8);dl.position.set(22,34,20);if(!mob){dl.castShadow=true;dl.shadow.mapSize.set(1536,1536);var sc=dl.shadow.camera;sc.left=-34;sc.right=34;sc.top=22;sc.bottom=-22;sc.far=100}S.add(dl);
+var L=[[-15,8,4],[0,7.5,2],[15,8,-4]].map(function(p){var l=new THREE.PointLight(0xff9a3c,1,34,1.6);l.position.set(p[0],p[1],p[2]);S.add(l);return l});
+/* order ticket */
+var tk=new THREE.Group();S.add(tk);tk.add(new THREE.Mesh(new THREE.BoxGeometry(1.1,.06,1.5),glow));
+for(var i=0;i<3;i++){var ln=new THREE.Mesh(new THREE.BoxGeometry(.7,.02,.08),cloth);ln.position.set(0,.05,-.35+i*.35);tk.add(ln)}
+var halo=new THREE.Mesh(new THREE.RingGeometry(1,1.12,40),new THREE.MeshBasicMaterial({color:0xF5B25E,transparent:true,opacity:.7,side:2}));halo.rotation.x=-Math.PI/2;tk.add(halo);
+var path=new THREE.CatmullRomCurve3([[3.4,4,7.2],[4.5,6.2,3.5],[6,6.6,.8],[8,5.6,-1],[13,5.6,-5],[15.5,4.8,-9.6],[11,5,-2],[8.6,4.9,.6],[5.5,5.2,3.2],[3.4,3.9,6.6]].map(function(p){return new THREE.Vector3(p[0],p[1],p[2])}));
+var K=[
+{px:44,py:36,pz:46,tx:0,ty:1,tz:0,p:0,cw:0,b:0,st:0,l0:.9,l1:.9,l2:.9},
+{px:12,py:8.5,pz:18,tx:3.5,ty:3.2,tz:6.5,p:0,cw:1,b:1,st:0,l0:.3,l1:2.2,l2:.3},
+{px:12,py:13,pz:20,tx:4,ty:4,tz:2,p:.22,cw:1,b:0,st:0,l0:.4,l1:2,l2:.6},
+{px:7,py:9,pz:7,tx:15,ty:3.5,tz:-8,p:.55,cw:1,b:0,st:0,l0:.3,l1:.4,l2:2.4},
+{px:3,py:8.5,pz:13,tx:6,ty:3.4,tz:3,p:.8,cw:1,b:0,st:0,l0:.3,l1:1.8,l2:1},
+{px:14,py:9.5,pz:18,tx:3,ty:4.8,tz:6,p:1,cw:1,b:0,st:5,l0:.3,l1:2.2,l2:.3},
+{px:44,py:36,pz:46,tx:0,ty:1,tz:0,p:1,cw:1,b:0,st:5,l0:.9,l1:.9,l2:.9}];
+var s=Object.assign({},K[0]),mx=0,my=0,dirty=1,last=0;
+function size(){var w=innerWidth,h=innerHeight;R.setSize(w,h,false);cam.aspect=w/h;cam.fov=mob?(w<h?52:40):30;if(mob)cam.setViewOffset(w,h,0,h*.2,w,h);else cam.setViewOffset(w,h,-w*.17,0,w,h);cam.updateProjectionMatrix();dirty=1}
+addEventListener('resize',size);size();
+if(!mob&&!reduce)addEventListener('pointermove',function(e){mx=e.clientX/innerWidth-.5;my=e.clientY/innerHeight-.5});
+function draw(t){cam.position.set(s.px+mx*1.2,s.py-my*.8,s.pz);cam.lookAt(s.tx,s.ty,s.tz);L[0].intensity=s.l0;L[1].intensity=s.l1;L[2].intensity=s.l2;
+var c=Math.min(1,Math.max(0,s.cw)),wt=walk.getTangent(c);cust.position.copy(walk.getPoint(c));cust.position.y=(!reduce&&c>0&&c<1)?Math.abs(Math.sin(c*70))*.14:0;cust.rotation.y=Math.atan2(wt.x,wt.z);cust.visible=c<.985;sit.visible=c>=.985;
+var ws=Math.min(1,Math.max(0,(s.p-.778)/.222));wg.position.set(6.6-1.9*ws,0,1.6+3.6*ws);wc.visible=ws>.02&&ws<.98;cl.visible=ws<=.02;dish.visible=s.p>.99;
+tk.visible=s.p>.005&&s.p<.99;tk.position.copy(path.getPoint(Math.min(1,Math.max(0,s.p))));if(!reduce){tk.position.y+=Math.sin(t/500)*.12;tk.rotation.y=t/1600;halo.scale.setScalar(1+.15*Math.sin(t/400))}
+pm.emissiveIntensity=.12+.9*Math.max(s.b,(s.p>0&&s.p<.4)?1:0);var ph2=reduce?.4:(t%1300)/1300;rp.visible=s.b>.02;rp.material.opacity=s.b*(reduce?.7:1-ph2);rp.scale.setScalar(1+(reduce?0:ph2*1.3));
+stars.forEach(function(m,i){m.scale.setScalar(Math.max(.001,Math.min(1,s.st-i)*1.1));m.rotation.y=.5+(reduce?0:Math.sin(t/700+i)*.2)});R.render(S,cam)}
+gsap.ticker.add(function(){var n=performance.now();if(mob&&n-last<33)return;last=n;if(!reduce||dirty){draw(n);dirty=0}});
+var tr=[].slice.call(document.querySelectorAll('.trk li'));
+function setNav(i){links.forEach(function(a){a.classList.toggle('on',a.getAttribute('href')==='#'+(secs[i]&&secs[i].id))});tr.forEach(function(l,j){l.classList.toggle('on',j===i-1)});secs.forEach(function(e,j){e.classList.toggle('act',j===i)})}
+if(reduce){secs.forEach(function(el){new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){var i=+el.dataset.k;Object.assign(s,K[i]);dirty=1;setNav(i)}})},{threshold:.5}).observe(el)})}
+else{gsap.registerPlugin(ScrollTrigger);
+secs.forEach(function(el,i){if(i)gsap.fromTo(s,Object.assign({},K[i-1]),Object.assign({},K[i],{ease:'power1.inOut',immediateRender:false,scrollTrigger:{trigger:el,start:'top 95%',end:'top 25%',scrub:.8}}));
+ScrollTrigger.create({trigger:el,start:'top 55%',end:'bottom 55%',onToggle:function(self){if(self.isActive)setNav(i)}})});setNav(0)}
+})();
+</script>
+</body>
+</html>

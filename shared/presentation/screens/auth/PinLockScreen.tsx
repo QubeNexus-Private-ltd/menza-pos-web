@@ -105,6 +105,7 @@ export const PinLockScreen: React.FC = () => {
 
   // Shake animation for incorrect PIN
   const shakeAnim = useRef(new Animated.Value(0)).current;
+  const hasInitializedRef = useRef(Boolean(initialPhone.length === 10));
 
   // Load recent staff from terminal cache
   useEffect(() => {
@@ -113,16 +114,17 @@ export const PinLockScreen: React.FC = () => {
     });
   }, []);
 
-  // Sync remembered mobile if updated externally
+  // Sync remembered mobile if updated externally (e.g. late session hydration) without overriding user clearing input
   useEffect(() => {
-    if (rememberedMobile && !mobile) {
+    if (!hasInitializedRef.current && rememberedMobile) {
       const clean = rememberedMobile.replace(/[^0-9]/g, '').slice(-10);
       if (clean.length === 10) {
         setMobile(clean);
         setStep('pin');
+        hasInitializedRef.current = true;
       }
     }
-  }, [rememberedMobile, mobile]);
+  }, [rememberedMobile]);
 
   // Live clock
   useEffect(() => {

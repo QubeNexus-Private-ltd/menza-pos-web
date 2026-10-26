@@ -95,6 +95,7 @@ export default function WalletPage() {
   const currentRestId =
     activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
+
   const [wallet, setWallet] = useState<RestaurantWalletDTO | null>(null);
   const [transactions, setTransactions] = useState<WalletTransactionDTO[]>([]);
   const [loading, setLoading] = useState(true);
@@ -123,6 +124,14 @@ export default function WalletPage() {
   // Tax Invoice Modal
   const [selectedInvoice, setSelectedInvoice] = useState<TaxInvoiceItem | null>(null);
   const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
+
+  // Clean slate and show skeleton immediately upon restaurant switch
+  useEffect(() => {
+    setWallet(null);
+    setTransactions([]);
+    setLoading(true);
+  }, [currentRestId]);
+
 
   const handleOpenInvoice = (tx: WalletTransactionDTO) => {
     const rawDigits = tx.id.replace(/[^0-9]/g, '');

@@ -35,6 +35,7 @@ export default function ReservationsPage() {
   const { activeRestaurant, restaurants } = useAuthStore();
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
+
   const [reservations, setReservations] = useState<ReservationResponseDTO[]>([]);
   const [tables, setTables] = useState<TableMaster[]>([]);
   const [loading, setLoading] = useState(true);
@@ -52,6 +53,14 @@ export default function ReservationsPage() {
   const [selectedTableId, setSelectedTableId] = useState<number | undefined>(undefined);
   const [specialNotes, setSpecialNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Clean slate and show skeleton immediately upon restaurant switch
+  useEffect(() => {
+    setReservations([]);
+    setTables([]);
+    setLoading(true);
+  }, [currentRestId]);
+
 
   const loadData = useCallback(async () => {
     if (!currentRestId) return;

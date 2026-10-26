@@ -81,6 +81,7 @@ export default function RestaurantConfigPage() {
   const { activeRestaurant, restaurants } = useAuthStore();
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savingImages, setSavingImages] = useState(false);
@@ -117,6 +118,20 @@ export default function RestaurantConfigPage() {
   const [imageModalVisible, setImageModalVisible] = useState(false);
   const [activeUploadTarget, setActiveUploadTarget] = useState<'imageUrl' | 'logoUrl'>('imageUrl');
   const [customImageUrlInput, setCustomImageUrlInput] = useState('');
+
+  // Clean slate upon restaurant switch
+  useEffect(() => {
+    setName('');
+    setPhone('');
+    setEmail('');
+    setAddress('');
+    setCity('');
+    setImageUrl('');
+    setLogoUrl('');
+    setGstNumber('');
+    setLoading(true);
+  }, [currentRestId]);
+
 
   useEffect(() => {
     masterDataRepository

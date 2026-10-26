@@ -197,6 +197,7 @@ export default function PosPage() {
   const currentRestId =
     activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
+
   // Core Data with in-memory catalog cache initialization (prevents flickering)
   const cachedCatalog = usePosCatalogStore.getState();
   const hasCachedData = Boolean(
@@ -326,6 +327,22 @@ export default function PosPage() {
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
   const [isKotLoading, setIsKotLoading] = useState(false);
   const [isSettling, setIsSettling] = useState(false);
+
+  // Clean slate and reset order cart immediately upon restaurant switch
+  useEffect(() => {
+    setCart([]);
+    setSelectedTable(null);
+    setActiveTableOrder(null);
+    setCustomerName('');
+    setCustomerPhone('');
+    setDiscountAmount(0);
+    setCategories([]);
+    setItems([]);
+    setTables([]);
+    setSelectedCategory(null);
+    setLoading(true);
+  }, [currentRestId]);
+
 
   // Gilded Alert Modal State
   const [alertConfig, setAlertConfig] = useState<GildedAlertConfig>({

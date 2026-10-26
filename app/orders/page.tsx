@@ -76,6 +76,7 @@ export default function OrdersPage() {
 
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
+
   // Restaurant Config for taxes & UPI QR printing
   const [restaurantConfig, setRestaurantConfig] = useState<RestaurantConfig | null>(() =>
     usePosCatalogStore.getState().restaurantConfig
@@ -122,6 +123,16 @@ export default function OrdersPage() {
   const [printingOrderId, setPrintingOrderId] = useState<number | null>(null);
   const [cancellingOrderId, setCancellingOrderId] = useState<number | null>(null);
   const [updatingStatusId, setUpdatingStatusId] = useState<number | null>(null);
+
+  // Clean slate and show skeleton immediately upon restaurant switch
+  useEffect(() => {
+    setLiveOrders([]);
+    setHistoryOrders([]);
+    setViewingOrder(null);
+    setSettlingOrder(null);
+    setLoading(true);
+  }, [currentRestId]);
+
 
   // Helper to reliably check if order is settled
   const isOrderSettled = useCallback((o: OrderMaster): boolean => {

@@ -160,5 +160,17 @@ export const usePosCatalogStore = create<PosCatalogState>((set, get) => ({
       };
     }),
 
-  invalidateCatalog: () => set({ hasLoaded: false, lastFetchedAt: 0, activeTableOrders: {} }),
+  invalidateCatalog: () =>
+    set({
+      restaurantId: null,
+      categories: [],
+      items: [],
+      tables: [],
+      restaurantConfig: null,
+      operatingStatus: null,
+      orderTypes: [],
+      hasLoaded: false,
+      lastFetchedAt: 0,
+      activeTableOrders: {},
+    }),
 }));

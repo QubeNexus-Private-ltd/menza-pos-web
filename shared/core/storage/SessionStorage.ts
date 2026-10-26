@@ -33,18 +33,38 @@ export interface PersistedSession {
 
 export class SessionStorage {
   /**
+   * Check if terms & conditions were accepted on this device
+   */
+  static async isTermsAccepted(): Promise<boolean> {
+    try {
+      const val = await AsyncStorage.getItem(STORAGE_KEYS.TERMS_ACCEPTED);
+      return val === 'true';
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Persist full user session after successful login / OTP verification
    */
   static async saveSession(session: PersistedSession): Promise<void> {
 
     try {
+      let isTermsAccepted = session.hasAcceptedTerms;
+      if (!isTermsAccepted) {
+        const storedTerms = await AsyncStorage.getItem(STORAGE_KEYS.TERMS_ACCEPTED);
+        if (storedTerms === 'true') {
+          isTermsAccepted = true;
+        }
+      }
+
       const items: [string, string][] = [
         [STORAGE_KEYS.TOKEN, session.token || ''],
         [STORAGE_KEYS.REFRESH_TOKEN, session.refreshToken || ''],
         [STORAGE_KEYS.USER, JSON.stringify(session.user || null)],
         [STORAGE_KEYS.RESTAURANTS, JSON.stringify(session.restaurants || [])],
         [STORAGE_KEYS.ONBOARDING_COMPLETED, 'true'],
-        [STORAGE_KEYS.TERMS_ACCEPTED, session.hasAcceptedTerms ? 'true' : 'false'],
+        [STORAGE_KEYS.TERMS_ACCEPTED, isTermsAccepted ? 'true' : 'false'],
       ];
 
       if (session.activeRestaurant) {
@@ -225,6 +245,13 @@ export class SessionStorage {
    */
   static async saveTermsAccepted(status: boolean): Promise<void> {
     try {
+      // Once accepted, never revert to false on this device
+      if (!status) {
+        const alreadyAccepted = await SessionStorage.isTermsAccepted();
+        if (alreadyAccepted) {
+          return;
+        }
+      }
       await AsyncStorage.setItem(STORAGE_KEYS.TERMS_ACCEPTED, status ? 'true' : 'false');
       logger.auth('TERMS_ACCEPTED', `Terms acceptance status saved: ${status}`);
     } catch (err: any) {

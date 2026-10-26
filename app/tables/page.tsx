@@ -68,6 +68,7 @@ export default function TablesPage() {
   const { paperWidth, customFooter } = usePrinterStore();
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
+
   const cachedCatalog = usePosCatalogStore.getState();
   const hasCachedTables = Boolean(
     cachedCatalog.restaurantId === currentRestId && cachedCatalog.tables.length > 0
@@ -122,6 +123,18 @@ export default function TablesPage() {
     message?: string;
   }
   const [serviceRequests, setServiceRequests] = useState<TableServiceRequestItem[]>([]);
+
+  // Clean slate and show skeleton immediately upon restaurant switch
+  useEffect(() => {
+    setTables([]);
+    setActiveOrders([]);
+    setActionTable(null);
+    setQrTable(null);
+    setSettlingOrder(null);
+    setServiceRequests([]);
+    setLoading(true);
+  }, [currentRestId]);
+
 
   const handleResolveService = (tableId: number, requestId?: any) => {
     setServiceRequests((prev) =>

@@ -41,6 +41,7 @@ export default function SubscriptionBillingPage() {
   const { activeRestaurant, restaurants } = useAuthStore();
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
+
   const [loading, setLoading] = useState(true);
   const [activeSub, setActiveSub] = useState<UserSubscriptionStatus | null>(null);
   const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
@@ -49,6 +50,14 @@ export default function SubscriptionBillingPage() {
   // Tax Invoice Modal State
   const [selectedInvoice, setSelectedInvoice] = useState<TaxInvoiceItem | null>(null);
   const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
+
+  // Clean slate upon restaurant switch
+  useEffect(() => {
+    setActiveSub(null);
+    setHistory([]);
+    setLoading(true);
+  }, [currentRestId]);
+
 
   const handleOpenActiveSubInvoice = () => {
     if (!activeSub) return;

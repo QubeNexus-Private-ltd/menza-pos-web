@@ -124,6 +124,7 @@ export default function KitchenKdsPage() {
   const currentRestId =
     activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
+
   const [stations, setStations] = useState<KitchenStationDTO[]>([]);
   const [allOpenOrders, setAllOpenOrders] = useState<OrderMaster[]>([]);
   const [loading, setLoading] = useState(true);
@@ -138,6 +139,16 @@ export default function KitchenKdsPage() {
   const [nowTick, setNowTick] = useState<number>(() => Date.now());
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [density, setDensity] = useState<KdsDensity>('comfortable');
+
+  // Clean slate and show skeleton immediately upon restaurant switch
+  useEffect(() => {
+    setStations([]);
+    setAllOpenOrders([]);
+    setCheckedItems({});
+    setSelectedStationCode('ALL');
+    setLoading(true);
+  }, [currentRestId]);
+
 
   // Load saved density preference
   useEffect(() => {

@@ -34,6 +34,7 @@ export default function BankAccountPage() {
   const { activeRestaurant, restaurants } = useAuthStore();
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [verifying, setVerifying] = useState(false);
@@ -50,6 +51,19 @@ export default function BankAccountPage() {
   const [bankName, setBankName] = useState('');
   const [upiId, setUpiId] = useState('');
   const [printUpiQrOnReceipts, setPrintUpiQrOnReceipts] = useState(true);
+
+  // Clean slate upon restaurant switch
+  useEffect(() => {
+    setExistingAccount(null);
+    setAccountHolder('');
+    setAccountNumber('');
+    setConfirmAccountNumber('');
+    setIfsc('');
+    setBankName('');
+    setUpiId('');
+    setLoading(true);
+  }, [currentRestId]);
+
 
   const gwConfig = bankDataSource.getPaymentGatewayConfig();
 

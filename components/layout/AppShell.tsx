@@ -239,6 +239,13 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
     return () => clearTimeout(timer);
   }, [latestIncomingOrder, dismissBanner]);
 
+  // Reset header telemetry immediately upon restaurant switch
+  useEffect(() => {
+    setTodaySales({ revenue: 0, orderCount: 0 });
+    setOperatingStatus(null);
+    setWalletBalance(null);
+  }, [currentRestId]);
+
   // Fetch telemetry & initialize SignalR connection
   useEffect(() => {
     if (!currentRestId || isSuperAdmin || isSalesPerson) return;
@@ -431,6 +438,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       ];
 
   const handleSelectRestaurant = (rest: RestaurantDetail) => {
+    usePosCatalogStore.getState().invalidateCatalog();
     setActiveRestaurant(rest);
     setOutletMenuOpen(false);
   };

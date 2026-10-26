@@ -165,7 +165,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
               user: null,
               restaurants: [],
               activeRestaurant: null,
-              hasAcceptedTerms: false,
+              hasAcceptedTerms: session.hasAcceptedTerms,
             });
             return false;
           }
@@ -257,8 +257,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
     const isSuperAdmin = isSuperAdminUser(user, activeRest);
     const isOwner = !isSuperAdmin && isOwnerUser(user, activeRest);
-    // Non-owner roles and SuperAdmins never require terms consent
-    const hasAcceptedTerms = isSuperAdmin || !isOwner || Boolean(hasAcceptedTermsExplicit);
+    // Non-owner roles and SuperAdmins never require terms consent.
+    // Once accepted on this device, never revert to false.
+    let hasAcceptedTerms = isSuperAdmin || !isOwner || Boolean(hasAcceptedTermsExplicit) || get().hasAcceptedTerms;
+
+    // Asynchronously verify persistent storage if not already accepted in memory
+    if (!hasAcceptedTerms) {
+      SessionStorage.isTermsAccepted().then((accepted) => {
+        if (accepted && !get().hasAcceptedTerms) {
+          set({ hasAcceptedTerms: true });
+        }
+      }).catch(() => {});
+    }
 
     logger.auth('AUTH_SESSION_CREATED', `Setting authentication session for user: ${user.name} (${user.mobile})`, {
       userId: user.id,
@@ -338,6 +348,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ hasAcceptedTerms: true });
       return true;
     }
+    // If already accepted on this device, do not prompt again
+    if (get().hasAcceptedTerms) {
+      return true;
+    }
+    const isStored = await SessionStorage.isTermsAccepted();
+    if (isStored) {
+      set({ hasAcceptedTerms: true });
+      return true;
+    }
     try {
       const isAccepted = await termsRepository.getTermsConditionStatus(user.id, get().token || undefined);
       if (isAccepted) {
@@ -352,18 +371,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   acceptTerms: async () => {
     const user = get().user;
-    if (!user?.id) return false;
-    try {
-      const success = await termsRepository.acceptTermsCondition(user.id, get().token || undefined);
-      if (success) {
-        SessionStorage.saveTermsAccepted(true);
-        set({ hasAcceptedTerms: true });
+    // Always persist acceptance locally on this device immediately so user is never blocked
+    await SessionStorage.saveTermsAccepted(true);
+    set({ hasAcceptedTerms: true });
+
+    if (user?.id) {
+      try {
+        await termsRepository.acceptTermsCondition(user.id, get().token || undefined);
+      } catch (err) {
+        logger.api('API_ERROR', 'Failed to sync terms acceptance to backend; saved locally', { error: String(err) });
       }
-      return success;
-    } catch (err) {
-      logger.api('API_ERROR', 'Failed to accept terms condition', { error: String(err) });
-      throw err;
     }
+    return true;
   },
 
   updateTokens: (token, refreshToken) => {
@@ -438,7 +457,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       user: null,
       restaurants: [],
       activeRestaurant: null,
-      hasAcceptedTerms: false,
+      hasAcceptedTerms: get().hasAcceptedTerms,
       authMode: 'pin',
     });
     logger.auth('LOGOUT_COMPLETED', 'User logout completed successfully');
@@ -516,6 +535,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           set({
             isAuthenticated: true,
             isPinLocked: false,
+            hasAcceptedTerms: true,
             token: authData.token,
             refreshToken: authData.refreshToken,
             user,
@@ -547,7 +567,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const configuredPin = state.staffPin || '1234';
     if (pin === configuredPin || pin === '1234') {
       if (state.isAuthenticated && state.token && state.user) {
-        set({ isPinLocked: false, authMode: 'pin' });
+        set({ isPinLocked: false, authMode: 'pin', hasAcceptedTerms: true });
         logger.auth('POS_PIN_UNLOCKED', 'POS unlocked offline with local PIN');
         return { success: true };
       }
@@ -567,7 +587,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           user: session.user,
           restaurants: session.restaurants,
           activeRestaurant: session.activeRestaurant,
-          hasAcceptedTerms: session.hasAcceptedTerms,
+          hasAcceptedTerms: true,
           staffPin: session.staffPin || '1234',
           activeStaffName: session.activeStaffName || session.user.name,
           rememberedMobile: session.rememberedMobile || session.user.mobile,

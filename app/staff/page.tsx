@@ -27,6 +27,7 @@ export default function StaffPage() {
   const { activeRestaurant, restaurants } = useAuthStore();
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
+
   const [staffList, setStaffList] = useState<StaffMember[]>([]);
   const [roles, setRoles] = useState<RoleMaster[]>([]);
   const [loading, setLoading] = useState(true);
@@ -39,6 +40,13 @@ export default function StaffPage() {
   const [selectedRoleId, setSelectedRoleId] = useState<number>(4); // default Cashier
   const [employeeCode, setEmployeeCode] = useState('');
   const [savingStaff, setSavingStaff] = useState(false);
+
+  // Clean slate and show skeleton immediately upon restaurant switch
+  useEffect(() => {
+    setStaffList([]);
+    setLoading(true);
+  }, [currentRestId]);
+
 
   const loadData = useCallback(async () => {
     if (!currentRestId) return;

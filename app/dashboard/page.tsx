@@ -125,6 +125,18 @@ export default function DashboardPage() {
 
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
+  // Clean slate and show skeleton immediately upon restaurant switch
+  useEffect(() => {
+    setRevenueData(null);
+    setRecentOrders([]);
+    setOperatingStatus(null);
+    setTableCount({ total: 0, occupied: 0 });
+    setSelectedOrder(null);
+    setSettlingOrder(null);
+    setLoading(true);
+  }, [currentRestId]);
+
+
   const loadDashboardData = useCallback(async () => {
     if (isSuperAdmin) {
       try {

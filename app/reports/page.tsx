@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
+import { DashboardMetricsSkeleton, DashboardChartsSkeleton } from '@/components/common/Skeleton';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { ReportRemoteDataSource } from '@shared/data/datasources/ReportRemoteDataSource';
 import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';

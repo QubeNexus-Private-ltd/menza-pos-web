@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
+import { ReservationListSkeleton } from '@/components/common/Skeleton';
 import { FeatureGate } from '@/components/subscription/FeatureGate';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { WebReservationService, ReservationResponseDTO, CreateReservationRequestModel } from '@/services/reservationService';
@@ -245,10 +246,8 @@ export default function ReservationsPage() {
           </div>
 
           {/* Reservations List */}
-          {loading ? (
-            <div className="py-16 text-center text-xs text-[#667085] dark:text-[#94A3B8]">
-              Loading reservations...
-            </div>
+          {loading && reservations.length === 0 ? (
+            <ReservationListSkeleton count={6} />
           ) : filteredReservations.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-[#E7E1DA] dark:border-[#2B3540] p-12 text-center">
               <CalendarCheck className="h-10 w-10 text-[#667085] mx-auto mb-3 opacity-40" />

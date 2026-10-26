@@ -39,6 +39,7 @@ const OrderSettleModal = dynamic(
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { usePrinterStore } from '@shared/presentation/state/usePrinterStore';
 import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
+import { OrdersTableSkeleton } from '@/components/common/Skeleton';
 import { TableRemoteDataSource } from '@shared/data/datasources/TableRemoteDataSource';
 import { RestaurantConfigRemoteDataSource } from '@shared/data/datasources/RestaurantConfigRemoteDataSource';
 import { RestaurantConfig } from '@shared/domain/models/RestaurantConfig';
@@ -120,6 +121,7 @@ export default function OrdersPage() {
   const [loadingTimeline, setLoadingTimeline] = useState(false);
   const [printingOrderId, setPrintingOrderId] = useState<number | null>(null);
   const [cancellingOrderId, setCancellingOrderId] = useState<number | null>(null);
+  const [updatingStatusId, setUpdatingStatusId] = useState<number | null>(null);
 
   // Helper to reliably check if order is settled
   const isOrderSettled = useCallback((o: OrderMaster): boolean => {
@@ -397,6 +399,53 @@ export default function OrdersPage() {
       alert(`Failed to cancel order: ${err?.message || 'Check network connection'}`);
     } finally {
       setCancellingOrderId(null);
+    }
+  };
+
+  // Update order status (Confirmed, Preparing, Ready, Served, Cancelled)
+  const handleUpdateOrderStatus = async (orderId: number, nextStatus: string) => {
+    if (!orderId || !nextStatus || updatingStatusId === orderId) return;
+    try {
+      setUpdatingStatusId(orderId);
+      const success = await orderDataSource.updateOrderStatus(orderId, nextStatus);
+      if (success) {
+        await loadOrders();
+        if (viewingOrder?.id === orderId) {
+          setViewingOrder((prev) => (prev ? { ...prev, status: nextStatus as any } : null));
+        }
+      } else {
+        alert(`Could not update Order #${orderId} to ${nextStatus}.`);
+      }
+    } catch (err: any) {
+      alert(`Failed to update order status: ${err?.message || 'Server error'}`);
+    } finally {
+      setUpdatingStatusId(null);
+    }
+  };
+
+  // Confirm incoming Placed order & optionally print KOT
+  const handleConfirmOrder = async (order: OrderMaster) => {
+    if (updatingStatusId === order.id) return;
+    try {
+      setUpdatingStatusId(order.id);
+      const success = await orderDataSource.updateOrderStatus(order.id, OrderStatuses.Confirmed);
+      if (success) {
+        try {
+          await handlePrintKot(order);
+        } catch (kotErr) {
+          console.warn('Auto KOT print after confirm warning:', kotErr);
+        }
+        await loadOrders();
+        if (viewingOrder?.id === order.id) {
+          setViewingOrder((prev) => (prev ? { ...prev, status: OrderStatuses.Confirmed as any } : null));
+        }
+      } else {
+        alert(`Could not confirm Order #${order.id}.`);
+      }
+    } catch (err: any) {
+      alert(`Failed to confirm order: ${err?.message || 'Server error'}`);
+    } finally {
+      setUpdatingStatusId(null);
     }
   };
 
@@ -725,7 +774,11 @@ export default function OrdersPage() {
               )}
 
               {/* Live Orders List */}
-              {filteredLiveOrders.length === 0 ? (
+              {loading && liveOrders.length === 0 ? (
+                <div className="rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] overflow-hidden">
+                  <OrdersTableSkeleton rows={6} />
+                </div>
+              ) : filteredLiveOrders.length === 0 ? (
                 <div className="rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-16 text-center text-xs text-[#667085]">
                   No active orders match your search or filter criteria.
                 </div>
@@ -757,17 +810,27 @@ export default function OrdersPage() {
                                 </span>
                               )}
                             </div>
-                            <span
-                              className={`rounded-full px-2.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wider ${
-                                isServed
-                                  ? 'bg-emerald-600 text-white animate-pulse'
-                                  : order.status === 'READY'
-                                  ? 'bg-blue-600 text-white'
-                                  : 'bg-amber-500/15 text-[#DE8626] border border-amber-500/30'
-                              }`}
-                            >
-                              {isServed ? 'Served • Ready for Bill' : order.status || 'Active'}
-                            </span>
+                            {(() => {
+                              const norm = normalizeOrderStatus(order.status);
+                              const isPlaced = norm === OrderStatuses.Placed || norm === OrderStatuses.PendingPayment;
+                              const badge = getOrderStatusBadge(order.status);
+                              return (
+                                <span
+                                  className={`rounded-full px-2.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wider flex items-center gap-1.5 ${
+                                    isServed
+                                      ? 'bg-emerald-600 text-white animate-pulse'
+                                      : isPlaced
+                                      ? 'bg-amber-500/15 text-[#DE8626] border border-amber-500/40 animate-pulse'
+                                      : order.status === 'READY'
+                                      ? 'bg-blue-600 text-white'
+                                      : 'bg-amber-500/15 text-[#DE8626] border border-amber-500/30'
+                                  }`}
+                                >
+                                  <span className={`inline-block h-1.5 w-1.5 rounded-full ${isPlaced ? 'bg-[#DE8626] animate-ping' : badge.dotClass}`} />
+                                  {isServed ? 'Served • Ready for Bill' : isPlaced ? 'Placed • Pending Confirm' : badge.label}
+                                </span>
+                              );
+                            })()}
                           </div>
 
                           {/* Table / Customer Details */}
@@ -852,23 +915,63 @@ export default function OrdersPage() {
                             </button>
                           </div>
 
-                          <div className="grid grid-cols-2 gap-2">
-                            <button
-                              onClick={() => handleViewTimeline(order)}
-                              className="flex items-center justify-center gap-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] py-2 text-xs font-semibold text-[#667085] hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-                            >
-                              <Eye className="h-3.5 w-3.5" />
-                              <span>Details</span>
-                            </button>
+{(() => {
+                            const norm = normalizeOrderStatus(order.status);
+                            const isPlaced = norm === OrderStatuses.Placed || norm === OrderStatuses.PendingPayment;
 
-                            <button
-                              onClick={() => setSettlingOrder(order)}
-                              className="flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 py-2 text-xs font-bold text-white shadow-xs transition-colors"
-                            >
-                              <Receipt className="h-3.5 w-3.5" />
-                              <span>Settle Bill</span>
-                            </button>
-                          </div>
+                            if (isPlaced) {
+                              return (
+                                <div className="space-y-2">
+                                  <button
+                                    onClick={() => handleConfirmOrder(order)}
+                                    disabled={updatingStatusId === order.id}
+                                    className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 py-2.5 text-xs font-bold text-white shadow-xs transition-colors disabled:opacity-50"
+                                  >
+                                    <Check className="h-4 w-4" />
+                                    <span>{updatingStatusId === order.id ? 'Confirming...' : 'Confirm Order & Fire KOT'}</span>
+                                  </button>
+
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <button
+                                      onClick={() => handleViewTimeline(order)}
+                                      className="flex items-center justify-center gap-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] py-2 text-xs font-semibold text-[#667085] hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                                    >
+                                      <Eye className="h-3.5 w-3.5" />
+                                      <span>Details</span>
+                                    </button>
+
+                                    <button
+                                      onClick={() => setSettlingOrder(order)}
+                                      className="flex items-center justify-center gap-1.5 rounded-xl border border-emerald-600/30 bg-emerald-500/10 hover:bg-emerald-500/20 py-2 text-xs font-bold text-emerald-700 dark:text-emerald-400 shadow-xs transition-colors"
+                                    >
+                                      <Receipt className="h-3.5 w-3.5" />
+                                      <span>Settle Bill</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            }
+
+                            return (
+                              <div className="grid grid-cols-2 gap-2">
+                                <button
+                                  onClick={() => handleViewTimeline(order)}
+                                  className="flex items-center justify-center gap-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] py-2 text-xs font-semibold text-[#667085] hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                                >
+                                  <Eye className="h-3.5 w-3.5" />
+                                  <span>Details</span>
+                                </button>
+
+                                <button
+                                  onClick={() => setSettlingOrder(order)}
+                                  className="flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 py-2 text-xs font-bold text-white shadow-xs transition-colors"
+                                >
+                                  <Receipt className="h-3.5 w-3.5" />
+                                  <span>Settle Bill</span>
+                                </button>
+                              </div>
+                            );
+                          })()}
                         </div>
                       </div>
                     );
@@ -1010,7 +1113,11 @@ export default function OrdersPage() {
               </div>
 
               {/* History Table */}
-              {filteredHistoryOrders.length === 0 ? (
+              {historyLoading ? (
+                <div className="rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] overflow-hidden">
+                  <OrdersTableSkeleton rows={6} />
+                </div>
+              ) : filteredHistoryOrders.length === 0 ? (
                 <div className="rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-16 text-center text-xs text-[#667085]">
                   No settled orders recorded yet today. When orders are settled at the counter or floor, they appear here.
                 </div>
@@ -1298,8 +1405,58 @@ export default function OrdersPage() {
                 )}
               </div>
 
+              {/* Quick Status Workflow Changer (matching F:\Menza) */}
+              {!['SETTLED', 'COMPLETED', 'CANCELLED'].includes((viewingOrder.status || '').toUpperCase()) && (
+                <div className="mb-4 rounded-2xl bg-[#FAF7F2] dark:bg-[#151A20] p-3.5 border border-[#E7E1DA] dark:border-[#2B3540]">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[11px] font-bold text-[#667085] dark:text-[#94A3B8] uppercase tracking-wider">
+                      Change Order / Kitchen Status:
+                    </span>
+                    {updatingStatusId === viewingOrder.id && (
+                      <span className="text-[10px] text-[#DE8626] font-bold animate-pulse">
+                        Updating status...
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {['Confirmed', 'Preparing', 'Ready', 'Served', 'Cancelled'].map((st) => {
+                      const isCurrent = (viewingOrder.status || '').toLowerCase() === st.toLowerCase();
+                      return (
+                        <button
+                          key={`workflow-btn-${st}`}
+                          disabled={isCurrent || updatingStatusId === viewingOrder.id}
+                          onClick={() => handleUpdateOrderStatus(viewingOrder.id, st)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                            isCurrent
+                              ? 'bg-[#DE8626] text-white shadow-xs'
+                              : 'bg-white dark:bg-[#1B2127] border border-[#E7E1DA] dark:border-[#2B3540] text-[#1E2930] dark:text-[#F3F4F6] hover:border-[#DE8626]'
+                          } disabled:opacity-50`}
+                        >
+                          {isCurrent ? `✓ ${st}` : st}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               {/* Action Buttons */}
               <div className="space-y-2">
+                {/* Prominent Confirm Button if Placed */}
+                {(normalizeOrderStatus(viewingOrder.status) === OrderStatuses.Placed ||
+                  normalizeOrderStatus(viewingOrder.status) === OrderStatuses.PendingPayment) && (
+                  <button
+                    onClick={() => handleConfirmOrder(viewingOrder)}
+                    disabled={updatingStatusId === viewingOrder.id}
+                    className="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 hover:bg-emerald-700 py-3 text-xs font-bold text-white shadow-md transition-colors disabled:opacity-50"
+                  >
+                    <Check className="h-4 w-4" />
+                    <span>
+                      {updatingStatusId === viewingOrder.id ? 'Confirming...' : 'Confirm Order & Fire KOT'}
+                    </span>
+                  </button>
+                )}
+
                 {/* Print Operations Strip */}
                 <div className="grid grid-cols-2 gap-2">
                   <button

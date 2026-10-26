@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
+import { WalletSkeleton } from '@/components/common/Skeleton';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { WebWalletService, RestaurantWalletDTO, WalletTransactionDTO } from '@/services/walletService';
 import { PaymentGatewayService, isRazorpayActive } from '@/payments/paymentGatewayService.web';
@@ -1009,10 +1010,20 @@ export default function WalletPage() {
               </div>
             </div>
 
-            {loading ? (
-              <div className="py-12 text-center text-xs text-[#667085]">
-                <RefreshCw className="h-5 w-5 animate-spin mx-auto mb-2 text-[#DE8626]" />
-                <span>Loading wallet ledger entries...</span>
+            {loading && transactions.length === 0 ? (
+              <div className="divide-y divide-[#E7E1DA]/60 dark:divide-[#2B3540]/60 animate-pulse p-4 space-y-3">
+                {[1,2,3,4,5].map(i => (
+                  <div key={i} className="pt-3 first:pt-0 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="h-9 w-9 rounded-xl bg-black/10 dark:bg-white/10" />
+                      <div className="space-y-1.5">
+                        <div className="h-3.5 w-36 rounded bg-black/10 dark:bg-white/10" />
+                        <div className="h-3 w-20 rounded bg-black/10 dark:bg-white/10" />
+                      </div>
+                    </div>
+                    <div className="h-5 w-20 rounded-lg bg-black/10 dark:bg-white/10" />
+                  </div>
+                ))}
               </div>
             ) : filteredTransactions.length === 0 ? (
               <div className="py-12 text-center text-xs text-[#667085] dark:text-[#94A3B8]">

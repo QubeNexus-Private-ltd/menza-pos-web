@@ -47,6 +47,7 @@ import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
 import { FeatureGate } from '@/components/subscription/FeatureGate';
 import { DishImage } from '@/components/common/DishImage';
+import { PosGridSkeleton } from '@/components/common/Skeleton';
 import dynamic from 'next/dynamic';
 import type { CustomizationResult } from '@/components/pos/DishCustomizationModal';
 import type { ParkedCart } from '@/components/pos/ParkedCartsModal';
@@ -129,6 +130,11 @@ import {
   OrderMaster,
   ActiveOrderType,
 } from '@shared/domain/models/Order';
+import {
+  normalizeOrderStatus,
+  OrderStatuses,
+  getOrderStatusBadge,
+} from '@/lib/utils/orderStatusEngine';
 import { ReceiptData } from '@shared/core/printer/EscPosBuilder';
 import { WalletEvents } from '@shared/core/utils/walletEvents';
 import {
@@ -648,6 +654,89 @@ export default function PosPage() {
     },
     [loadActiveTableOrder]
   );
+
+  const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
+
+  // Manual status update for table order (e.g. Confirmed, Preparing, Ready, Served)
+  const handleUpdateOrderStatus = async (orderId: number, nextStatus: string) => {
+    if (!orderId || !nextStatus || isUpdatingStatus) return;
+    try {
+      setIsUpdatingStatus(true);
+      const success = await orderRemoteDataSource.updateOrderStatus(orderId, nextStatus);
+      if (success) {
+        if (activeTableOrder?.id === orderId) {
+          const updated = { ...activeTableOrder, status: nextStatus as any };
+          setActiveTableOrder(updated);
+          if (selectedTable?.id) {
+            usePosCatalogStore.getState().setActiveTableOrder(selectedTable.id, updated);
+          }
+        }
+      } else {
+        alert(`Could not update Order #${orderId} to ${nextStatus}.`);
+      }
+    } catch (err: any) {
+      alert(`Failed to update order status: ${err?.message || 'Server error'}`);
+    } finally {
+      setIsUpdatingStatus(false);
+    }
+  };
+
+  // Confirm incoming Placed order & optionally print KOT
+  const handleConfirmActiveOrder = async (orderId?: number) => {
+    const targetOrder =
+      activeTableOrder && (!orderId || activeTableOrder.id === orderId)
+        ? activeTableOrder
+        : null;
+    const targetId = orderId || targetOrder?.id;
+    if (!targetId || isUpdatingStatus) return;
+
+    try {
+      setIsUpdatingStatus(true);
+      const success = await orderRemoteDataSource.updateOrderStatus(targetId, OrderStatuses.Confirmed);
+      if (success) {
+        if (targetOrder) {
+          try {
+            const kotData: ReceiptData = {
+              restaurantName: storeDisplayName || 'Menza Restaurant',
+              orderId: targetOrder.id,
+              orderNumber: targetOrder.orderNumber,
+              pickupToken: targetOrder.pickupToken || targetOrder.orderNumber || String(targetOrder.id),
+              tableName: selectedTable?.tableName || targetOrder.tableName,
+              orderType: 'DINE_IN',
+              date: new Date().toLocaleDateString('en-IN'),
+              customerName: targetOrder.customerName,
+              customerPhone: targetOrder.mobileNumber,
+              items: (targetOrder.items || []).map((i: any) => ({
+                itemName: i.itemName,
+                quantity: i.quantity,
+                unitPrice: Number(i.unitPrice || 0),
+                totalPrice: Number(i.totalPrice || (i.quantity * (i.unitPrice || 0))),
+              })),
+              grandTotal: Number(targetOrder.totalAmount || 0),
+              isKot: true,
+            };
+            await WebPrinterService.printKot(kotData, paperWidth);
+          } catch (kotErr) {
+            console.warn('Auto KOT print warning:', kotErr);
+          }
+
+          const updated = { ...targetOrder, status: OrderStatuses.Confirmed as any };
+          setActiveTableOrder(updated);
+          if (selectedTable?.id) {
+            usePosCatalogStore.getState().setActiveTableOrder(selectedTable.id, updated);
+          }
+        } else if (selectedTable?.id) {
+          await loadActiveTableOrder(selectedTable.id, true);
+        }
+      } else {
+        alert(`Could not confirm Order #${targetId}.`);
+      }
+    } catch (err: any) {
+      alert(`Failed to confirm order: ${err?.message || 'Server error'}`);
+    } finally {
+      setIsUpdatingStatus(false);
+    }
+  };
 
   // 3. Customer Mobile Lookup (10 Digits)
   const handlePhoneChange = (val: string) => {
@@ -1655,63 +1744,100 @@ export default function PosPage() {
             </div>
           </div>
 
-          {/* Running Kitchen Tab (Items Already Sent to Kitchen) */}
-          {activeTableOrder && (
-            <div className="rounded-2xl border border-amber-500/40 bg-gradient-to-br from-amber-500/10 to-orange-500/5 p-3 space-y-2.5 shadow-2xs">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="flex h-7 w-7 items-center justify-center rounded-xl bg-amber-500/20 text-[#DE8626] shrink-0">
-                    <Utensils className="h-4 w-4" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="text-xs font-black text-[#1E2930] dark:text-[#F3F4F6]">
-                        Table T-{selectedTable?.tableNumber} • Running Tab
-                      </span>
-                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-extrabold text-[#DE8626]">
-                        <span className="h-1.5 w-1.5 rounded-full bg-[#DE8626] animate-pulse" />
-                        Kitchen Active
+          {/* Running Kitchen Tab (Items Placed / Sent to Kitchen) */}
+          {activeTableOrder && (() => {
+            const activeNorm = normalizeOrderStatus(activeTableOrder.status);
+            const isOrderPlaced = activeNorm === OrderStatuses.Placed || activeNorm === OrderStatuses.PendingPayment;
+            return (
+              <div className={`rounded-2xl border p-3 space-y-2.5 shadow-2xs transition-all ${
+                isOrderPlaced
+                  ? 'border-amber-500/50 bg-gradient-to-br from-amber-500/15 to-orange-500/5'
+                  : 'border-amber-500/40 bg-gradient-to-br from-amber-500/10 to-orange-500/5'
+              }`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-xl bg-amber-500/20 text-[#DE8626] shrink-0">
+                      <Utensils className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-xs font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                          Table T-{selectedTable?.tableNumber} • Running Tab
+                        </span>
+                        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-extrabold ${
+                          isOrderPlaced
+                            ? 'bg-amber-500/25 text-[#DE8626] border border-amber-500/40 animate-pulse'
+                            : 'bg-emerald-500/20 text-emerald-600'
+                        }`}>
+                          <span className={`h-1.5 w-1.5 rounded-full ${isOrderPlaced ? 'bg-[#DE8626] animate-ping' : 'bg-emerald-600'}`} />
+                          {isOrderPlaced ? 'Pending Confirmation' : activeTableOrder.status || 'Kitchen Active'}
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-[#667085] dark:text-[#94A3B8]">
+                        Order #{activeTableOrder.orderNumber || activeTableOrder.id} • {activeTableOrder.items?.length || 0} dishes placed
                       </span>
                     </div>
-                    <span className="text-[10px] text-[#667085] dark:text-[#94A3B8]">
-                      Order #{activeTableOrder.orderNumber || activeTableOrder.id} • {activeTableOrder.items?.length || 0} dishes placed
-                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handlePrintGuestCheck}
+                    className="flex items-center gap-1 rounded-xl border border-[#DE8626] bg-white dark:bg-[#1B2127] px-2.5 py-1 text-[11px] font-bold text-[#DE8626] hover:bg-amber-500/10 transition-colors shadow-2xs shrink-0"
+                    title="Print Proforma / Guest Check Slip"
+                  >
+                    <Printer className="h-3 w-3" />
+                    <span>Bill Slip</span>
+                  </button>
+                </div>
+
+                {/* Quick Status Workflow Changer (matching F:\Menza) */}
+                <div className="flex items-center justify-between pt-1.5 border-t border-amber-500/20 text-xs">
+                  <span className="text-[10px] font-bold text-[#667085] dark:text-[#94A3B8]">Status:</span>
+                  <div className="flex flex-wrap gap-1">
+                    {['Confirmed', 'Preparing', 'Ready', 'Served'].map((st) => {
+                      const isCur = (activeTableOrder.status || '').toLowerCase() === st.toLowerCase();
+                      return (
+                        <button
+                          key={st}
+                          type="button"
+                          disabled={isCur || isUpdatingStatus}
+                          onClick={() => handleUpdateOrderStatus(activeTableOrder.id, st)}
+                          className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-all ${
+                            isCur
+                              ? 'bg-[#DE8626] text-white shadow-2xs'
+                              : 'bg-white/90 dark:bg-[#1B2127]/90 border border-[#E7E1DA] dark:border-[#2B3540] text-[#1E2930] dark:text-[#F3F4F6] hover:border-[#DE8626]'
+                          } disabled:opacity-50`}
+                        >
+                          {isCur ? `✓ ${st}` : st}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={handlePrintGuestCheck}
-                  className="flex items-center gap-1 rounded-xl border border-[#DE8626] bg-white dark:bg-[#1B2127] px-2.5 py-1 text-[11px] font-bold text-[#DE8626] hover:bg-amber-500/10 transition-colors shadow-2xs shrink-0"
-                  title="Print Proforma / Guest Check Slip"
-                >
-                  <Printer className="h-3 w-3" />
-                  <span>Bill Slip</span>
-                </button>
-              </div>
 
-              {/* Running Dishes List */}
-              <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
-                {(activeTableOrder.items || []).map((it: any, idx: number) => (
-                  <div
-                    key={idx}
-                    className="flex justify-between items-start gap-2 text-xs py-1 px-2.5 rounded-xl bg-white/70 dark:bg-[#1B2127]/70 border border-[#E7E1DA]/60 dark:border-[#2B3540]/60"
-                  >
-                    <span className="font-semibold text-[#1E2930] dark:text-[#F3F4F6] break-words flex-1 min-w-0">
-                      {it.quantity}x {it.itemName}
-                    </span>
-                    <span className="font-bold text-[#DE8626] shrink-0">
-                      ₹{((it.unitPrice || it.amount || 0) * (it.quantity || 1)).toFixed(2)}
-                    </span>
-                  </div>
-                ))}
-              </div>
+                {/* Running Dishes List */}
+                <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+                  {(activeTableOrder.items || []).map((it: any, idx: number) => (
+                    <div
+                      key={idx}
+                      className="flex justify-between items-start gap-2 text-xs py-1 px-2.5 rounded-xl bg-white/70 dark:bg-[#1B2127]/70 border border-[#E7E1DA]/60 dark:border-[#2B3540]/60"
+                    >
+                      <span className="font-semibold text-[#1E2930] dark:text-[#F3F4F6] break-words flex-1 min-w-0">
+                        {it.quantity}x {it.itemName}
+                      </span>
+                      <span className="font-bold text-[#DE8626] shrink-0">
+                        ₹{((it.unitPrice || it.amount || 0) * (it.quantity || 1)).toFixed(2)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
 
-              <div className="flex justify-between items-center font-bold text-xs pt-1.5 border-t border-amber-500/20 text-[#DE8626]">
-                <span>Running Order Total:</span>
-                <span className="text-sm font-black">₹{existingTableTotal.toFixed(2)}</span>
+                <div className="flex justify-between items-center font-bold text-xs pt-1.5 border-t border-amber-500/20 text-[#DE8626]">
+                  <span>Running Order Total:</span>
+                  <span className="text-sm font-black">₹{existingTableTotal.toFixed(2)}</span>
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
 
         {/* Cart Items List */}
@@ -2024,46 +2150,92 @@ export default function PosPage() {
           /* ==================================================== */
           /* DINE-IN TABLE ORDER ACTIONS                          */
           /* ==================================================== */
-          activeTableOrder && cart.length === 0 ? (
-            /* Scenario A: Table is running, no new cart items staged */
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-[11px] font-bold px-2.5 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[#DE8626]">
-                <span className="flex items-center gap-1.5">
-                  <Utensils className="h-3.5 w-3.5 shrink-0" />
-                  <span>Tap dishes on menu to send Add-on KOT</span>
-                </span>
-                <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md bg-[#DE8626] text-white">
-                  Multi-Round KOT
-                </span>
+          activeTableOrder && cart.length === 0 ? (() => {
+            const activeNorm = normalizeOrderStatus(activeTableOrder.status);
+            const isOrderPlaced = activeNorm === OrderStatuses.Placed || activeNorm === OrderStatuses.PendingPayment;
+
+            return (
+              <div className="space-y-2">
+                {isOrderPlaced ? (
+                  <>
+                    <button
+                      type="button"
+                      disabled={isUpdatingStatus}
+                      onClick={() => handleConfirmActiveOrder()}
+                      className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-600 via-emerald-700 to-emerald-800 py-3.5 text-xs font-bold text-white shadow-md shadow-emerald-600/20 hover:brightness-105 disabled:opacity-40 transition-all"
+                    >
+                      <Check className="h-4 w-4" />
+                      <span>{isUpdatingStatus ? 'Confirming...' : 'Confirm Order & Fire KOT'}</span>
+                    </button>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={handlePrintGuestCheck}
+                        className="flex items-center justify-center gap-1.5 rounded-2xl border border-[#DE8626] bg-amber-500/10 py-3 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-all shadow-xs"
+                        title="Print Guest Check / Proforma Slip"
+                      >
+                        <Printer className="h-4 w-4" />
+                        <span>Print Bill Slip</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isSettling}
+                        onClick={() => handleCheckout(PosCheckoutModes.PAY_AND_SETTLE)}
+                        className="flex items-center justify-center gap-1.5 rounded-2xl border border-emerald-600/30 bg-emerald-500/10 py-3 text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/20 disabled:opacity-40 transition-all"
+                      >
+                        {isSettling ? (
+                          <span>Settling...</span>
+                        ) : (
+                          <>
+                            <Receipt className="h-4 w-4" />
+                            <span>Settle Bill ₹{payableGrandTotal.toFixed(2)} [F2]</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between text-[11px] font-bold px-2.5 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[#DE8626]">
+                      <span className="flex items-center gap-1.5">
+                        <Utensils className="h-3.5 w-3.5 shrink-0" />
+                        <span>Tap dishes on menu to send Add-on KOT</span>
+                      </span>
+                      <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md bg-[#DE8626] text-white">
+                        Multi-Round KOT
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={handlePrintGuestCheck}
+                        className="flex items-center justify-center gap-1.5 rounded-2xl border border-[#DE8626] bg-amber-500/10 py-3.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-all shadow-xs"
+                        title="Print Guest Check / Proforma Slip"
+                      >
+                        <Printer className="h-4 w-4" />
+                        <span>Print Bill Slip</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isSettling}
+                        onClick={() => handleCheckout(PosCheckoutModes.PAY_AND_SETTLE)}
+                        className="flex items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-emerald-600 via-emerald-700 to-emerald-800 py-3.5 text-xs font-bold text-white shadow-md shadow-emerald-600/20 hover:brightness-105 disabled:opacity-40 transition-all"
+                      >
+                        {isSettling ? (
+                          <span>Settling...</span>
+                        ) : (
+                          <>
+                            <Receipt className="h-4 w-4" />
+                            <span>Settle Bill ₹{payableGrandTotal.toFixed(2)} [F2]</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={handlePrintGuestCheck}
-                  className="flex items-center justify-center gap-1.5 rounded-2xl border border-[#DE8626] bg-amber-500/10 py-3.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-all shadow-xs"
-                  title="Print Guest Check / Proforma Slip"
-                >
-                  <Printer className="h-4 w-4" />
-                  <span>Print Bill Slip</span>
-                </button>
-                <button
-                  type="button"
-                  disabled={isSettling}
-                  onClick={() => handleCheckout(PosCheckoutModes.PAY_AND_SETTLE)}
-                  className="flex items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-emerald-600 via-emerald-700 to-emerald-800 py-3.5 text-xs font-bold text-white shadow-md shadow-emerald-600/20 hover:brightness-105 disabled:opacity-40 transition-all"
-                >
-                  {isSettling ? (
-                    <span>Settling...</span>
-                  ) : (
-                    <>
-                      <Receipt className="h-4 w-4" />
-                      <span>Settle Bill ₹{payableGrandTotal.toFixed(2)} [F2]</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-          ) : activeTableOrder && cart.length > 0 ? (
+            );
+          })() : activeTableOrder && cart.length > 0 ? (
             /* Scenario B: Table is running AND cashier has staged new add-on dishes */
             <div className="grid grid-cols-2 gap-2">
               <button
@@ -2600,14 +2772,7 @@ export default function PosPage() {
               {/* Product Menu Dishes Responsive Grid */}
               <div className="flex-1 overflow-y-auto p-3 sm:p-4 pb-28 lg:pb-4">
                 {loading ? (
-                  <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-4 gap-2.5 sm:gap-3">
-                    {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
-                      <div
-                        key={n}
-                        className="h-44 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] animate-pulse"
-                      />
-                    ))}
-                  </div>
+                  <PosGridSkeleton count={8} />
                 ) : filteredItems.length === 0 ? (
                   <div className="py-24 text-center text-xs text-[#667085] dark:text-[#94A3B8]">
                     No dishes found matching your search keywords or filters.
@@ -3147,6 +3312,13 @@ export default function PosPage() {
               }
               setNotificationDrawerOpen(false);
             }}
+            onConfirmOrder={handleConfirmActiveOrder}
+          />
+
+          {/* Real-time Order Alert Banner (Floating Toast) */}
+          <OrderAlertBanner
+            onPress={() => setNotificationDrawerOpen(true)}
+            onConfirmOrder={handleConfirmActiveOrder}
           />
 
           {/* Web Printer Settings Modal */}

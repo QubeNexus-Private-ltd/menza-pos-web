@@ -1,15 +1,16 @@
 'use client';
 
 import React, { useEffect } from 'react';
-import { BellRing, X, ChevronRight, Utensils, ReceiptIndianRupee as Receipt } from 'lucide-react';
+import { BellRing, X, ChevronRight, Utensils, ReceiptIndianRupee as Receipt, Check } from 'lucide-react';
 import { useNotificationStore } from '@shared/presentation/state/useNotificationStore';
 
 interface OrderAlertBannerProps {
   onPress: () => void;
   onSettleOrder?: (orderId: number) => void;
+  onConfirmOrder?: (orderId: number) => Promise<void> | void;
 }
 
-export const OrderAlertBanner: React.FC<OrderAlertBannerProps> = ({ onPress, onSettleOrder }) => {
+export const OrderAlertBanner: React.FC<OrderAlertBannerProps> = ({ onPress, onSettleOrder, onConfirmOrder }) => {
   const { latestIncomingOrder, dismissBanner } = useNotificationStore();
 
   useEffect(() => {
@@ -90,6 +91,21 @@ export const OrderAlertBanner: React.FC<OrderAlertBannerProps> = ({ onPress, onS
       </div>
 
       <div className="flex items-center gap-1">
+        {onConfirmOrder && (isNewOrder || statusUpper === 'PLACED') && (
+          <button
+            type="button"
+            onClick={async (e) => {
+              e.stopPropagation();
+              dismissBanner();
+              await onConfirmOrder(latestIncomingOrder.orderId);
+            }}
+            className="flex items-center gap-1 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1.5 text-xs font-bold shadow-sm transition-colors shrink-0"
+            title="Confirm Order & Route to Kitchen"
+          >
+            <Check className="h-3.5 w-3.5" />
+            <span>Confirm</span>
+          </button>
+        )}
         <ChevronRight className="h-4 w-4 text-[#DE8626]" />
         <button
           onClick={(e) => {

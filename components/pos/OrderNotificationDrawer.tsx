@@ -17,6 +17,7 @@ import {
   ReceiptIndianRupee as Receipt,
   Sparkles,
   ChevronRight,
+  Check,
 } from 'lucide-react';
 import { useNotificationStore, OrderNotificationItem } from '@shared/presentation/state/useNotificationStore';
 
@@ -24,12 +25,14 @@ interface OrderNotificationDrawerProps {
   isOpen: boolean;
   onClose: () => void;
   onSelectOrder?: (orderId: number, tableId?: number) => void;
+  onConfirmOrder?: (orderId: number) => Promise<void> | void;
 }
 
 export const OrderNotificationDrawer: React.FC<OrderNotificationDrawerProps> = ({
   isOpen,
   onClose,
   onSelectOrder,
+  onConfirmOrder,
 }) => {
   const {
     notifications,
@@ -229,11 +232,28 @@ export const OrderNotificationDrawer: React.FC<OrderNotificationDrawerProps> = (
                       )}
                     </div>
 
-                    {item.totalAmount > 0 && (
-                      <span className="font-extrabold text-[#DE8626]">
-                        ₹{item.totalAmount.toFixed(2)}
-                      </span>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {item.totalAmount > 0 && (
+                        <span className="font-extrabold text-[#DE8626]">
+                          ₹{item.totalAmount.toFixed(2)}
+                        </span>
+                      )}
+                      {onConfirmOrder && (isNewOrder || statusUpper === 'PLACED') && (
+                        <button
+                          type="button"
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            markAsRead(item.id);
+                            await onConfirmOrder(item.orderId);
+                          }}
+                          className="flex items-center gap-1 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1 text-[11px] font-bold shadow-xs transition-colors shrink-0"
+                          title="Confirm Order & Route to Kitchen"
+                        >
+                          <Check className="h-3 w-3" />
+                          <span>Confirm</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   {item.itemsSummary && (

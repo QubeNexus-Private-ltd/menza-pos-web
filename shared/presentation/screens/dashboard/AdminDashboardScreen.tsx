@@ -802,7 +802,14 @@ export const AdminDashboardScreen: React.FC = () => {
     if (!hasActiveSub || !activeSubscription) return false;
     const entitlements = activeSubscription.entitlements || [];
     if (!Array.isArray(entitlements) || entitlements.length === 0) return false;
-    const ent: any = entitlements.find((e: any) => (e.configKey || e.ConfigKey || '').toLowerCase() === key.toLowerCase());
+    const targetKey = key.toLowerCase();
+    const isKds = targetKey === 'iskdsenabled' || targetKey === 'iskdsappenabled' || targetKey === 'iscaptainmenzaappenabled';
+    const ent: any = entitlements.find((e: any) => {
+      const k = (e.configKey || e.ConfigKey || '').toLowerCase();
+      return isKds
+        ? (k === 'iskdsenabled' || k === 'iskdsappenabled' || k === 'iscaptainmenzaappenabled')
+        : k === targetKey;
+    });
     return ent ? Boolean(ent.isAllowed ?? ent.IsAllowed) : false;
   };
 

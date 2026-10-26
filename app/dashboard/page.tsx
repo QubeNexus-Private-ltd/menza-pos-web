@@ -41,6 +41,7 @@ const OrderSettleModal = dynamic(
 );
 import { OrderStatusPipeline } from '@/components/dashboard/OrderStatusPipeline';
 import { DashboardOrderDetailDrawer } from '@/components/dashboard/DashboardOrderDetailDrawer';
+import { DashboardMetricsSkeleton, OrdersTableSkeleton } from '@/components/common/Skeleton';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { useNotificationStore } from '@shared/presentation/state/useNotificationStore';
 import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
@@ -609,6 +610,9 @@ export default function DashboardPage() {
           ) : (
             <>
               {/* KPI Metrics Cards Grid */}
+              {loading && !revenueData ? (
+                <DashboardMetricsSkeleton />
+              ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* KPI 1: Today's Net Revenue */}
             <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-5 shadow-sm">
@@ -707,6 +711,7 @@ export default function DashboardPage() {
               </div>
             </div>
           </div>
+              )}
 
           {/* Canonical Order Status Pipeline Widget */}
           {!isSuperAdmin && (
@@ -885,7 +890,9 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            {filteredOrders.length === 0 ? (
+            {loading && recentOrders.length === 0 ? (
+              <OrdersTableSkeleton rows={5} />
+            ) : filteredOrders.length === 0 ? (
               <div className="py-12 text-center text-xs text-[#667085] dark:text-[#94A3B8]">
                 {orderSearchQuery || activePipelineStage !== 'ALL'
                   ? 'No orders match the current filter or search. Try clearing filters.'

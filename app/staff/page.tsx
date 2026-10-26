@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
+import { StaffListSkeleton } from '@/components/common/Skeleton';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { RoleRemoteDataSource } from '@shared/data/datasources/RoleRemoteDataSource';
 import { StaffMember } from '@shared/domain/models/StaffMember';
@@ -138,8 +139,8 @@ export default function StaffPage() {
 
           {/* Staff Members List */}
           <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] shadow-sm overflow-hidden">
-            {loading ? (
-              <div className="py-20 text-center text-xs text-[#667085]">Loading staff directory...</div>
+            {loading && staffList.length === 0 ? (
+              <StaffListSkeleton count={5} />
             ) : staffList.length === 0 ? (
               <div className="py-20 text-center text-xs text-[#667085]">
                 No staff members added yet. Click "Add Staff Member" to assign your first role.

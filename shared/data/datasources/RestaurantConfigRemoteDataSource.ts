@@ -66,7 +66,6 @@ export class RestaurantConfigRemoteDataSource {
         bankerIfscCode: item.bankerIfscCode || item.BankerIfscCode || undefined,
         bankerBankName: item.bankerBankName || item.BankerBankName || undefined,
         businessProfile: (item.businessProfile || item.BusinessProfile || 'HYBRID') as any,
-        dineInPaymentMode: (item.dineInPaymentMode || item.DineInPaymentMode || 'PREPAID') as any,
         kitchenMode: (item.kitchenMode || item.KitchenMode || 'SINGLE_KITCHEN') as any,
         isKitchenActive: Boolean(item.isKitchenActive ?? item.IsKitchenActive ?? true),
         kitchenPausedUntilUtc: item.kitchenPausedUntilUtc ?? item.KitchenPausedUntilUtc ?? null,
@@ -96,12 +95,22 @@ export class RestaurantConfigRemoteDataSource {
         bankerAccountHolderName: (activeRest as any)?.bankerAccountHolderName || activeRest?.restaurantName || undefined,
         printUpiQrOnReceipts: (activeRest as any)?.printUpiQrOnReceipts ?? true,
         businessProfile: 'HYBRID',
-        dineInPaymentMode: 'PREPAID',
         kitchenMode: 'SINGLE_KITCHEN',
         isKitchenActive: true,
         isActive: true,
       };
     }
+  }
+
+  async updateImagesOnly(
+    restaurantId: number,
+    images: { logoUrl?: string; imageUrl?: string },
+    currentDetails?: Partial<RestaurantConfig>
+  ): Promise<boolean> {
+    return this.updateConfig(restaurantId, {
+      ...currentDetails,
+      ...images,
+    });
   }
 
   async updateConfig(restaurantId: number, config: Partial<RestaurantConfig>): Promise<boolean> {
@@ -121,7 +130,6 @@ export class RestaurantConfigRemoteDataSource {
         cgstPercentage: typeof config.cgstPercentage === 'number' ? config.cgstPercentage : 2.5,
         kitchenMode: config.kitchenMode || 'SINGLE_KITCHEN',
         isKitchenActive: config.isKitchenActive !== undefined ? config.isKitchenActive : true,
-        dineInPaymentMode: config.dineInPaymentMode || 'PREPAID',
       };
 
       const response = await apiClient.put(`/RestaurantConfig/${targetId}`, payload, {
@@ -130,26 +138,6 @@ export class RestaurantConfigRemoteDataSource {
       return response.status === 200 || response.status === 204;
     } catch (err: any) {
       console.warn('Update restaurant profile error:', err?.message);
-      return false;
-    }
-  }
-
-  async updateImagesOnly(
-    restaurantId: number,
-    images: { imageUrl?: string; logoUrl?: string },
-    fallbackConfig?: Partial<RestaurantConfig>
-  ): Promise<boolean> {
-    try {
-      const current = await this.getConfig(restaurantId);
-      const merged: Partial<RestaurantConfig> = {
-        ...current,
-        ...fallbackConfig,
-        imageUrl: images.imageUrl !== undefined ? images.imageUrl : current.imageUrl,
-        logoUrl: images.logoUrl !== undefined ? images.logoUrl : current.logoUrl,
-      };
-      return await this.updateConfig(restaurantId, merged);
-    } catch (err: any) {
-      console.warn('Update restaurant images error:', err?.message);
       return false;
     }
   }
@@ -176,12 +164,16 @@ export class RestaurantConfigRemoteDataSource {
     }
   }
 
-  async getOperatingStatus(restaurantId: number): Promise<import('../../domain/models/RestaurantConfig').StoreOperatingStatus | null> {
+  async getOperatingStatus(restaurantId: number, forceRefresh: boolean = false): Promise<import('../../domain/models/RestaurantConfig').StoreOperatingStatus | null> {
     try {
       if (!restaurantId || restaurantId <= 0) return null;
       const response = await apiClient.get(`/RestaurantConfig/${restaurantId}/OperatingStatus`, {
-        headers: { 'X-Restaurant-Id': restaurantId.toString() },
-      });
+        headers: {
+          'X-Restaurant-Id': restaurantId.toString(),
+          ...(forceRefresh ? { 'Cache-Control': 'no-cache' } : {}),
+        },
+        skipCache: forceRefresh,
+      } as any);
       return this.unwrapStoreStatus(response.data, restaurantId);
     } catch (err: any) {
       console.warn('Failed to fetch operating status:', err?.message);
@@ -195,7 +187,20 @@ export class RestaurantConfigRemoteDataSource {
   ): Promise<import('../../domain/models/RestaurantConfig').StoreOperatingStatus | null> {
     try {
       if (!restaurantId || restaurantId <= 0) return null;
-      const response = await apiClient.post(`/RestaurantConfig/${restaurantId}/ToggleOrdering`, request, {
+      const payload: any = { ...request };
+      if (request.businessProfile) {
+        payload.BusinessProfile = request.businessProfile;
+        if (request.businessProfile === 'DINE_IN' || request.businessProfile === 'HYBRID') {
+          payload.isTableOrderingActive = true;
+          payload.IsTableOrderingActive = true;
+          payload.isTableOrder = true;
+          payload.IsTableOrder = true;
+        } else if (request.businessProfile === 'QSR_CAFE') {
+          payload.isTableOrderingActive = false;
+          payload.IsTableOrderingActive = false;
+        }
+      }
+      const response = await apiClient.post(`/RestaurantConfig/${restaurantId}/ToggleOrdering`, payload, {
         headers: { 'X-Restaurant-Id': restaurantId.toString() },
       });
       const result = this.unwrapStoreStatus(response.data, restaurantId);
@@ -259,9 +264,30 @@ export class RestaurantConfigRemoteDataSource {
           ? obj.IsKitchenActive
           : obj.isKitchenActive !== false;
 
+      const businessProfile = (obj.businessProfile || obj.BusinessProfile || 'HYBRID') as any;
+      const isTableOrderingActive = Boolean(
+        obj.isTableOrderingActive ??
+        obj.IsTableOrderingActive ??
+        obj.isTableOrder ??
+        obj.IsTableOrder ??
+        (businessProfile !== 'QSR_CAFE')
+      );
+      const isTableOrder = Boolean(
+        obj.isTableOrder ??
+        obj.IsTableOrder ??
+        obj.istableorder ??
+        obj.allowTableOrdering ??
+        obj.AllowTableOrdering ??
+        isTableOrderingActive
+      );
+
       return {
         ...obj,
         restaurantId: obj.restaurantId || restaurantId,
+        businessProfile,
+        isTableOrderingActive,
+        isTableOrder,
+        allowTableOrdering: isTableOrder,
         isKitchenActive,
         isOpen: Boolean(obj.isOpen ?? obj.IsOpen ?? false),
         canPlaceOrder: Boolean(obj.canPlaceOrder ?? obj.CanPlaceOrder ?? obj.isOpen ?? false),

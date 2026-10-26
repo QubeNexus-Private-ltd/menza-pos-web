@@ -3,7 +3,7 @@ import { RestaurantSubscriptionHistory, SubscriptionPlan, UserSubscriptionStatus
 export interface ISubscriptionRepository {
   getPlans(): Promise<SubscriptionPlan[]>;
   getMySubscription(): Promise<UserSubscriptionStatus | null>;
-  getRestaurantSubscription(restaurantId: number): Promise<UserSubscriptionStatus | null>;
+  getRestaurantSubscription(restaurantId: number, bypassCache?: boolean): Promise<UserSubscriptionStatus | null>;
   createPaymentOrder(planId: number): Promise<{ cfOrderId: string; paymentSessionId: string }>;
   verifyPayment(cfOrderId: string): Promise<boolean>;
   initiateCashFreePayment(
@@ -30,6 +30,16 @@ export interface ISubscriptionRepository {
     razorpayPaymentId?: string,
     razorpaySignature?: string
   ): Promise<{ success: boolean; message?: string }>;
+  checkCashFreePaymentStatus(
+    orderId: string
+  ): Promise<{
+    orderId: string;
+    paymentStatus: string;
+    gatewayOrderStatus?: string;
+    transactionId?: string;
+    amount?: number;
+    failureReason?: string;
+  }>;
   getCashFreePaymentStatus(
     orderId: string
   ): Promise<{

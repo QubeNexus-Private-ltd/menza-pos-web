@@ -1,7 +1,11 @@
 {
   "compilerOptions": {
     "target": "ES2020",
-    "lib": ["dom", "dom.iterable", "esnext"],
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
     "allowJs": true,
     "skipLibCheck": true,
     "strict": true,
@@ -20,13 +24,28 @@
     ],
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./*"],
-      "@shared/*": ["./shared/*", "../src/*"],
-      "react-native": ["./shims/react-native.ts"],
-      "@react-native-async-storage/async-storage": ["./shims/async-storage.ts"],
-      "expo-print": ["./shims/expo-print.ts"],
-      "expo-sharing": ["./shims/expo-sharing.ts"],
-      "lucide-react-native": ["./node_modules/lucide-react"]
+      "@/*": [
+        "./*"
+      ],
+      "@shared/*": [
+        "./shared/*",
+        "../src/*"
+      ],
+      "react-native": [
+        "./shims/react-native.ts"
+      ],
+      "@react-native-async-storage/async-storage": [
+        "./shims/async-storage.ts"
+      ],
+      "expo-print": [
+        "./shims/expo-print.ts"
+      ],
+      "expo-sharing": [
+        "./shims/expo-sharing.ts"
+      ],
+      "lucide-react-native": [
+        "./node_modules/lucide-react"
+      ]
     }
   },
   "include": [
@@ -44,6 +63,8 @@
     "shared/presentation/hooks/**/*",
     "shared/presentation/hooks",
     "shared/presentation/navigation/**/*",
-    "shared/presentation/navigation"
+    "shared/presentation/navigation",
+    "shared/core/offline/**/*",
+    "shared/core/offline"
   ]
 }

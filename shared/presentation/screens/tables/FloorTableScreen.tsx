@@ -52,6 +52,7 @@ import {
   Printer,
   CreditCard,
   History,
+  Lock,
 } from 'lucide-react-native';
 import { Typography } from '../../../core/theme/typography';
 import { Spacing } from '../../../core/theme/spacing';
@@ -72,10 +73,12 @@ import { RestaurantConfigRemoteDataSource } from '../../../data/datasources/Rest
 import { OrderRemoteDataSource } from '../../../data/datasources/OrderRemoteDataSource';
 import { OrderMaster } from '../../../domain/models/Order';
 import { useAuthStore } from '../../state/useAuthStore';
+import { useSubscriptionStore } from '../../state/useSubscriptionStore';
 import { usePrinterStore } from '../../state/usePrinterStore';
 import { useNotificationStore } from '../../state/useNotificationStore';
 import { GildedAlertModal, GildedAlertConfig } from '../../components/GildedAlertModal';
 import { RestaurantQrModal } from '../../components/RestaurantQrModal';
+import { TableQrModal } from '../../components/TableQrModal';
 import { WalletRechargeModal } from '../../components/WalletRechargeModal';
 import { CashierSettlementModal } from '../../components/CashierSettlementModal';
 import { WalletEvents } from '../../../core/utils/walletEvents';
@@ -158,6 +161,7 @@ export const FloorTableScreen: React.FC<FloorTableScreenProps> = ({ onClose, onO
   const [editingTable, setEditingTable] = useState<TableMaster | null>(null);
   const [selectedTableAction, setSelectedTableAction] = useState<TableMaster | null>(null);
   const [qrModalVisible, setQrModalVisible] = useState(false);
+  const [tableQrModalVisible, setTableQrModalVisible] = useState(false);
   const [selectedTableForQr, setSelectedTableForQr] = useState<TableMaster | null>(null);
 
   // Table History Timeline Modal
@@ -607,7 +611,8 @@ export const FloorTableScreen: React.FC<FloorTableScreenProps> = ({ onClose, onO
 
   // --- RESERVATION ACTIONS ---
   const handleCreateBooking = async () => {
-    if (walletBalance !== null && walletBalance <= 0) {
+    const isZeroComm = useSubscriptionStore.getState().isZeroCommission();
+    if (!isZeroComm && walletBalance !== null && walletBalance <= 0) {
       showAlert(
         'Prepaid Wallet Exhausted 💳',
         `Your restaurant's prepaid wallet balance is ₹${walletBalance.toFixed(2)}. Table bookings and advance reservations cannot be accepted while wallet balance is zero or negative.\n\nPlease recharge your wallet to continue.`,
@@ -1004,6 +1009,14 @@ export const FloorTableScreen: React.FC<FloorTableScreenProps> = ({ onClose, onO
               <Text style={styles.storeQrHeaderBtnText}>QR</Text>
             </TouchableOpacity>
 
+            <TouchableOpacity
+              style={styles.lockHeaderBtn}
+              onPress={() => useAuthStore.getState().lockToPinScreen()}
+              activeOpacity={0.8}
+            >
+              <Lock size={12} color="#7C6F62" />
+            </TouchableOpacity>
+
             {activeTab === 'floor' ? (
               <TouchableOpacity
                 style={styles.primaryActionBtn}
@@ -1374,7 +1387,7 @@ export const FloorTableScreen: React.FC<FloorTableScreenProps> = ({ onClose, onO
                             onPress={(e) => {
                               e.stopPropagation();
                               setSelectedTableForQr(item);
-                              setQrModalVisible(true);
+                              setTableQrModalVisible(true);
                             }}
                             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                             activeOpacity={0.7}
@@ -2053,7 +2066,7 @@ export const FloorTableScreen: React.FC<FloorTableScreenProps> = ({ onClose, onO
                     if (!target) return;
                     setSelectedTableAction(null);
                     setSelectedTableForQr(target);
-                    setQrModalVisible(true);
+                    setTableQrModalVisible(true);
                   }}
                   activeOpacity={0.7}
                 >
@@ -3176,7 +3189,23 @@ export const FloorTableScreen: React.FC<FloorTableScreenProps> = ({ onClose, onO
           </View>
         </Modal>
 
-        {/* RESTAURANT & TABLE QR CODE & SHARE MODAL */}
+        {/* DEDICATED DYNAMIC TABLE QR MODAL */}
+        {selectedTableForQr && (
+          <TableQrModal
+            visible={tableQrModalVisible}
+            onClose={() => {
+              setTableQrModalVisible(false);
+              setSelectedTableForQr(null);
+            }}
+            tableId={selectedTableForQr.id}
+            tableNumber={selectedTableForQr.tableNumber}
+            restaurantName={activeRestaurant?.restaurantName || 'Menza Restaurant'}
+            restaurantId={restId}
+            sectionName={selectedTableForQr.sectionName}
+          />
+        )}
+
+        {/* RESTAURANT STOREFRONT & GENERAL QR CODE MODAL */}
         <RestaurantQrModal
           visible={qrModalVisible}
           onClose={() => setQrModalVisible(false)}
@@ -3278,6 +3307,16 @@ const styles = StyleSheet.create({
     borderColor: '#FED7AA',
   },
   storeQrHeaderBtnText: { fontSize: 10.5, fontWeight: '800', color: '#D96B14' },
+  lockHeaderBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E7E1DA',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   primaryActionBtn: { borderRadius: 9, overflow: 'hidden', shadowColor: '#D96B14', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 3 },
   primaryActionBtnGradient: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 6 },
   primaryActionBtnText: { color: '#FFFFFF', fontSize: 11.5, fontWeight: '800', letterSpacing: 0.2 },

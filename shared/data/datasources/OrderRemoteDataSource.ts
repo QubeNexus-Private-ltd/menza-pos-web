@@ -696,10 +696,26 @@ export class OrderRemoteDataSource {
       sgst: (order as any).sgst || 0,
       totalAmount: order.totalAmount || 0,
       items: (order as any).items || [],
+      offlineReferenceId: (order as any).offlineReferenceId || undefined,
+      originalCreatedAtUtc: (order as any).originalCreatedAtUtc || undefined,
+      isOfflineSync: (order as any).isOfflineSync || false,
     };
 
     const response = await apiClient.post('/Order/PlaceOrder', payload);
     return response.data?.orderId || response.data?.id || 0;
+  }
+
+  async batchSyncOrders(restaurantId: number, orders: PlaceOrderRequest[]): Promise<any> {
+    const payload = {
+      restaurantId,
+      orders,
+    };
+    const response = await apiClient.post('/Order/BatchSync', payload, {
+      headers: {
+        'X-Menza-Client': 'Menza-POS-App',
+      },
+    });
+    return response.data;
   }
 
   async addItemToOrder(orderId: number, itemId: number, quantity: number): Promise<boolean> {

@@ -112,62 +112,54 @@ export async function startPosSignalRConnection(restaurantId?: number | null): P
     hubConnection.keepAliveIntervalInMilliseconds = 15000;
 
     // 1. Listen for Order Status Changes
-    hubConnection.on('OnOrderStatusChanged', (data: any) => {
+    const handleOrderStatus = (data: any) => {
       logger.info('POS', 'SIGNALR_EVENT', `⚡ [SignalR] Real-time OrderStatusChanged received for Order #${data?.orderId || data?.id}`, data);
-      
-      // Instantly dispatch to Notification Store without waiting for polling
       useNotificationStore.getState().handleOrderStatusChanged(data);
-
       statusListeners.forEach((cb) => {
         try { cb(data); } catch (e) { console.error(e); }
       });
-    });
+    };
+    hubConnection.on('OnOrderStatusChanged', handleOrderStatus);
+    hubConnection.on('OrderStatusChanged', handleOrderStatus);
 
     // 2. Listen for New Orders
-    hubConnection.on('OnOrderCreated', (data: any) => {
+    const handleOrderCreated = (data: any) => {
       logger.info('POS', 'SIGNALR_EVENT', `⚡ [SignalR] Real-time OrderCreated received for Order #${data?.orderId || data?.id}`, data);
-      
       useNotificationStore.getState().handleOrderStatusChanged(data);
-
       orderCreatedListeners.forEach((cb) => {
         try { cb(data); } catch (e) { console.error(e); }
       });
-
       statusListeners.forEach((cb) => {
         try { cb(data); } catch (e) { console.error(e); }
       });
-
-      // Synchronize live wallet balance & ledger when orders arrive
       try { WalletEvents.emit(); } catch (e) { console.warn(e); }
-    });
+    };
+    hubConnection.on('OnOrderCreated', handleOrderCreated);
+    hubConnection.on('OrderCreated', handleOrderCreated);
 
     // 3. Listen for Order Settlement
-    hubConnection.on('OnOrderSettled', (data: any) => {
+    const handleOrderSettled = (data: any) => {
       logger.info('POS', 'SIGNALR_EVENT', `⚡ [SignalR] Real-time OrderSettled received for Order #${data?.orderId || data?.id}`, data);
-      
       useNotificationStore.getState().handleOrderStatusChanged(data);
-
       orderSettledListeners.forEach((cb) => {
         try { cb(data); } catch (e) { console.error(e); }
       });
-
       statusListeners.forEach((cb) => {
         try { cb(data); } catch (e) { console.error(e); }
       });
-
-      // Synchronize live wallet balance & ledger when orders settle
       try { WalletEvents.emit(); } catch (e) { console.warn(e); }
-    });
+    };
+    hubConnection.on('OnOrderSettled', handleOrderSettled);
+    hubConnection.on('OrderSettled', handleOrderSettled);
 
-    // 4. Listen for Kitchen KDS status updates (silently update status listeners without spamming cashier alerts)
-    hubConnection.on('OnKitchenStatusChanged', (data: any) => {
-      logger.info('POS', 'SIGNALR_EVENT', `⚡ [SignalR] Real-time KitchenStatusChanged received for Order #${data?.orderId || data?.id}`, data);
-      
-      // Update background status listeners (e.g. table board / orders list) quietly
+    // 4. Listen for Kitchen Status changes
+    const handleKitchenStatus = (data: any) => {
       statusListeners.forEach((cb) => {
         try { cb(data); } catch (e) { console.error(e); }
       });
-    });
+    };
+    hubConnection.on('OnKitchenStatusChanged', handleKitchenStatus);
+    hubConnection.on('KitchenStatusChanged', handleKitchenStatus);
 
     // 5. Listen for Store Operating Status (Open / Paused / Closed)
     hubConnection.on('OnStoreOperatingStatusChanged', (data: any) => {
@@ -209,6 +201,11 @@ export async function startPosSignalRConnection(restaurantId?: number | null): P
     hubConnection.on('BillRequested', handleServiceCall);
 
     // 9. Listen for Waiter Duty / Floor Shift Status Changes
+    hubConnection.on('WaiterDutyStatusChanged', (data: any) => {
+      dutyStatusListeners.forEach((cb) => {
+        try { cb(data); } catch (e) { console.error(e); }
+      });
+    });
     hubConnection.on('OnWaiterDutyStatusChanged', (data: any) => {
       logger.info('POS', 'SIGNALR_EVENT', `👥 [SignalR] Waiter duty status changed: active=${data?.activeWaiterCount}`, data);
       useNotificationStore.getState().handleWaiterDutyChanged(data);

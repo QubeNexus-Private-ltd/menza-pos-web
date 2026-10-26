@@ -9,4 +9,11 @@ export interface IAuthRepository {
   switchRestaurant(restaurantId: number): Promise<AuthResponse>;
   getMyRestaurants(): Promise<RestaurantDetail[]>;
   logout(token?: string, refreshToken?: string): Promise<boolean>;
+  loginWithStaffPin(
+    paramsOrRestId: { pin: string; mobile?: string; restaurantId?: number; deviceId?: string } | number,
+    pin?: string,
+    deviceId?: string
+  ): Promise<AuthResponse>;
+  setStaffPin(targetUserId: number, pin: string): Promise<boolean>;
+  resetPinWithOtp(mobile: string, otpCode: string, newPin: string, deviceId?: string): Promise<AuthResponse>;
 }

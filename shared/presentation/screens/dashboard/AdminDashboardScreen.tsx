@@ -74,10 +74,12 @@ import { useAuthStore } from '../../state/useAuthStore';
 import { usePrinterStore } from '../../state/usePrinterStore';
 import { useNotificationStore } from '../../state/useNotificationStore';
 import { useAppVersionStore } from '../../state/useAppVersionStore';
-import { useSubscriptionStore } from '../../state/useSubscriptionStore';
+import { useSubscriptionStore, isTableOrderSubscriptionAllowed, extractTableOrderFlag } from '../../state/useSubscriptionStore';
 import { SubscriptionGraceBanner } from '../../components/subscription/SubscriptionGraceBanner';
 import { APP_CONSTANTS } from '../../../core/constants/appConstants';
 import { isCashierOnly } from '../../../core/auth/rolePermissions';
+import { SubscriptionEvents } from '../../../core/utils/subscriptionEvents';
+import { apiCacheManager } from '../../../core/network/apiClient';
 import { AuthRemoteDataSource } from '../../../data/datasources/AuthRemoteDataSource';
 import { SubscriptionRemoteDataSource } from '../../../data/datasources/SubscriptionRemoteDataSource';
 import { OrderRemoteDataSource } from '../../../data/datasources/OrderRemoteDataSource';
@@ -229,7 +231,8 @@ export const AdminDashboardScreen: React.FC = () => {
   }, [initPrinter]);
 
   // Subscription Lock & Plan Selector State
-  const [activeSubscription, setActiveSubscription] = useState<UserSubscriptionStatus | null>(null);
+  const storeSubscription = useSubscriptionStore((state) => state.subscription);
+  const [activeSubscription, setActiveSubscription] = useState<UserSubscriptionStatus | null>(storeSubscription);
   const [loadingSubscription, setLoadingSubscription] = useState<boolean>(true);
   const [planSelectionModalVisible, setPlanSelectionModalVisible] = useState<boolean>(false);
   const [selectedSubscriptionDetailsModalVisible, setSelectedSubscriptionDetailsModalVisible] = useState<boolean>(false);
@@ -238,6 +241,12 @@ export const AdminDashboardScreen: React.FC = () => {
   const [walletBalance, setWalletBalance] = useState<number | null>(null);
   const [availablePlans, setAvailablePlans] = useState<SubscriptionPlan[]>([]);
   const [subscribingId, setSubscribingId] = useState<number | null>(null);
+
+  // Synchronize local activeSubscription whenever store updates
+  useEffect(() => {
+    setActiveSubscription(storeSubscription);
+  }, [storeSubscription]);
+
   const [processingOrder, setProcessingOrder] = useState<{
     orderId: string;
     planName: string;
@@ -519,8 +528,9 @@ export const AdminDashboardScreen: React.FC = () => {
       } else {
         await fetchUserRestaurants();
         if (currentRestId > 0) {
+          apiCacheManager.invalidate('/Subscription');
           await Promise.all([
-            fetchSubscriptionData(currentRestId),
+            fetchSubscriptionData(currentRestId, true),
             fetchTodayRevenueData(currentRestId, true),
             fetchWalletBalance(currentRestId),
             fetchOperatingStatus(currentRestId),
@@ -543,7 +553,7 @@ export const AdminDashboardScreen: React.FC = () => {
         setRestaurants(userRestList);
         const resolvedId = activeRestaurant?.restaurantId || userRestList[0]?.restaurantId;
         if (resolvedId && resolvedId > 0) {
-          fetchSubscriptionData(resolvedId);
+          fetchSubscriptionData(resolvedId, true);
           fetchTodayRevenueData(resolvedId, true);
         }
       }
@@ -554,10 +564,14 @@ export const AdminDashboardScreen: React.FC = () => {
     }
   };
 
-  const fetchSubscriptionData = async (restId: number) => {
+  const fetchSubscriptionData = async (restId: number, forceRefresh: boolean = true) => {
     try {
       setLoadingSubscription(true);
-      const sub = await useSubscriptionStore.getState().fetchSubscriptionStatus(restId);
+      if (forceRefresh) {
+        apiCacheManager.invalidate('/Subscription');
+      }
+      loadSubscriptionPlans();
+      const sub = await useSubscriptionStore.getState().fetchSubscriptionStatus(restId, forceRefresh);
       setActiveSubscription(sub);
       if (!sub || (sub.isExpired && !sub.isInGracePeriod)) {
         if (!isCashier) {
@@ -579,7 +593,9 @@ export const AdminDashboardScreen: React.FC = () => {
   const loadSubscriptionPlans = async () => {
     try {
       const plans = await subscriptionDataSource.getPlans();
-      setAvailablePlans(plans.filter((p) => p.isActive));
+      const activePlans = plans.filter((p) => p.isActive);
+      setAvailablePlans(activePlans);
+      useSubscriptionStore.setState({ plans: activePlans });
     } catch {
       // fallback
     }
@@ -600,11 +616,22 @@ export const AdminDashboardScreen: React.FC = () => {
   }, [activeSubscription, availablePlans]);
 
   const handleOpenSelectedSubscriptionDetails = () => {
-    if (availablePlans.length === 0) {
-      loadSubscriptionPlans();
+    loadSubscriptionPlans();
+    if (currentRestId > 0) {
+      fetchSubscriptionData(currentRestId, true);
     }
     setSelectedSubscriptionDetailsModalVisible(true);
   };
+
+  // React to subscription update events
+  useEffect(() => {
+    const unsub = SubscriptionEvents.subscribeUpdated(() => {
+      if (currentRestId > 0) {
+        fetchSubscriptionData(currentRestId, true);
+      }
+    });
+    return unsub;
+  }, [currentRestId]);
 
   const handleActivatePlan = async (plan: SubscriptionPlan) => {
     if (!currentRestId) {
@@ -613,6 +640,34 @@ export const AdminDashboardScreen: React.FC = () => {
     }
 
     const finalPrice = plan.finalPrice ?? Math.max(0, plan.price - (plan.discountAmount || 0));
+
+    // Handle direct activation for SuperAdmin or free plans / 0 amount
+    if (isSuperAdmin || finalPrice <= 0) {
+      try {
+        setSubscribingId(plan.id);
+        const assignRes = await subscriptionDataSource.assignSubscription(
+          currentRestId,
+          plan.id,
+          plan.durationInDays || plan.durationDays || 30,
+          0
+        );
+        if (assignRes.success) {
+          apiCacheManager.invalidate('/Subscription');
+          SubscriptionEvents.emitUpdated();
+          await fetchSubscriptionData(currentRestId, true);
+          setSelectedSubscriptionDetailsModalVisible(false);
+          setPlanSelectionModalVisible(false);
+          Alert.alert('Plan Activated 🎉', `Your plan "${plan.subscriptionName || plan.planName}" is now active.`);
+        } else {
+          Alert.alert('Activation Error', assignRes.message || 'Failed to activate plan.');
+        }
+      } catch (err: any) {
+        Alert.alert('Activation Error', err?.message || 'Failed to activate plan.');
+      } finally {
+        setSubscribingId(null);
+      }
+      return;
+    }
 
     const executePayment = async () => {
       try {
@@ -664,19 +719,39 @@ export const AdminDashboardScreen: React.FC = () => {
         }
 
         // Immediately verify and activate subscription (aligned with Wallet Recharge flow)
-        if (paymentResult?.razorpayPaymentId || paymentResult?.razorpaySignature) {
+        if (paymentResult?.success || paymentResult?.razorpayPaymentId || paymentResult?.razorpaySignature) {
           try {
-            await subscriptionDataSource.verifyCashFreePayment(
+            const vRes = await subscriptionDataSource.verifyCashFreePayment(
               payRes.orderId,
               currentRestId,
               plan.id,
               finalPrice,
-              paymentResult.razorpayPaymentId,
-              paymentResult.razorpaySignature
+              paymentResult?.razorpayPaymentId,
+              paymentResult?.razorpaySignature
             );
+            if (vRes.success) {
+              setProcessingOrder(null);
+              apiCacheManager.invalidate('/Subscription');
+              SubscriptionEvents.emitUpdated();
+              await fetchSubscriptionData(currentRestId, true);
+              Alert.alert('Plan Activated 🎉', `Your plan "${plan.subscriptionName || plan.planName}" is now active.`);
+            } else {
+              const pollRes = await subscriptionDataSource.checkCashFreePaymentStatus(payRes.orderId);
+              if (pollRes?.paymentStatus === 'SUCCESS' || pollRes?.gatewayOrderStatus === 'paid') {
+                setProcessingOrder(null);
+                apiCacheManager.invalidate('/Subscription');
+                SubscriptionEvents.emitUpdated();
+                await fetchSubscriptionData(currentRestId, true);
+                Alert.alert('Plan Activated 🎉', `Your plan "${plan.subscriptionName || plan.planName}" is now active.`);
+              } else {
+                Alert.alert('Payment Processing', 'Your payment is being confirmed. Your subscription will be updated shortly.');
+              }
+            }
           } catch (vErr) {
             console.warn('Subscription auto-verify note:', vErr);
           }
+        } else if (paymentResult && paymentResult.success === false) {
+          setProcessingOrder(null);
         }
       } catch (err: any) {
         Alert.alert('Payment Exception', err?.message || 'Failed to initiate payment.');
@@ -713,7 +788,14 @@ export const AdminDashboardScreen: React.FC = () => {
     await executePayment();
   };
 
-  const hasActiveSub = isSuperAdmin || (!!activeSubscription && !activeSubscription.isExpired && activeSubscription.daysRemaining > 0);
+  const hasActiveSub =
+    isSuperAdmin ||
+    (!!activeSubscription &&
+      !activeSubscription.isExpired &&
+      activeSubscription.isActive !== false &&
+      activeSubscription.lifecycleState !== 'INACTIVE' &&
+      activeSubscription.status?.toUpperCase() !== 'INACTIVE' &&
+      activeSubscription.daysRemaining > 0);
 
   const checkEntitlement = (key: string): boolean => {
     if (isSuperAdmin) return true;
@@ -724,21 +806,68 @@ export const AdminDashboardScreen: React.FC = () => {
     return ent ? Boolean(ent.isAllowed ?? ent.IsAllowed) : false;
   };
 
-  // Core ordering flows (Counter ordering & Table floor) are NEVER blocked by subscription
-  const isTableOrderingAllowed = true;
-  const isTableOrderingActive = operatingStatus?.businessProfile !== 'QSR_CAFE';
+  // Gated strictly by subscription plan for Table ordering, Floor Tables tab & controller profile options
+  const isTableOrderInSubscription = useMemo(() => {
+    if (isSuperAdmin) return true;
+    const currentSub = activeSubscription || storeSubscription;
+    const currentPlans = availablePlans.length > 0 ? availablePlans : useSubscriptionStore.getState().plans;
+    return isTableOrderSubscriptionAllowed(currentSub, currentPlans);
+  }, [isSuperAdmin, activeSubscription, storeSubscription, availablePlans]);
+
+  const isTableOrderingAllowed = isTableOrderInSubscription;
+  const isTableOrderingActive = isTableOrderInSubscription && operatingStatus?.businessProfile !== 'QSR_CAFE';
   const isCounterOrderingAllowed = true;
   // Feature-gated by subscription plan
   const isKdsAllowed = checkEntitlement('IsKdsEnabled');
   const isSmsAllowed = checkEntitlement('IsSmsNotificationsEnabled');
   const isPosAndCounterOrderingAllowed = true;
 
+  // Auto-redirect if store is currently on tables tab but plan does not allow it
+  useEffect(() => {
+    if (activeTab === 'tables' && !isTableOrderInSubscription && !isSuperAdmin) {
+      setActiveTab('dashboard');
+    }
+  }, [activeTab, isTableOrderInSubscription, isSuperAdmin]);
+
   const handleTabChange = (tab: NavTabKey) => {
-    // POS billing, table ordering, menus, and management are NEVER blocked by subscription
+    if (tab === 'tables' && !isTableOrderInSubscription) {
+      Alert.alert(
+        'Subscription Required',
+        'Dine-in and Table Seating require a subscription plan with Table Ordering enabled. Please upgrade your plan to unlock table service.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'View Plans',
+            onPress: () => {
+              loadSubscriptionPlans();
+              setPlanSelectionModalVisible(true);
+            },
+          },
+        ]
+      );
+      return;
+    }
     setActiveTab(tab);
   };
 
   const handleModulePress = (moduleKey: 'catalog' | 'tables' | 'pos' | 'roles' | 'config' | 'reports', isFeatureAllowed: boolean = true) => {
+    if (moduleKey === 'tables' && !isTableOrderInSubscription) {
+      Alert.alert(
+        'Subscription Required',
+        'Floor Tables and Table Seating require a plan with Table Ordering enabled.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Upgrade Plan',
+            onPress: () => {
+              loadSubscriptionPlans();
+              setPlanSelectionModalVisible(true);
+            },
+          },
+        ]
+      );
+      return;
+    }
     logger.action('NAVIGATION', 'DASHBOARD_MODULE_OPENED', `Opened dashboard module: ${moduleKey}`, { moduleKey });
     setActiveTab(moduleKey as NavTabKey);
   };
@@ -1819,7 +1948,7 @@ export const AdminDashboardScreen: React.FC = () => {
                     )}
 
                     {/* LOW / EXHAUSTED PLATFORM FEE WALLET BANNER */}
-                    {walletBalance !== null && (walletBalance <= 0 || walletBalance < 200) && (
+                    {!useSubscriptionStore.getState().isZeroCommission() && walletBalance !== null && (walletBalance <= 0 || walletBalance < 200) && (
                       <View style={[styles.lowWalletBanner, walletBalance <= 0 && { backgroundColor: '#FEF2F2', borderColor: '#FECACA' }]}>
                         <View style={styles.lowWalletBannerLeft}>
                           <View style={[styles.lowWalletIconCircle, walletBalance <= 0 && { backgroundColor: '#FEE2E2' }]}>
@@ -2434,7 +2563,9 @@ export const AdminDashboardScreen: React.FC = () => {
                       </View>
                       <StatusBadge
                         label={
-                          activeSubscription?.isExpired
+                          activeSubscription?.lifecycleState === 'INACTIVE' || activeSubscription?.status?.toUpperCase() === 'INACTIVE'
+                            ? 'INACTIVE'
+                            : activeSubscription?.isExpired
                             ? 'EXPIRED'
                             : activeSubscription?.isInGracePeriod
                             ? `GRACE (${activeSubscription.graceDaysRemaining}d)`
@@ -2445,7 +2576,9 @@ export const AdminDashboardScreen: React.FC = () => {
                             : 'ACTIVE TIER'
                         }
                         variant={
-                          activeSubscription?.isExpired
+                          activeSubscription?.lifecycleState === 'INACTIVE' || activeSubscription?.status?.toUpperCase() === 'INACTIVE'
+                            ? 'danger'
+                            : activeSubscription?.isExpired
                             ? 'danger'
                             : activeSubscription?.isInGracePeriod
                             ? 'warning'
@@ -2859,17 +2992,21 @@ export const AdminDashboardScreen: React.FC = () => {
             keyId={processingOrder.keyId}
             onSuccess={() => {
               setProcessingOrder(null);
+              apiCacheManager.invalidate('/Subscription');
               WalletEvents.emit();
+              SubscriptionEvents.emitUpdated();
               if (currentRestId > 0) {
-                fetchSubscriptionData(currentRestId);
+                fetchSubscriptionData(currentRestId, true);
                 fetchWalletBalance(currentRestId);
               }
             }}
             onClose={() => {
               setProcessingOrder(null);
+              apiCacheManager.invalidate('/Subscription');
               WalletEvents.emit();
+              SubscriptionEvents.emitUpdated();
               if (currentRestId > 0) {
-                fetchSubscriptionData(currentRestId);
+                fetchSubscriptionData(currentRestId, true);
                 fetchWalletBalance(currentRestId);
               }
             }}
@@ -2971,9 +3108,13 @@ export const AdminDashboardScreen: React.FC = () => {
           restaurantName={activeRestaurant?.restaurantName || 'Active Restaurant'}
           isOwnerOrAdmin={!isCashier}
           initialStatus={operatingStatus}
-          isTableOrderingAllowed={isTableOrderingAllowed}
+          isTableOrderingAllowed={isTableOrderInSubscription}
           onEditHours={() => {
             setActiveTab('config');
+          }}
+          onUpgradePlan={() => {
+            loadSubscriptionPlans();
+            setPlanSelectionModalVisible(true);
           }}
           onStatusUpdated={(updated) => {
             setOperatingStatus(updated);

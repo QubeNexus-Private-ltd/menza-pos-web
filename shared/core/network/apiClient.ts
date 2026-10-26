@@ -123,9 +123,6 @@ class ApiCacheManager {
     { pattern: '/Reports', ttlMs: 15000 },
     { pattern: '/Order/TodayRevenue', ttlMs: 10000 },
     { pattern: '/Wallet', ttlMs: 15000 },
-    { pattern: '/Subscription/ActivePlan', ttlMs: 60000 },
-    { pattern: '/Subscription/Configuration', ttlMs: 120000 },
-    { pattern: '/Subscription/RestaurantSubscription', ttlMs: 60000 },
   ];
 
   private getTtl(url: string): number {
@@ -171,18 +168,22 @@ class ApiCacheManager {
   invalidate(urlPattern?: string): void {
     if (!urlPattern) {
       this.cache.clear();
+      this.inFlight.clear();
       return;
     }
+    const target = urlPattern.toLowerCase();
+    const segments = target.split('/').filter(Boolean);
+    const primary = segments.length > 0 ? segments[0] : target;
     for (const key of Array.from(this.cache.keys())) {
-      if (
-        key.includes(urlPattern) ||
-        urlPattern.includes('ItemMaster') ||
-        urlPattern.includes('CategoryMaster') ||
-        urlPattern.includes('Order') ||
-        urlPattern.includes('Table') ||
-        urlPattern.includes('Subscription')
-      ) {
+      const lowerKey = key.toLowerCase();
+      if (lowerKey.includes(target) || (primary && lowerKey.includes(primary))) {
         this.cache.delete(key);
+      }
+    }
+    for (const key of Array.from(this.inFlight.keys())) {
+      const lowerKey = key.toLowerCase();
+      if (lowerKey.includes(target) || (primary && lowerKey.includes(primary))) {
+        this.inFlight.delete(key);
       }
     }
   }
@@ -206,38 +207,49 @@ const rawRequest = apiClient.request.bind(apiClient);
   const method = (config?.method || 'get').toUpperCase();
 
   if (method === 'GET') {
+    const isNoCache =
+      config?.skipCache === true ||
+      config?.headers?.['Cache-Control'] === 'no-cache' ||
+      config?.headers?.['cache-control'] === 'no-cache';
+
     const activeRestId = (globalThis as any).__MENZA_ACTIVE_REST_ID__ || '';
     const cacheKey = `GET::${config.url}::${JSON.stringify(config.params || {})}::${activeRestId}`;
 
-    // 1. Check TTL cache
-    const cached = apiCacheManager.get(cacheKey);
-    if (cached) {
-      return {
-        data: cached.data,
-        status: cached.status,
-        statusText: cached.statusText,
-        headers: cached.headers,
-        config,
-      };
-    }
+    if (!isNoCache) {
+      // 1. Check TTL cache
+      const cached = apiCacheManager.get(cacheKey);
+      if (cached) {
+        return {
+          data: cached.data,
+          status: cached.status,
+          statusText: cached.statusText,
+          headers: cached.headers,
+          config,
+        };
+      }
 
-    // 2. Check in-flight duplicate (deduplication)
-    const inFlight = apiCacheManager.getInFlight(cacheKey);
-    if (inFlight) {
-      return inFlight;
+      // 2. Check in-flight duplicate (deduplication)
+      const inFlight = apiCacheManager.getInFlight(cacheKey);
+      if (inFlight) {
+        return inFlight;
+      }
     }
 
     // 3. Dispatch and cache
     const promise = rawRequest(config)
       .then((res: any) => {
-        apiCacheManager.set(cacheKey, config.url || '', res);
+        if (!isNoCache) {
+          apiCacheManager.set(cacheKey, config.url || '', res);
+        }
         return res;
       })
       .finally(() => {
         apiCacheManager.deleteInFlight(cacheKey);
       });
 
-    apiCacheManager.setInFlight(cacheKey, promise);
+    if (!isNoCache) {
+      apiCacheManager.setInFlight(cacheKey, promise);
+    }
     return promise;
   }
 
@@ -289,6 +301,9 @@ apiClient.interceptors.request.use(
     if (clientMobile && clientMobile.length >= 10) {
       config.headers['X-Client-Mobile'] = clientMobile;
     }
+
+    // Identify caller application as Menza POS client
+    config.headers['X-Menza-Client'] = 'Menza-POS-App';
 
     // Attach request metadata for logging & correlation
     const requestId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;

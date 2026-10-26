@@ -121,6 +121,7 @@ export const StaffRoleScreen: React.FC<StaffRoleScreenProps> = ({ onClose }) => 
   const [formRoleId, setFormRoleId] = useState<number>(4);
   const [formEmployeeCode, setFormEmployeeCode] = useState('');
   const [formShift, setFormShift] = useState('');
+  const [formPin, setFormPin] = useState('');
   const {
     loading: staffLookupLoading,
     existingUser: existingStaffUser,

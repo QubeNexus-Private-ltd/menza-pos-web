@@ -59,6 +59,10 @@ export class OrderRepositoryImpl implements IOrderRepository {
     return await this.remoteDataSource.getActiveOrderByTable(tableId, restaurantId);
   }
 
+  async batchSyncOrders(restaurantId: number, orders: PlaceOrderRequest[]): Promise<any> {
+    return await this.remoteDataSource.batchSyncOrders(restaurantId, orders);
+  }
+
   async cancelOrder(orderId: number, reason?: string): Promise<boolean> {
     return await this.remoteDataSource.cancelOrder(orderId, reason);
   }

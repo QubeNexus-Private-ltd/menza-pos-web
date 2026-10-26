@@ -9,6 +9,7 @@ import {
   ScrollView,
   ActivityIndicator,
   Dimensions,
+  useWindowDimensions,
   Modal,
   Image,
   KeyboardAvoidingView,
@@ -73,6 +74,15 @@ import { StoreOperatingStatusModal } from '../../components/StoreOperatingStatus
 import { WalletRechargeModal } from '../../components/WalletRechargeModal';
 import { ReceiptData } from '../../../core/printer/EscPosBuilder';
 import { NetworkStrengthIndicator } from '../../components/NetworkStrengthIndicator';
+import { useNetworkStore, initializeNetworkMonitoring } from '../../../core/offline/useNetworkStore';
+import {
+  getNextOfflineToken,
+  enqueueOfflineOrder,
+  recordShiftRegisterOrder,
+  cacheMenuCatalog,
+  getCachedMenuCatalog,
+} from '../../../core/offline/posDatabase';
+import { syncPendingOfflineOrders, startOfflineSyncWorker, stopOfflineSyncWorker } from '../../../core/offline/offlineSyncWorker';
 import {
   startPosSignalRConnection,
   onStoreOperatingStatusChanged,
@@ -134,6 +144,15 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
   onClearTableLock,
 }) => {
   const insets = useSafeAreaInsets();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const screenWidth = windowWidth || SCREEN_WIDTH;
+  const screenHeight = windowHeight || Dimensions.get('window').height;
+  const isVeryNarrow = screenWidth < 360;
+  const isNarrow = screenWidth < 410;
+  const isTablet = screenWidth >= 600;
+  const isLargeTablet = screenWidth >= 840;
+  const isShortScreen = screenHeight < 680;
+  const [logoLoadFailed, setLogoLoadFailed] = useState(false);
   const { activeRestaurant } = useAuthStore();
   const activeRestId = activeRestaurant?.restaurantId || (globalThis as any).__MENZA_ACTIVE_REST_ID__ || 0;
 
@@ -199,6 +218,10 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
     }
   }, [isTableAssigned, isTableOrderingAllowed]);
 
+  const isOnline = useNetworkStore((state) => state.isOnline);
+  const pendingOfflineCount = useNetworkStore((state) => state.pendingOfflineCount);
+  const isSyncing = useNetworkStore((state) => state.isSyncing);
+
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [loadingItems, setLoadingItems] = useState(true);
   const [menuSearchQuery, setMenuSearchQuery] = useState('');
@@ -257,6 +280,10 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
   const [walletModalVisible, setWalletModalVisible] = useState<boolean>(false);
   const [subscriptionModalVisible, setSubscriptionModalVisible] = useState<boolean>(false);
 
+  useEffect(() => {
+    setLogoLoadFailed(false);
+  }, [activeRestaurant?.restaurantId, activeRestaurant?.logoUrl, restaurantConfig?.logoUrl]);
+
   const {
     subscription,
     lifecycleState: subscriptionLifecycleState,
@@ -268,7 +295,10 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
 
   useEffect(() => {
     initPrinter();
+    initializeNetworkMonitoring();
     if (activeRestId > 0) {
+      useNetworkStore.getState().refreshPendingCount(activeRestId);
+      startOfflineSyncWorker(() => activeRestId);
       startPosSignalRConnection(activeRestId);
       loadOrderTypes();
       loadRestaurantMenuItems();
@@ -302,6 +332,7 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
         unsubscribeCreated();
         unsubscribeReconnect();
         unsubscribeWallet();
+        stopOfflineSyncWorker();
       };
     } else {
       setLoadingItems(false);
@@ -349,10 +380,17 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
     try {
       setLoadingItems(true);
       const items = await catalogDataSource.getMenuItems(activeRestId);
-      setMenuItems(Array.isArray(items) ? items : []);
+      if (Array.isArray(items) && items.length > 0) {
+        setMenuItems(items);
+        cacheMenuCatalog(activeRestId, items).catch(() => {});
+      } else {
+        const cached = await getCachedMenuCatalog(activeRestId);
+        setMenuItems(cached.length > 0 ? cached : []);
+      }
     } catch (err) {
-      console.warn('Failed to load menu items for POS:', err);
-      setMenuItems([]);
+      console.warn('Failed to load menu items online for POS. Hydrating from offline cache:', err);
+      const cached = await getCachedMenuCatalog(activeRestId);
+      setMenuItems(Array.isArray(cached) ? cached : []);
     } finally {
       setLoadingItems(false);
     }
@@ -589,9 +627,14 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
     const cleanName = (customerName || '').slice(0, 50).trim();
     const effectiveCustomerName = cleanName || 'Walk-in Customer';
 
+    const isZeroCommission = (subscription?.effectiveCommissionPercentage ?? 0) <= 0 &&
+                             (subscription?.effectiveFlatCommissionPerOrder ?? 0) <= 0;
+
     const isWalletExhausted =
-      operatingStatus?.status === 'WALLET_EXHAUSTED' ||
-      (restaurantConfig?.walletBalance !== undefined && restaurantConfig.walletBalance <= 0);
+      isOnline &&
+      !isZeroCommission &&
+      (operatingStatus?.status === 'WALLET_EXHAUSTED' ||
+        (restaurantConfig?.walletBalance !== undefined && restaurantConfig.walletBalance <= 0));
 
     if (isWalletExhausted) {
       showAlert(
@@ -605,7 +648,7 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
       return;
     }
 
-    if (isSubscriptionExpired || subscriptionLifecycleState === 'EXPIRED') {
+    if (isOnline && (isSubscriptionExpired || subscriptionLifecycleState === 'EXPIRED')) {
       showAlert(
         'Subscription Expired 🔒',
         'Your restaurant subscription has expired beyond the grace period. Order taking and billing are locked until your plan is renewed.\n\nPlease renew your plan to resume operations.',
@@ -618,21 +661,12 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
     }
 
     const isInactive = activeRestaurant?.isActive === false || restaurantConfig?.isActive === false;
-    const isClosedOrPaused = operatingStatus && !operatingStatus.canPlaceOrder;
 
-    if (isInactive || isClosedOrPaused) {
-      const title = isInactive ? 'Store is Inactive 🔴' : 'Store is Closed / Paused ⚠️';
-      const msg = isInactive
-        ? 'This restaurant is currently inactive and offline in Menza Admin. You cannot take or place orders while inactive.'
-        : operatingStatus?.statusMessage || 'This outlet is currently marked as closed or paused for taking orders. Please resume or reopen the store before taking orders.';
-
+    if (isInactive) {
       showAlert(
-        title,
-        msg,
-        'warning',
-        isInactive ? 'OK' : 'Open Store Controls',
-        undefined,
-        isInactive ? undefined : () => setOperatingStatusModalVisible(true)
+        'Store is Inactive 🔴',
+        'This restaurant is currently inactive and offline in Menza Admin. You cannot take or place orders while inactive.',
+        'warning'
       );
       return;
     }
@@ -663,7 +697,13 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
         ? `Table ${initialTableNumber}${initialSectionName ? ` (${initialSectionName})` : ''}`
         : PosOrderSources.POS_ADMIN;
 
-      const orderId = await orderRepository.placeOrder({
+      let orderId = 0;
+      let fetchedOrder: OrderMaster | null = null;
+      let pickupToken: string | undefined = undefined;
+      let isOfflineOrder = false;
+      let offlineRefId: string | undefined = undefined;
+
+      const placeOrderPayload = {
         restaurantId: activeRestId,
         name: effectiveCustomerName,
         mobileNumber: cleanPhone || undefined,
@@ -682,22 +722,60 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
         sgst: sgstAmount,
         totalAmount: grandTotal,
         items: itemsPayload,
-      });
+      };
 
-      let fetchedOrder: OrderMaster | null = null;
-      let pickupToken: string | undefined = undefined;
+      if (!isOnline) {
+        // Explicit Offline Mode: Store locally in SQLite queue & shift register
+        const tokenResult = await getNextOfflineToken(activeRestId);
+        pickupToken = tokenResult.tokenString;
+        offlineRefId = tokenResult.offlineId;
+        isOfflineOrder = true;
 
-      if (orderId && orderId > 0) {
-        // Silently mark this cashier-placed POS order as known in notification store
-        // so background polling won't trigger incoming order alerts/chimes for the cashier
-        useNotificationStore.getState().markOrderAsKnown(orderId, isPostPaid ? 'Pending' : 'Confirmed');
-
+        await enqueueOfflineOrder({
+          offlineId: offlineRefId,
+          restaurantId: activeRestId,
+          orderPayload: {
+            ...placeOrderPayload,
+            offlineReferenceId: offlineRefId,
+            isOfflineSync: true,
+            originalCreatedAtUtc: new Date().toISOString(),
+          },
+        });
+        useNetworkStore.getState().refreshPendingCount(activeRestId);
+      } else {
+        // Attempt Online Placement with automatic Offline Fallback on network failure
         try {
-          fetchedOrder = await orderRepository.getOrder(orderId);
-          if (fetchedOrder && fetchedOrder.pickupToken) {
-            pickupToken = fetchedOrder.pickupToken;
+          orderId = await orderRepository.placeOrder(placeOrderPayload);
+
+          if (orderId && orderId > 0) {
+            useNotificationStore.getState().markOrderAsKnown(orderId, isPostPaid ? 'Pending' : 'Confirmed');
+
+            try {
+              fetchedOrder = await orderRepository.getOrder(orderId);
+              if (fetchedOrder && fetchedOrder.pickupToken) {
+                pickupToken = fetchedOrder.pickupToken;
+              }
+            } catch {}
           }
-        } catch {}
+        } catch (onlineErr: any) {
+          console.warn('Online placeOrder failed. Seamlessly saving to offline SQLite queue:', onlineErr?.message);
+          const tokenResult = await getNextOfflineToken(activeRestId);
+          pickupToken = tokenResult.tokenString;
+          offlineRefId = tokenResult.offlineId;
+          isOfflineOrder = true;
+
+          await enqueueOfflineOrder({
+            offlineId: offlineRefId,
+            restaurantId: activeRestId,
+            orderPayload: {
+              ...placeOrderPayload,
+              offlineReferenceId: offlineRefId,
+              isOfflineSync: true,
+              originalCreatedAtUtc: new Date().toISOString(),
+            },
+          });
+          useNetworkStore.getState().refreshPendingCount(activeRestId);
+        }
       }
 
       const selectedTypeObj = orderTypes.find((t) => t.id === selectedOrderType);
@@ -731,8 +809,12 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
       })();
 
       const receiptData: ReceiptData = {
-        orderId: fetchedOrder?.orderNumber || (orderId ? String(orderId) : ''),
-        orderNumber: String(fetchedOrder?.orderNumber || (orderId ? String(orderId) : '')),
+        orderId: isOfflineOrder
+          ? (offlineRefId || pickupToken || 'OFFLINE')
+          : fetchedOrder?.orderNumber || (orderId ? String(orderId) : ''),
+        orderNumber: isOfflineOrder
+          ? (pickupToken || 'OFFLINE')
+          : String(fetchedOrder?.orderNumber || (orderId ? String(orderId) : '')),
         pickupToken: pickupToken || String(fetchedOrder?.orderNumber || (orderId ? String(orderId) : '')),
         restaurantName: restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || '',
         address: effectiveAddress || undefined,
@@ -787,29 +869,54 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
           (activeRestaurant as any)?.printUpiQrOnReceipts !== false,
       };
 
+      if (isOfflineOrder && offlineRefId) {
+        try {
+          await recordShiftRegisterOrder({
+            offline_id: offlineRefId,
+            restaurant_id: activeRestId,
+            order_number: pickupToken || '#OFF',
+            customer_name: effectiveCustomerName,
+            table_number: isTableOrder ? initialTableNumber : undefined,
+            total_amount: grandTotal,
+            payment_mode: isPostPaid ? 'PAY LATER' : selectedPaymentMode,
+            payment_status: isPostPaid ? 'Pending' : 'Paid',
+            billing_mode: isPostPaid ? BillingModes.POST_PAID : BillingModes.PRE_PAID,
+            receipt_payload: JSON.stringify(receiptData),
+            created_at_utc: new Date().toISOString(),
+          });
+        } catch (shiftErr) {
+          console.warn('Shift register entry warning:', shiftErr);
+        }
+      }
+
       let printStatusNote = '';
 
       if (mode === PosCheckoutModes.KOT_PAY_LATER) {
         // Mode 1: Send to Kitchen (Pay Later / Unsettled)
-        const kdsNote = isKdsAllowed ? ' & KDS' : '';
+        const kdsNote = (!isOfflineOrder && isKdsAllowed) ? ' & KDS' : '';
         if (connectedDevice) {
           try {
             await printKot(receiptData);
-            printStatusNote = `\n\n🖨️ KOT ticket sent to kitchen printer! (Token: #${receiptData.pickupToken})${isKdsAllowed ? '\n📺 Live KOT dispatched to Kitchen Display System (KDS)' : ''}`;
+            printStatusNote = `\n\n🖨️ KOT ticket sent to kitchen printer! (Token: #${receiptData.pickupToken})${!isOfflineOrder && isKdsAllowed ? '\n📺 Live KOT dispatched to Kitchen Display System (KDS)' : ''}`;
           } catch (printErr: any) {
-            printStatusNote = `\n\n⚠️ KOT print failed: ${printErr?.message || 'Check printer connection'}${isKdsAllowed ? '\n📺 Live KOT dispatched to Kitchen Display System (KDS)' : ''}`;
+            printStatusNote = `\n\n⚠️ KOT print failed: ${printErr?.message || 'Check printer connection'}${!isOfflineOrder && isKdsAllowed ? '\n📺 Live KOT dispatched to Kitchen Display System (KDS)' : ''}`;
           }
         } else {
-          printStatusNote = isKdsAllowed
+          printStatusNote = (!isOfflineOrder && isKdsAllowed)
             ? "\n\n📺 Live KOT dispatched to Kitchen Display System (KDS)."
+            : isOfflineOrder
+            ? "\n\n📦 Stored in offline outbox. Will sync automatically once internet reconnects."
             : "\n\n💡 Order queued in Unsettled Orders. Settle anytime from Today's Revenue.";
         }
 
-        const smsNote = (cleanPhone && isSmsAllowed) ? `\n📲 SMS confirmation sent to +91 ${cleanPhone}` : '';
+        const smsNote = (!isOfflineOrder && cleanPhone && isSmsAllowed) ? `\n📲 SMS confirmation sent to +91 ${cleanPhone}` : '';
+        const offlineNote = isOfflineOrder ? `\n\n📦 Stored in tablet offline outbox (Token: ${pickupToken}). Auto-syncs when online.` : '';
 
         showAlert(
-          `Sent to Kitchen${kdsNote} (Pay Later) 🍳`,
-          `Order #${orderId || ''}${pickupToken ? ` (Token #${pickupToken})` : ''} placed for ${effectiveCustomerName}.\nStatus: Active Unsettled Order.${smsNote}${printStatusNote}`,
+          isOfflineOrder ? 'Offline KOT Saved 🍳' : `Sent to Kitchen${kdsNote} (Pay Later) 🍳`,
+          isOfflineOrder
+            ? `Offline Order ${pickupToken} created for ${effectiveCustomerName}.\nStatus: Active Unsettled Order.${offlineNote}${printStatusNote}`
+            : `Order #${orderId || ''}${pickupToken ? ` (Token #${pickupToken})` : ''} placed for ${effectiveCustomerName}.\nStatus: Active Unsettled Order.${smsNote}${printStatusNote}`,
           'success',
           'OK',
           undefined,
@@ -823,7 +930,7 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
         );
       } else {
         // Mode 2: Pay & Settle (Pre-Paid / Instant POS Settle)
-        if (orderId && orderId > 0) {
+        if (!isOfflineOrder && orderId && orderId > 0) {
           try {
             await orderRemoteDataSource.settleOrder(orderId, {
               orderId,
@@ -843,7 +950,7 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
         if (connectedDevice) {
           try {
             let finalReceiptData = { ...receiptData };
-            if (isTableOrder && initialTableId) {
+            if (!isOfflineOrder && isTableOrder && initialTableId) {
               try {
                 const tableActive = await orderRemoteDataSource.getActiveOrderByTable(initialTableId, activeRestId);
                 if (tableActive && tableActive.items && tableActive.items.length > 0) {
@@ -886,11 +993,14 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
           ? `\n💵 Change to Return: ₹${orderChange.toFixed(2)}`
           : '';
 
-        const smsNote = (cleanPhone && isSmsAllowed) ? `\n📲 SMS confirmation sent to +91 ${cleanPhone}` : '';
+        const smsNote = (!isOfflineOrder && cleanPhone && isSmsAllowed) ? `\n📲 SMS confirmation sent to +91 ${cleanPhone}` : '';
+        const offlineNote = isOfflineOrder ? `\n\n📦 Stored in tablet offline outbox (Token: ${pickupToken}). Auto-syncs when online.` : '';
 
         showAlert(
-          'Order Paid & Settled! 💵',
-          `Order #${orderId || '101'}${pickupToken ? ` (Token #${pickupToken})` : ''} for ${effectiveCustomerName} settled via ${selectedPaymentMode}.\nAmount: ₹${grandTotal.toFixed(2)} added to Live Revenue.${changeNote}${smsNote}${printStatusNote}`,
+          isOfflineOrder ? 'Offline Order Saved & Settled! 💵' : 'Order Paid & Settled! 💵',
+          isOfflineOrder
+            ? `Offline Order ${pickupToken} for ${effectiveCustomerName} saved locally via ${selectedPaymentMode}.\nAmount: ₹${grandTotal.toFixed(2)}.${changeNote}${offlineNote}${printStatusNote}`
+            : `Order #${orderId || '101'}${pickupToken ? ` (Token #${pickupToken})` : ''} for ${effectiveCustomerName} settled via ${selectedPaymentMode}.\nAmount: ₹${grandTotal.toFixed(2)} added to Live Revenue.${changeNote}${smsNote}${printStatusNote}`,
           'success',
           'OK',
           undefined,
@@ -918,91 +1028,124 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
 
   const storeDisplayName = restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Saffron Café';
 
+  const rawLogoUrl =
+    restaurantConfig?.logoUrl && restaurantConfig.logoUrl.trim().length > 0
+      ? restaurantConfig.logoUrl.trim()
+      : activeRestaurant?.logoUrl && activeRestaurant.logoUrl.trim().length > 0
+      ? activeRestaurant.logoUrl.trim()
+      : (activeRestaurant as any)?.logo && (activeRestaurant as any).logo.trim().length > 0
+      ? (activeRestaurant as any).logo.trim()
+      : null;
+
+  const logoSource = !logoLoadFailed && rawLogoUrl
+    ? { uri: rawLogoUrl }
+    : require('../../../../assets/menza-logo.png');
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       <StatusBar barStyle="dark-content" backgroundColor="#FAF7F2" translucent={false} />
       <View style={styles.container}>
-        {/* TOP STREAMLINED UNIFIED HEADER (Identical to HomePage) */}
-        <View style={styles.topHeader}>
-          <View style={styles.headerLeftRow}>
-            <View style={styles.headerLogoWrapper}>
+        {/* TOP STREAMLINED UNIFIED HEADER */}
+        <View
+          style={[
+            styles.topHeader,
+            isShortScreen && styles.topHeaderShort,
+            isNarrow && styles.topHeaderNarrow,
+            isTablet && styles.topHeaderTablet,
+            isLargeTablet && styles.topHeaderLargeTablet,
+          ]}
+        >
+          {/* HEADER LEFT ROW: LOGO, OUTLET NAME & OPERATING STATUS */}
+          <View
+            style={[
+              styles.headerLeftRow,
+              isNarrow && styles.headerLeftRowNarrow,
+              isTablet && styles.headerLeftRowTablet,
+            ]}
+          >
+            <View
+              style={[
+                styles.headerLogoWrapper,
+                isVeryNarrow && styles.headerLogoWrapperVeryNarrow,
+                isNarrow && styles.headerLogoWrapperNarrow,
+                isTablet && styles.headerLogoWrapperTablet,
+                isLargeTablet && styles.headerLogoWrapperLargeTablet,
+              ]}
+            >
               <Image
-                source={
-                  restaurantConfig?.logoUrl && restaurantConfig.logoUrl.trim().length > 0
-                    ? { uri: restaurantConfig.logoUrl.trim() }
-                    : activeRestaurant?.logoUrl && activeRestaurant.logoUrl.trim().length > 0
-                    ? { uri: activeRestaurant.logoUrl.trim() }
-                    : (activeRestaurant as any)?.logo && (activeRestaurant as any).logo.trim().length > 0
-                    ? { uri: (activeRestaurant as any).logo.trim() }
-                    : require('../../../../assets/menza-logo.png')
-                }
+                source={logoSource}
                 style={styles.headerLogo}
                 resizeMode="contain"
+                onError={() => setLogoLoadFailed(true)}
               />
             </View>
+
             <View style={styles.headerInfoBlock}>
-              <Text style={styles.headerOutletTitle} numberOfLines={1}>
+              <Text
+                style={[
+                  styles.headerOutletTitle,
+                  isVeryNarrow && styles.headerOutletTitleVeryNarrow,
+                  isNarrow && styles.headerOutletTitleNarrow,
+                  isTablet && styles.headerOutletTitleTablet,
+                  isLargeTablet && styles.headerOutletTitleLargeTablet,
+                ]}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+              >
                 {storeDisplayName}
               </Text>
-              <View style={styles.headerSubtitleRow}>
-                <TouchableOpacity
-                  onPress={() => setOperatingStatusModalVisible(true)}
+
+              <View style={[styles.headerSubtitleRow, isTablet && styles.headerSubtitleRowTablet]}>
+                <Text
                   style={[
-                    styles.posStatusMiniBadge,
-                    operatingStatus?.status === 'OPEN' && styles.posStatusMiniBadgeOpen,
-                    operatingStatus?.status === 'PAUSED' && styles.posStatusMiniBadgePaused,
-                    operatingStatus?.status === 'CLOSED' && styles.posStatusMiniBadgeClosed,
+                    styles.headerOutletSubtitle,
+                    isLargeTablet && styles.headerOutletSubtitleLargeTablet,
                   ]}
-                  activeOpacity={0.8}
+                  numberOfLines={1}
                 >
-                  <View
-                    style={[
-                      styles.posStatusMiniDot,
-                      operatingStatus?.status === 'OPEN' && styles.posStatusMiniDotOpen,
-                      operatingStatus?.status === 'PAUSED' && styles.posStatusMiniDotPaused,
-                      operatingStatus?.status === 'CLOSED' && styles.posStatusMiniDotClosed,
-                    ]}
-                  />
-                  <Text
-                    style={[
-                      styles.posStatusMiniText,
-                      operatingStatus?.status === 'OPEN' && styles.posStatusMiniTextOpen,
-                      operatingStatus?.status === 'PAUSED' && styles.posStatusMiniTextPaused,
-                      operatingStatus?.status === 'CLOSED' && styles.posStatusMiniTextClosed,
-                    ]}
-                  >
-                    {operatingStatus?.status === 'OPEN'
-                      ? 'OPEN'
-                      : operatingStatus?.status === 'PAUSED'
-                      ? 'PAUSED'
-                      : 'CLOSED'}
-                  </Text>
-                </TouchableOpacity>
-
-                <Text style={styles.headerSubtitleDot}>•</Text>
-
-                <Text style={styles.headerOutletSubtitle} numberOfLines={1}>
                   POS Terminal • Quick Billing
                 </Text>
               </View>
             </View>
           </View>
 
-          <View style={styles.headerRightRow}>
-            {/* Dynamic Real-time Network Strength Indicator */}
-            <NetworkStrengthIndicator size={16} />
+          {/* HEADER RIGHT ROW: NETWORK, NOTIFICATIONS, PRINTER, SYNC, WALLET, CLOSE */}
+          <View
+            style={[
+              styles.headerRightRow,
+              isVeryNarrow && styles.headerRightRowVeryNarrow,
+              isNarrow && styles.headerRightRowNarrow,
+              isTablet && styles.headerRightRowTablet,
+            ]}
+          >
+            {/* Dynamic Real-time Network Strength Indicator (Wifi) */}
+            <NetworkStrengthIndicator
+              size={isTablet ? 18 : isNarrow ? 13 : 15}
+              style={[
+                styles.headerActionBtn,
+                isVeryNarrow && styles.headerActionBtnVeryNarrow,
+                isNarrow && styles.headerActionBtnNarrow,
+                isTablet && styles.headerActionBtnTablet,
+              ]}
+            />
 
             {/* Order Notification Bell Button */}
             <TouchableOpacity
               onPress={() => setNotificationModalVisible(true)}
-              style={[styles.posBellBtn, unreadCount > 0 && styles.posBellBtnActive]}
+              style={[
+                styles.headerActionBtn,
+                isVeryNarrow && styles.headerActionBtnVeryNarrow,
+                isNarrow && styles.headerActionBtnNarrow,
+                isTablet && styles.headerActionBtnTablet,
+                unreadCount > 0 && styles.posBellBtnActive,
+              ]}
               activeOpacity={0.8}
               accessibilityLabel={`Order Notifications, ${unreadCount} unread`}
             >
               {unreadCount > 0 ? (
-                <BellRing size={16} color="#DE8626" />
+                <BellRing size={isTablet ? 18 : isNarrow ? 13 : 15} color="#DE8626" />
               ) : (
-                <Bell size={16} color="#7C6F62" />
+                <Bell size={isTablet ? 18 : isNarrow ? 13 : 15} color="#7C6F62" />
               )}
               {unreadCount > 0 && (
                 <View style={styles.posBellBadge}>
@@ -1016,11 +1159,17 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
             {/* Quick Bluetooth Printer Status */}
             <TouchableOpacity
               onPress={() => setPrinterModalVisible(true)}
-              style={[styles.headerActionBtn, connectedDevice && styles.headerActionBtnConnected]}
+              style={[
+                styles.headerActionBtn,
+                isVeryNarrow && styles.headerActionBtnVeryNarrow,
+                isNarrow && styles.headerActionBtnNarrow,
+                isTablet && styles.headerActionBtnTablet,
+                connectedDevice && styles.headerActionBtnConnected,
+              ]}
               activeOpacity={0.8}
               accessibilityLabel={connectedDevice ? 'Printer Connected' : 'Pair Bluetooth Printer'}
             >
-              <Printer size={16} color={connectedDevice ? '#16A34A' : '#78716C'} />
+              <Printer size={isTablet ? 18 : isNarrow ? 13 : 15} color={connectedDevice ? '#16A34A' : '#78716C'} />
               <View
                 style={[
                   styles.headerActionStatusDot,
@@ -1029,17 +1178,72 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
               />
             </TouchableOpacity>
 
+            {/* Offline Sync Status & Outbox Queue Pill */}
+            {(!isOnline || pendingOfflineCount > 0) && (
+              <TouchableOpacity
+                onPress={() => {
+                  if (pendingOfflineCount > 0 && isOnline && !isSyncing) {
+                    syncPendingOfflineOrders(activeRestId);
+                  } else if (!isOnline) {
+                    showAlert(
+                      'Offline Mode 🟡',
+                      `Device is currently working offline.\n\n${pendingOfflineCount} order(s) stored locally on tablet outbox.\nKOTs and bills print continuously and will sync automatically once internet reconnects.`,
+                      'warning'
+                    );
+                  }
+                }}
+                style={[
+                  styles.posSyncPill,
+                  !isOnline
+                    ? styles.posSyncPillOffline
+                    : pendingOfflineCount > 0
+                    ? styles.posSyncPillPending
+                    : styles.posSyncPillOnline,
+                ]}
+                activeOpacity={0.7}
+              >
+                <View
+                  style={[
+                    styles.posSyncDot,
+                    !isOnline
+                      ? styles.posSyncDotOffline
+                      : pendingOfflineCount > 0
+                      ? styles.posSyncDotPending
+                      : styles.posSyncDotOnline,
+                  ]}
+                />
+                <Text style={styles.posSyncPillText}>
+                  {!isOnline
+                    ? `Offline (${pendingOfflineCount})`
+                    : isSyncing
+                    ? 'Syncing...'
+                    : `Sync (${pendingOfflineCount})`}
+                </Text>
+              </TouchableOpacity>
+            )}
+
             {activeRestId > 0 && (
               <WalletBalanceWidget
                 restaurantId={activeRestId}
                 variant="pill"
+                style={isNarrow ? styles.walletPillNarrow : undefined}
                 onPress={() => setWalletModalVisible(true)}
               />
             )}
 
             {onClose && (
-              <TouchableOpacity onPress={onClose} style={styles.closeBtnCircle} activeOpacity={0.7}>
-                <X size={16} color="#8C7A6B" />
+              <TouchableOpacity
+                onPress={onClose}
+                style={[
+                  styles.headerActionBtn,
+                  isVeryNarrow && styles.headerActionBtnVeryNarrow,
+                  isNarrow && styles.headerActionBtnNarrow,
+                  isTablet && styles.headerActionBtnTablet,
+                ]}
+                activeOpacity={0.7}
+                accessibilityLabel="Close POS Terminal"
+              >
+                <X size={isTablet ? 19 : isNarrow ? 14 : 16} color="#8C7A6B" />
               </TouchableOpacity>
             )}
           </View>
@@ -1052,7 +1256,8 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
         />
 
         {/* PREPAID WALLET EXHAUSTED BANNER */}
-        {((restaurantConfig?.walletBalance !== undefined && restaurantConfig.walletBalance <= 0) || operatingStatus?.status === 'WALLET_EXHAUSTED') && (
+        {!((subscription?.effectiveCommissionPercentage ?? 0) <= 0 && (subscription?.effectiveFlatCommissionPerOrder ?? 0) <= 0) &&
+          ((restaurantConfig?.walletBalance !== undefined && restaurantConfig.walletBalance <= 0) || operatingStatus?.status === 'WALLET_EXHAUSTED') && (
           <TouchableOpacity
             style={styles.posWalletExhaustedBanner}
             onPress={() => setWalletModalVisible(true)}
@@ -1397,6 +1602,7 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
                           styles.dishCardName,
                           !isAvailable && styles.dishCardNameDisabled,
                         ]}
+                        numberOfLines={1}
                       >
                         {dish.itemName}
                       </Text>
@@ -1749,14 +1955,14 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
                         </View>
                       )}
                       <View style={{ flex: 1, marginLeft: 8 }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 5 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                           <View
                             style={[
                               styles.dishVegDotSmall,
-                              { backgroundColor: item.isVeg ? '#17845A' : '#DC2626', marginTop: 3 },
+                              { backgroundColor: item.isVeg ? '#17845A' : '#DC2626' },
                             ]}
                           />
-                          <Text style={[styles.cartDrawerItemName, { flex: 1 }]}>
+                          <Text style={styles.cartDrawerItemName} numberOfLines={1}>
                             {item.itemName}
                           </Text>
                         </View>
@@ -2111,7 +2317,7 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
           <View style={styles.qtyModalCard}>
             <View style={styles.qtyModalHeader}>
               <View style={{ flex: 1 }}>
-                <Text style={styles.qtyModalDishName}>
+                <Text style={styles.qtyModalDishName} numberOfLines={1}>
                   {qtyModalItem?.itemName}
                 </Text>
                 {Boolean(qtyModalItem?.description) && (
@@ -2299,13 +2505,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#FAF7F2',
   },
 
-  /* 1. TOP STREAMLINED HEADER (Matching HomePage) */
+  /* 1. TOP STREAMLINED HEADER */
   topHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingVertical: 9,
+    minHeight: 56,
     borderBottomWidth: 1,
     borderBottomColor: '#EBE4DC',
     backgroundColor: '#FAF7F2',
@@ -2314,30 +2521,95 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.04,
     shadowRadius: 4,
     elevation: 2,
+    zIndex: 10,
   },
+  topHeaderShort: {
+    paddingVertical: 5.5,
+    minHeight: 48,
+  },
+  topHeaderNarrow: {
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    minHeight: 52,
+  },
+  topHeaderTablet: {
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    minHeight: 66,
+  },
+  topHeaderLargeTablet: {
+    paddingHorizontal: 22,
+    paddingVertical: 14,
+    minHeight: 72,
+  },
+
+  /* Left Row (Logo, Store Name, Operating Status) */
   headerLeftRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 8,
     flex: 1,
     minWidth: 0,
-    marginRight: 8,
+    marginRight: 6,
   },
+  headerLeftRowNarrow: {
+    gap: 6,
+    marginRight: 4,
+  },
+  headerLeftRowTablet: {
+    gap: 12,
+    marginRight: 12,
+  },
+
+  /* Store Logo */
   headerLogoWrapper: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: '#E8E1D9',
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
     shadowColor: '#2B1A09',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.06,
-    shadowRadius: 3,
-    elevation: 1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  headerLogoWrapperVeryNarrow: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    borderWidth: 1.2,
+  },
+  headerLogoWrapperNarrow: {
+    width: 36,
+    height: 36,
+    borderRadius: 9,
+    borderWidth: 1.2,
+  },
+  headerLogoWrapperTablet: {
+    width: 46,
+    height: 46,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#E2D9CE',
+  },
+  headerLogoWrapperLargeTablet: {
+    width: 52,
+    height: 52,
+    borderRadius: 14,
+    borderWidth: 2,
   },
   headerLogo: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(222, 134, 38, 0.25)',
-    backgroundColor: '#FFFFFF',
+    width: '100%',
+    height: '100%',
   },
+
+  /* Header Outlet Info */
   headerInfoBlock: {
     flex: 1,
     minWidth: 0,
@@ -2349,48 +2621,64 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: -0.2,
     flexShrink: 1,
+    lineHeight: 18,
+  },
+  headerOutletTitleVeryNarrow: {
+    fontSize: 12,
+    lineHeight: 15,
+  },
+  headerOutletTitleNarrow: {
+    fontSize: 13,
+    lineHeight: 16,
+  },
+  headerOutletTitleTablet: {
+    fontSize: 17,
+    fontWeight: '800',
+    lineHeight: 21,
+    letterSpacing: -0.3,
+  },
+  headerOutletTitleLargeTablet: {
+    fontSize: 19,
+    fontWeight: '900',
+    lineHeight: 23,
+    letterSpacing: -0.4,
   },
   headerSubtitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    marginTop: 2,
-    flexWrap: 'nowrap',
+    gap: 6,
+    marginTop: 2.5,
   },
-  headerSubtitleDot: {
-    color: '#C4B9AD',
-    fontSize: 10,
+  headerSubtitleRowTablet: {
+    gap: 8,
+    marginTop: 3.5,
   },
   headerOutletSubtitle: {
     color: '#78716C',
-    fontSize: 11,
-    fontWeight: '500',
+    fontSize: 10.5,
+    fontWeight: '600',
     flexShrink: 1,
   },
+  headerOutletSubtitleLargeTablet: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+
+  /* Header Right Row */
   headerRightRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 5,
+    flexShrink: 0,
   },
-  posBellBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E7E0D6',
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-    shadowColor: '#2B1A09',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
-    shadowRadius: 2,
-    elevation: 1,
+  headerRightRowVeryNarrow: {
+    gap: 2.5,
   },
-  posBellBtnActive: {
-    backgroundColor: '#FFF7EE',
-    borderColor: '#FED7AA',
+  headerRightRowNarrow: {
+    gap: 3.5,
+  },
+  headerRightRowTablet: {
+    gap: 8,
   },
   headerActionBtn: {
     width: 34,
@@ -2408,14 +2696,33 @@ const styles = StyleSheet.create({
     shadowRadius: 2,
     elevation: 1,
   },
+  headerActionBtnVeryNarrow: {
+    width: 29,
+    height: 29,
+    borderRadius: 7,
+  },
+  headerActionBtnNarrow: {
+    width: 31,
+    height: 31,
+    borderRadius: 8,
+  },
+  headerActionBtnTablet: {
+    width: 40,
+    height: 40,
+    borderRadius: 11,
+  },
   headerActionBtnConnected: {
     backgroundColor: '#F0FDF4',
     borderColor: '#BBF7D0',
   },
+  posBellBtnActive: {
+    backgroundColor: '#FEF3C7',
+    borderColor: '#FDE68A',
+  },
   headerActionStatusDot: {
     position: 'absolute',
-    top: 4,
-    right: 4,
+    top: 3.5,
+    right: 3.5,
     width: 6,
     height: 6,
     borderRadius: 3,
@@ -2427,6 +2734,46 @@ const styles = StyleSheet.create({
   },
   headerActionStatusDotAmber: {
     backgroundColor: '#F59E0B',
+  },
+  posSyncPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 5,
+  },
+  posSyncPillOnline: {
+    backgroundColor: '#F0FDF4',
+    borderColor: '#BBF7D0',
+  },
+  posSyncPillPending: {
+    backgroundColor: '#FFFBEB',
+    borderColor: '#FDE68A',
+  },
+  posSyncPillOffline: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FECACA',
+  },
+  posSyncDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  posSyncDotOnline: {
+    backgroundColor: '#16A34A',
+  },
+  posSyncDotPending: {
+    backgroundColor: '#D97706',
+  },
+  posSyncDotOffline: {
+    backgroundColor: '#DC2626',
+  },
+  posSyncPillText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#374151',
   },
   posBellBadge: {
     position: 'absolute',
@@ -2451,7 +2798,7 @@ const styles = StyleSheet.create({
   closeBtnCircle: {
     width: 34,
     height: 34,
-    borderRadius: 9,
+    borderRadius: 10,
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#E7E0D6',
@@ -2463,58 +2810,10 @@ const styles = StyleSheet.create({
     shadowRadius: 2,
     elevation: 1,
   },
-  posStatusMiniBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  walletPillNarrow: {
+    height: 31,
+    paddingHorizontal: 6.5,
     gap: 3.5,
-    backgroundColor: '#F3EFEA',
-    paddingHorizontal: 5.5,
-    paddingVertical: 1.5,
-    borderRadius: 5,
-    borderWidth: 1,
-    borderColor: '#E7E0D6',
-  },
-  posStatusMiniBadgeOpen: {
-    backgroundColor: '#EBF8F1',
-    borderColor: '#A4E8C2',
-  },
-  posStatusMiniBadgePaused: {
-    backgroundColor: '#FFF8EB',
-    borderColor: '#FBDCA0',
-  },
-  posStatusMiniBadgeClosed: {
-    backgroundColor: '#FEF2F2',
-    borderColor: '#FECACA',
-  },
-  posStatusMiniDot: {
-    width: 5.5,
-    height: 5.5,
-    borderRadius: 3,
-    backgroundColor: '#8C7A6B',
-  },
-  posStatusMiniDotOpen: {
-    backgroundColor: '#16A34A',
-  },
-  posStatusMiniDotPaused: {
-    backgroundColor: '#F59E0B',
-  },
-  posStatusMiniDotClosed: {
-    backgroundColor: '#EF4444',
-  },
-  posStatusMiniText: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: '#6B5E51',
-    letterSpacing: 0.3,
-  },
-  posStatusMiniTextOpen: {
-    color: '#15803D',
-  },
-  posStatusMiniTextPaused: {
-    color: '#B45309',
-  },
-  posStatusMiniTextClosed: {
-    color: '#B91C1C',
   },
 
   /* Prepaid Wallet Exhausted Banner */

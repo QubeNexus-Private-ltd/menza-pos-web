@@ -19,6 +19,8 @@ import { StatusBadge } from '../../components/StatusBadge';
 import { SubscriptionRemoteDataSource } from '../../../data/datasources/SubscriptionRemoteDataSource';
 import { SubscriptionRepositoryImpl } from '../../../data/repositories/SubscriptionRepositoryImpl';
 import { WalletEvents } from '../../../core/utils/walletEvents';
+import { SubscriptionEvents } from '../../../core/utils/subscriptionEvents';
+import { apiCacheManager } from '../../../core/network/apiClient';
 import { joinOrderGroup, onPaymentVerified } from '../../../core/network/signalrService';
 import { PaymentGatewayManager } from '../../../data/datasources/PaymentGatewayManager';
 import { APP_CONSTANTS } from '../../../core/constants/appConstants';
@@ -80,12 +82,14 @@ export const PaymentProcessingScreen: React.FC<PaymentProcessingScreenProps> = (
       unsubscribeSignalR = onPaymentVerified(async (data: any) => {
         if (String(data?.orderId) === String(orderId) && !isCompletedRef.current) {
           const payStatus = String(data?.status || data?.paymentStatus || '').toUpperCase();
-          if (payStatus === 'SUCCESS' || payStatus === 'PAID') {
+          if (payStatus === 'SUCCESS' || payStatus === 'PAID' || payStatus === 'COMPLETED') {
             isCompletedRef.current = true;
             if (timer) clearTimeout(timer);
             setStatus('success');
             setStatusMessage('Payment Verified & Subscription Activated Successfully! 🎉');
+            apiCacheManager.invalidate('/Subscription');
             WalletEvents.emit();
+            SubscriptionEvents.emitUpdated();
             onSuccess();
           } else if (payStatus === 'FAILED' || payStatus === 'CANCELLED') {
             isCompletedRef.current = true;
@@ -129,11 +133,20 @@ export const PaymentProcessingScreen: React.FC<PaymentProcessingScreenProps> = (
       const payStatus = (statusRes.paymentStatus || '').toUpperCase();
       const gatewayStatus = (statusRes.gatewayOrderStatus || '').toUpperCase();
 
-      if (payStatus === 'SUCCESS' || gatewayStatus === 'PAID') {
+      if (
+        payStatus === 'SUCCESS' ||
+        payStatus === 'PAID' ||
+        payStatus === 'COMPLETED' ||
+        gatewayStatus === 'PAID' ||
+        gatewayStatus === 'SUCCESS' ||
+        gatewayStatus === 'COMPLETED'
+      ) {
         isCompletedRef.current = true;
         setStatus('success');
         setStatusMessage('Payment Verified & Subscription Activated Successfully! 🎉');
+        apiCacheManager.invalidate('/Subscription');
         WalletEvents.emit();
+        SubscriptionEvents.emitUpdated();
         onSuccess();
         return true;
       } else if (payStatus === 'FAILED' || payStatus === 'CANCELLED' || payStatus === 'USER_DROPPED' || gatewayStatus === 'EXPIRED' || gatewayStatus === 'CANCELLED' || gatewayStatus === 'TERMINATED') {
@@ -187,7 +200,9 @@ export const PaymentProcessingScreen: React.FC<PaymentProcessingScreenProps> = (
         isCompletedRef.current = true;
         setStatus('success');
         setStatusMessage('Subscription Plan Activated Successfully! 🎉');
+        apiCacheManager.invalidate('/Subscription');
         WalletEvents.emit();
+        SubscriptionEvents.emitUpdated();
         onSuccess();
       } else {
         Alert.alert('Activation Error', assignRes.message || 'Could not activate subscription plan.');

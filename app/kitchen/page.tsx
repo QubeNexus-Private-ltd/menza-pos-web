@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
+import { FeatureGate } from '@/components/subscription/FeatureGate';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { usePrinterStore } from '@shared/presentation/state/usePrinterStore';
 import { WebKitchenService, KitchenStationDTO, CreateKitchenStationModel } from '@/services/kitchenService';
@@ -480,6 +481,7 @@ export default function KitchenKdsPage() {
   return (
     <AuthGuard>
       <AppShell>
+        <FeatureGate feature="kitchenRouting" title="Kitchen Display System (KDS)" planSuggestion="Enterprise or KDS Add-On">
         <div className="p-4 sm:p-6 lg:p-8 space-y-5 max-w-7xl mx-auto">
           {/* 1. Header */}
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -1208,6 +1210,7 @@ export default function KitchenKdsPage() {
             </div>
           </div>
         )}
+        </FeatureGate>
       </AppShell>
     </AuthGuard>
   );

@@ -90,7 +90,17 @@ interface RestaurantConfigScreenProps {
 }
 
 export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ onClose }) => {
-  const { activeRestaurant, setActiveRestaurant, user } = useAuthStore();
+  const {
+    activeRestaurant,
+    setActiveRestaurant,
+    user,
+    isPinLockEnabled,
+    staffPin,
+    activeStaffName,
+    setStaffPin,
+    togglePinLockEnabled,
+    setActiveStaffName,
+  } = useAuthStore();
   const currentRestId =
     activeRestaurant?.restaurantId ||
     (globalThis as any).__MENZA_ACTIVE_REST_ID__ ||
@@ -164,6 +174,49 @@ export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ 
   const [uploadingImage, setUploadingImage] = useState(false);
   const [uploadingLogo, setUploadingLogo] = useState(false);
 
+  // Terminal Quick PIN State
+  const [terminalPinInput, setTerminalPinInput] = useState(staffPin || '1234');
+  const [terminalPinLockEnabled, setTerminalPinLockEnabled] = useState(isPinLockEnabled);
+  const [terminalStaffNameInput, setTerminalStaffNameInput] = useState(activeStaffName || '');
+  const [savingPin, setSavingPin] = useState(false);
+
+  useEffect(() => {
+    if (staffPin) setTerminalPinInput(staffPin);
+    setTerminalPinLockEnabled(isPinLockEnabled);
+    if (activeStaffName) setTerminalStaffNameInput(activeStaffName);
+  }, [staffPin, isPinLockEnabled, activeStaffName]);
+
+  const handleSaveTerminalPinConfig = async () => {
+    if (!/^\d{4}$/.test(terminalPinInput)) {
+      setAlertConfig({
+        visible: true,
+        title: 'Invalid PIN',
+        message: 'Terminal Quick PIN must be exactly 4 numeric digits (e.g. 1234).',
+      });
+      return;
+    }
+
+    try {
+      setSavingPin(true);
+      await setStaffPin(terminalPinInput);
+      await togglePinLockEnabled(terminalPinLockEnabled);
+      setActiveStaffName(terminalStaffNameInput.trim());
+      setAlertConfig({
+        visible: true,
+        title: 'Terminal PIN Saved',
+        message: 'Terminal lock and staff PIN configuration updated successfully on this device.',
+      });
+    } catch (e: any) {
+      setAlertConfig({
+        visible: true,
+        title: 'Error Saving PIN',
+        message: e?.message || 'Failed to update PIN settings.',
+      });
+    } finally {
+      setSavingPin(false);
+    }
+  };
+
   // Accordion Section States
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     basic: true,
@@ -173,6 +226,7 @@ export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ 
     hours: false,
     kitchen: false,
     reservations: false,
+    terminal: false,
     history: false,
   });
 
@@ -219,6 +273,7 @@ export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ 
       hours: true,
       kitchen: true,
       reservations: true,
+      terminal: true,
       history: true,
     });
   };
@@ -232,6 +287,7 @@ export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ 
       hours: false,
       kitchen: false,
       reservations: false,
+      terminal: false,
       history: false,
     });
   };
@@ -2118,6 +2174,112 @@ export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ 
                     </LinearGradient>
                   </TouchableOpacity>
                 )}
+              </View>
+            )}
+          </View>
+
+          {/* TERMINAL LOCK & STAFF PIN ACCORDION */}
+          <View style={styles.accordionCard}>
+            <TouchableOpacity
+              style={[styles.accordionHeader, expandedSections.terminal && styles.accordionHeaderOpen]}
+              onPress={() => toggleSection('terminal')}
+              activeOpacity={0.8}
+            >
+              <View style={styles.accordionHeaderLeft}>
+                <View style={[styles.accordionIconCircle, expandedSections.terminal && styles.accordionIconCircleOpen]}>
+                  <Lock size={16} color={expandedSections.terminal ? '#DE8626' : '#78716C'} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.accordionTitle}>TERMINAL LOCK & STAFF PIN</Text>
+                  <Text style={styles.accordionSubtitle} numberOfLines={1}>
+                    {terminalPinLockEnabled
+                      ? `Enabled (PIN: ••••) • ${terminalStaffNameInput || 'Default Staff'}`
+                      : 'Disabled (Instant access without PIN)'}
+                  </Text>
+                </View>
+              </View>
+              <View style={[styles.accordionChevronBadge, expandedSections.terminal && styles.accordionChevronBadgeOpen]}>
+                {expandedSections.terminal ? (
+                  <ChevronUp size={16} color="#D96B14" strokeWidth={2.4} />
+                ) : (
+                  <ChevronDown size={16} color="#78716C" strokeWidth={2.4} />
+                )}
+              </View>
+            </TouchableOpacity>
+
+            {expandedSections.terminal && (
+              <View style={styles.accordionBody}>
+                {/* Enable PIN Lock Toggle */}
+                <View style={styles.switchRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.switchTitle}>Enable Terminal Quick PIN Lock</Text>
+                    <Text style={styles.switchDesc}>
+                      Requires a 4-digit PIN on app launch and allows locking the screen during shift handovers
+                    </Text>
+                  </View>
+                  <Switch
+                    value={terminalPinLockEnabled}
+                    onValueChange={(val: boolean) => setTerminalPinLockEnabled(val)}
+                    trackColor={{ false: '#E5E7EB', true: '#FED7AA' }}
+                    thumbColor={terminalPinLockEnabled ? '#DE8626' : '#9CA3AF'}
+                  />
+                </View>
+
+                {terminalPinLockEnabled && (
+                  <>
+                    <View style={styles.fieldGroup}>
+                      <Text style={styles.fieldLabel}>TERMINAL 4-DIGIT PIN</Text>
+                      <TextInput
+                        style={styles.textInput}
+                        value={terminalPinInput}
+                        onChangeText={(t) => setTerminalPinInput(t.replace(/[^0-9]/g, '').slice(0, 4))}
+                        placeholder="1234"
+                        placeholderTextColor="#9CA3AF"
+                        keyboardType="number-pad"
+                        maxLength={4}
+                        secureTextEntry
+                      />
+                      <Text style={{ fontSize: 11, color: '#78716C', marginTop: 4 }}>
+                        Default is 1234. Staff can enter this PIN to unlock the POS in under 1 second.
+                      </Text>
+                    </View>
+
+                    <View style={styles.fieldGroup}>
+                      <Text style={styles.fieldLabel}>ACTIVE COUNTER / STAFF LABEL</Text>
+                      <TextInput
+                        style={styles.textInput}
+                        value={terminalStaffNameInput}
+                        onChangeText={setTerminalStaffNameInput}
+                        placeholder="e.g. Counter 1 / Captain Ravi"
+                        placeholderTextColor="#9CA3AF"
+                        maxLength={40}
+                      />
+                    </View>
+                  </>
+                )}
+
+                <TouchableOpacity
+                  style={[styles.sectionSaveBtn, savingPin && { opacity: 0.6 }]}
+                  onPress={handleSaveTerminalPinConfig}
+                  disabled={savingPin}
+                  activeOpacity={0.85}
+                >
+                  <LinearGradient
+                    colors={['#F59E0B', '#E58B24', '#DE8626', '#CB741B']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.sectionSaveGradient}
+                  >
+                    {savingPin ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <>
+                        <Save size={13} color="#FFFFFF" strokeWidth={2.2} />
+                        <Text style={styles.sectionSaveText}>Save Terminal PIN Settings</Text>
+                      </>
+                    )}
+                  </LinearGradient>
+                </TouchableOpacity>
               </View>
             )}
           </View>

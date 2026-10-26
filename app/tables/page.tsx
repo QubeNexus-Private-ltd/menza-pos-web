@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
+import { FeatureGate } from '@/components/subscription/FeatureGate';
 import { TableQrModal } from '@/components/tables/TableQrModal';
 import { StorefrontQrModal } from '@/components/tables/StorefrontQrModal';
 import { OrderSettleModal } from '@/components/orders/OrderSettleModal';
@@ -526,6 +527,7 @@ export default function TablesPage() {
   return (
     <AuthGuard>
       <AppShell>
+        <FeatureGate feature="tableConfiguration" title="Table & Floor Layout Designer" planSuggestion="Dine-In Pro">
         <div className="p-4 sm:p-6 lg:p-8 space-y-6 max-w-7xl mx-auto">
           {/* Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -1503,6 +1505,7 @@ export default function TablesPage() {
             </div>
           </div>
         )}
+        </FeatureGate>
       </AppShell>
     </AuthGuard>
   );

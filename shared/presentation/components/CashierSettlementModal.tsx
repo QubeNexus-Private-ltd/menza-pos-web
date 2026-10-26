@@ -134,10 +134,15 @@ export const CashierSettlementModal: React.FC<CashierSettlementModalProps> = ({
         discountVal: 0,
         taxableAmount: 0,
         hasGst: false,
+        effectiveGstNum: '',
+        cgstRate: 0,
+        sgstRate: 0,
         cgst: 0,
         sgst: 0,
         totalTax: 0,
         netTotal: 0,
+        advancePaid: 0,
+        balanceDue: 0,
         tenderedVal: 0,
         changeToReturn: 0,
       };
@@ -165,8 +170,12 @@ export const CashierSettlementModal: React.FC<CashierSettlementModalProps> = ({
     const totalTax = cgst + sgst;
     const netTotal = Math.round((taxableAmount + totalTax) * 100) / 100;
 
+    const advancePaid = (order as any).tenderedAmount && Number((order as any).tenderedAmount) > 0
+      ? Number((order as any).tenderedAmount)
+      : 0;
+    const balanceDue = Math.max(0, netTotal - advancePaid);
     const tenderedVal = parseFloat(tenderedText) || 0;
-    const changeToReturn = Math.max(0, tenderedVal - netTotal);
+    const changeToReturn = Math.max(0, tenderedVal - (advancePaid > 0 ? balanceDue : netTotal));
 
     return {
       baseSubtotal,
@@ -180,6 +189,8 @@ export const CashierSettlementModal: React.FC<CashierSettlementModalProps> = ({
       sgst,
       totalTax,
       netTotal,
+      advancePaid,
+      balanceDue,
       tenderedVal,
       changeToReturn,
     };
@@ -423,11 +434,24 @@ export const CashierSettlementModal: React.FC<CashierSettlementModalProps> = ({
                 </>
               )}
 
+              {calculations.advancePaid > 0 && (
+                <>
+                  <View style={styles.totalRow}>
+                    <Text style={[styles.totalRowLabel, { color: '#059669', fontWeight: '700' }]}>Advance Paid (Online/UPI)</Text>
+                    <Text style={[styles.totalRowVal, { color: '#059669', fontWeight: '700' }]}>-₹{calculations.advancePaid.toFixed(2)}</Text>
+                  </View>
+                  <View style={styles.totalRow}>
+                    <Text style={[styles.totalRowLabel, { color: '#B45309', fontWeight: '800' }]}>BALANCE CASH DUE</Text>
+                    <Text style={[styles.totalRowVal, { color: '#B45309', fontWeight: '800', fontSize: 14 }]}>₹{calculations.balanceDue.toFixed(2)}</Text>
+                  </View>
+                </>
+              )}
+
               <View style={styles.grandDivider} />
 
               <View style={styles.grandRow}>
-                <Text style={styles.grandLabel}>NET PAYABLE</Text>
-                <Text style={styles.grandValue}>₹{calculations.netTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</Text>
+                <Text style={styles.grandLabel}>{calculations.advancePaid > 0 ? 'BALANCE PAYABLE' : 'NET PAYABLE'}</Text>
+                <Text style={styles.grandValue}>₹{(calculations.advancePaid > 0 ? calculations.balanceDue : calculations.netTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</Text>
               </View>
             </View>
 
@@ -479,7 +503,7 @@ export const CashierSettlementModal: React.FC<CashierSettlementModalProps> = ({
                       <Text style={styles.currencyPrefix}>₹</Text>
                       <TextInput
                         style={styles.tenderedInput}
-                        placeholder={calculations.netTotal.toFixed(0)}
+                        placeholder={(calculations.advancePaid > 0 ? calculations.balanceDue : calculations.netTotal).toFixed(0)}
                         placeholderTextColor="#9CA3AF"
                         keyboardType="numeric"
                         value={tenderedText}
@@ -497,13 +521,14 @@ export const CashierSettlementModal: React.FC<CashierSettlementModalProps> = ({
                   <View style={styles.quickPillsRow}>
                     <TouchableOpacity
                       style={styles.quickPill}
-                      onPress={() => handleQuickTender(calculations.netTotal)}
+                      onPress={() => handleQuickTender(calculations.advancePaid > 0 ? calculations.balanceDue : calculations.netTotal)}
                     >
-                      <Text style={styles.quickPillText}>Exact ₹{calculations.netTotal.toFixed(0)}</Text>
+                      <Text style={styles.quickPillText}>Exact ₹{(calculations.advancePaid > 0 ? calculations.balanceDue : calculations.netTotal).toFixed(0)}</Text>
                     </TouchableOpacity>
                     {[100, 500, 2000].map((amt) => {
-                      const roundedTarget = Math.ceil(calculations.netTotal / amt) * amt;
-                      if (roundedTarget <= calculations.netTotal && amt < calculations.netTotal) return null;
+                      const targetAmt = calculations.advancePaid > 0 ? calculations.balanceDue : calculations.netTotal;
+                      const roundedTarget = Math.ceil(targetAmt / amt) * amt;
+                      if (roundedTarget <= targetAmt && amt < targetAmt) return null;
                       return (
                         <TouchableOpacity
                           key={`pill-${amt}`}
@@ -581,7 +606,7 @@ export const CashierSettlementModal: React.FC<CashierSettlementModalProps> = ({
                 <>
                   <Check size={16} color="#FFFFFF" strokeWidth={2.5} />
                   <Text style={styles.confirmBtnText} numberOfLines={1}>
-                    Confirm & Settle ₹{calculations.netTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    Confirm & Settle ₹{(calculations.advancePaid > 0 ? calculations.balanceDue : calculations.netTotal).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </Text>
                 </>
               )}

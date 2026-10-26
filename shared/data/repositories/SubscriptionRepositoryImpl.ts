@@ -13,8 +13,8 @@ export class SubscriptionRepositoryImpl implements ISubscriptionRepository {
     return await this.remoteDataSource.getMySubscription();
   }
 
-  async getRestaurantSubscription(restaurantId: number): Promise<UserSubscriptionStatus | null> {
-    return await this.remoteDataSource.getRestaurantSubscription(restaurantId);
+  async getRestaurantSubscription(restaurantId: number, bypassCache?: boolean): Promise<UserSubscriptionStatus | null> {
+    return await this.remoteDataSource.getRestaurantSubscription(restaurantId, bypassCache);
   }
 
   async createPaymentOrder(planId: number): Promise<{ cfOrderId: string; paymentSessionId: string }> {
@@ -60,6 +60,10 @@ export class SubscriptionRepositoryImpl implements ISubscriptionRepository {
       razorpayPaymentId,
       razorpaySignature
     );
+  }
+
+  async checkCashFreePaymentStatus(orderId: string) {
+    return await this.remoteDataSource.getCashFreePaymentStatus(orderId);
   }
 
   async getCashFreePaymentStatus(

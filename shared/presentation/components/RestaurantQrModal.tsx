@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -32,6 +32,8 @@ import {
   Lock,
   Search,
   Layers,
+  Clock,
+  RotateCw,
 } from 'lucide-react-native';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
@@ -108,6 +110,8 @@ export const RestaurantQrModal: React.FC<RestaurantQrModalProps> = ({
   const [tableEncTableId, setTableEncTableId] = useState<string>(() => (tableId ? encryptIdentifier(tableId) : ''));
   const [tableQrPng, setTableQrPng] = useState<string | null>(null);
   const [tableUrl, setTableUrl] = useState<string | null>(null);
+  const [tableQrMode, setTableQrMode] = useState<'rolling' | 'sticker'>('rolling');
+  const [timeLeft, setTimeLeft] = useState<number>(900);
 
   // Load tables & sections from DB when modal opens
   useEffect(() => {
@@ -173,6 +177,14 @@ export const RestaurantQrModal: React.FC<RestaurantQrModalProps> = ({
     }
   }, [visible, isDedicatedTable, tableId, tableNumber, dbTables]);
 
+  // Normalized Host from configured environment
+  const configuredHost = useMemo(() => {
+    return (
+      APP_CONSTANTS.CUSTOMER_ORDERING_BASE_URL ||
+      'https://menza-order-web.vercel.app'
+    ).replace(/\/+$/, '');
+  }, []);
+
   // Active table ID resolution: prioritizes selected database table
   const activeTableId = useMemo(() => {
     if (selectedMode !== 'table') return null;
@@ -185,83 +197,102 @@ export const RestaurantQrModal: React.FC<RestaurantQrModalProps> = ({
   }, [selectedMode, selectedDbTable, tableId, customTableNum, dbTables]);
 
   // Fetch official backend encrypted QR code whenever mode or selected table changes
-  useEffect(() => {
+  const fetchEncryptedQr = useCallback(async () => {
     if (!visible || !restId) return;
 
-    let isMounted = true;
-    const fetchEncryptedQr = async () => {
-      try {
-        setLoadingQr(true);
+    try {
+      setLoadingQr(true);
 
-        if (selectedMode === 'table') {
-          if (activeTableId && activeTableId > 0) {
-            // Dedicated Table QR endpoint with AES-256 encrypted tableId
-            const res = await apiClient.get(`/TableMaster/${activeTableId}/qr-download?restaurantId=${restId}`);
-            if (isMounted && res.data) {
-              if (res.data.encryptedRestaurantId) {
-                setTableEncRestId(res.data.encryptedRestaurantId);
-              }
-              if (res.data.encryptedTableId) {
-                setTableEncTableId(res.data.encryptedTableId);
-              }
-              if (res.data.qrCodeBase64Png) {
-                setTableQrPng(res.data.qrCodeBase64Png);
-              }
-              const dUrl = res.data.dineInUrl || res.data.DineInUrl || res.data.orderingUrl;
-              if (dUrl) {
-                setTableUrl(dUrl);
-              }
+      if (selectedMode === 'table') {
+        if (activeTableId && activeTableId > 0) {
+          if (tableQrMode === 'rolling') {
+            const res = await apiClient.get(`/TableMaster/${activeTableId}/rolling-qr`, {
+              params: { ttlMinutes: 15, baseUrl: configuredHost },
+            });
+            if (res.data) {
+              if (res.data.encryptedRestaurantId) setTableEncRestId(res.data.encryptedRestaurantId);
+              if (res.data.encryptedTableId) setTableEncTableId(res.data.encryptedTableId);
+              if (res.data.qrCodeBase64Png) setTableQrPng(res.data.qrCodeBase64Png);
+              const dUrl = res.data.dineInUrl || res.data.DineInUrl || res.data.qrUrl;
+              if (dUrl) setTableUrl(dUrl);
+              setTimeLeft(res.data.ttlSeconds ?? 900);
             }
           } else {
-            if (isMounted) {
-              setTableQrPng(null);
-              setTableUrl(null);
-              setTableEncRestId(encryptIdentifier(restId));
-              setTableEncTableId(encryptIdentifier(customTableNum.trim() || '1'));
+            const res = await apiClient.get(`/TableMaster/${activeTableId}/qr-download`, {
+              params: { restaurantId: restId, baseUrl: configuredHost },
+            });
+            if (res.data) {
+              if (res.data.encryptedRestaurantId) setTableEncRestId(res.data.encryptedRestaurantId);
+              if (res.data.encryptedTableId) setTableEncTableId(res.data.encryptedTableId);
+              if (res.data.qrCodeBase64Png) setTableQrPng(res.data.qrCodeBase64Png);
+              const dUrl = res.data.dineInUrl || res.data.DineInUrl || res.data.qrUrl;
+              if (dUrl) setTableUrl(dUrl);
+              setTimeLeft(0);
             }
           }
         } else {
-          // General Storefront QR endpoint
-          const res = await apiClient.get(`/TableMaster/store-qr/${restId}`);
-          if (isMounted && res.data) {
-            if (res.data.encryptedRestaurantId) {
-              setStoreEncRestId(res.data.encryptedRestaurantId);
-            }
-            if (res.data.qrCodeBase64Png) {
-              setStoreQrPng(res.data.qrCodeBase64Png);
-            }
-            const sUrl = res.data.dineInUrl || res.data.DineInUrl || res.data.orderingUrl;
-            if (sUrl) {
-              setStoreUrl(sUrl);
-            }
-          }
+          setTableQrPng(null);
+          setTableUrl(null);
+          setTableEncRestId(encryptIdentifier(restId));
+          setTableEncTableId(encryptIdentifier(customTableNum.trim() || '1'));
         }
-      } catch (err) {
-        console.warn('Failed to fetch server QR code, using client encryption fallback', err);
-        if (isMounted) {
-          if (selectedMode === 'table') {
-            setTableEncRestId(encryptIdentifier(restId));
-            if (activeTableId) {
-              setTableEncTableId(encryptIdentifier(activeTableId));
-            } else {
-              setTableEncTableId(encryptIdentifier(customTableNum.trim() || '1'));
-            }
-          } else {
-            setStoreEncRestId(encryptIdentifier(restId));
+      } else {
+        // General Storefront QR endpoint
+        const res = await apiClient.get(`/TableMaster/store-qr/${restId}`, {
+          params: { baseUrl: configuredHost },
+        });
+        if (res.data) {
+          if (res.data.encryptedRestaurantId) {
+            setStoreEncRestId(res.data.encryptedRestaurantId);
           }
-        }
-      } finally {
-        if (isMounted) {
-          setLoadingQr(false);
+          if (res.data.qrCodeBase64Png) {
+            setStoreQrPng(res.data.qrCodeBase64Png);
+          }
+          const sUrl = res.data.dineInUrl || res.data.DineInUrl || res.data.orderingUrl;
+          if (sUrl) {
+            setStoreUrl(sUrl);
+          }
         }
       }
-    };
+    } catch (err) {
+      console.warn('Failed to fetch server QR code, using client encryption fallback', err);
+      if (selectedMode === 'table') {
+        setTableEncRestId(encryptIdentifier(restId));
+        if (activeTableId) {
+          setTableEncTableId(encryptIdentifier(activeTableId));
+        } else {
+          setTableEncTableId(encryptIdentifier(customTableNum.trim() || '1'));
+        }
+      } else {
+        setStoreEncRestId(encryptIdentifier(restId));
+      }
+    } finally {
+      setLoadingQr(false);
+    }
+  }, [visible, restId, activeTableId, selectedMode, customTableNum, tableQrMode, configuredHost]);
 
+  useEffect(() => {
+    if (!visible || !restId) return;
     fetchEncryptedQr();
-    return () => {
-      isMounted = false;
-    };
-  }, [visible, restId, activeTableId, selectedMode, customTableNum]);
+  }, [visible, restId, fetchEncryptedQr]);
+
+  // Rolling countdown timer
+  useEffect(() => {
+    if (!visible || selectedMode !== 'table' || tableQrMode !== 'rolling' || timeLeft <= 0) return;
+
+    const timer = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          fetchEncryptedQr();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [visible, selectedMode, tableQrMode, timeLeft, fetchEncryptedQr]);
 
   // Section options for table filter
   const availableSections = useMemo(() => {
@@ -292,14 +323,6 @@ export const RestaurantQrModal: React.FC<RestaurantQrModalProps> = ({
 
   // Active Tagline
   const activeTagline = isCustomTagline && customTagline.trim() ? customTagline.trim() : selectedTagline;
-
-  // Normalized Host from configured environment
-  const configuredHost = useMemo(() => {
-    return (
-      APP_CONSTANTS.CUSTOMER_ORDERING_BASE_URL ||
-      'https://menza-order-web.vercel.app'
-    ).replace(/\/+$/, '');
-  }, []);
 
   // Normalizes any server-provided URL so that it always points to the configured ordering host
   const normalizeOrderingUrl = (serverUrl: string | null): string | null => {
@@ -602,6 +625,57 @@ export const RestaurantQrModal: React.FC<RestaurantQrModalProps> = ({
                 </View>
               </View>
             )}
+
+            {/* Rolling vs Sticker Sub-Mode Selector for Table QR */}
+            {selectedMode === 'table' && (
+              <View style={styles.tableModeTabsRow}>
+                <TouchableOpacity
+                  onPress={() => setTableQrMode('rolling')}
+                  style={[styles.tableModeTabBtn, tableQrMode === 'rolling' && styles.tableModeTabBtnActive]}
+                  activeOpacity={0.8}
+                >
+                  <Clock size={12} color={tableQrMode === 'rolling' ? '#DE8626' : '#7C6F62'} />
+                  <Text style={[styles.tableModeTabText, tableQrMode === 'rolling' && styles.tableModeTabTextActive]}>
+                    Dynamic (15m TTL)
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={() => setTableQrMode('sticker')}
+                  style={[styles.tableModeTabBtn, tableQrMode === 'sticker' && styles.tableModeTabBtnActive]}
+                  activeOpacity={0.8}
+                >
+                  <Printer size={12} color={tableQrMode === 'sticker' ? '#DE8626' : '#7C6F62'} />
+                  <Text style={[styles.tableModeTabText, tableQrMode === 'sticker' && styles.tableModeTabTextActive]}>
+                    Print Sticker
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* Expiry Banner / Info */}
+            {selectedMode === 'table' && tableQrMode === 'rolling' ? (
+              <View style={styles.rollingBanner}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Clock size={13} color="#B45309" />
+                  <Text style={styles.rollingBannerText}>Valid for order claim:</Text>
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Text style={styles.countdownDigit}>
+                    {Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, '0')}
+                  </Text>
+                  <TouchableOpacity onPress={() => fetchEncryptedQr()} style={styles.refreshBtn}>
+                    <RotateCw size={12} color="#B45309" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : selectedMode === 'table' && tableQrMode === 'sticker' ? (
+              <View style={styles.stickerBanner}>
+                <Text style={styles.stickerBannerText}>
+                  📌 <Text style={{ fontWeight: '700' }}>Physical Sticker QR:</Text> Valid for 15 minutes upon initial scan; stays active once order is confirmed until bill settlement.
+                </Text>
+              </View>
+            ) : null}
 
             {/* If in Table Mode (and not locked), bind and select tables from Database */}
             {!isDedicatedTable && selectedMode === 'table' && (
@@ -1004,6 +1078,88 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     color: '#17845A',
+  },
+
+  // TABLE ROLLING / STICKER TABS
+  tableModeTabsRow: {
+    flexDirection: 'row',
+    backgroundColor: '#FAF7F2',
+    borderRadius: 12,
+    padding: 3,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#E7E1DA',
+  },
+  tableModeTabBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingVertical: 7,
+    borderRadius: 9,
+  },
+  tableModeTabBtnActive: {
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  tableModeTabText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#7C6F62',
+  },
+  tableModeTabTextActive: {
+    color: '#DE8626',
+    fontWeight: '800',
+  },
+
+  // ROLLING & STICKER BANNERS
+  rollingBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginBottom: 10,
+  },
+  rollingBannerText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#92400E',
+  },
+  countdownDigit: {
+    fontFamily: 'monospace',
+    fontSize: 12.5,
+    fontWeight: '800',
+    color: '#78350F',
+    letterSpacing: 0.5,
+  },
+  refreshBtn: {
+    padding: 3,
+    borderRadius: 6,
+    backgroundColor: '#FEF3C7',
+  },
+  stickerBanner: {
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginBottom: 10,
+  },
+  stickerBannerText: {
+    fontSize: 10.5,
+    color: '#065F46',
+    lineHeight: 15,
   },
 
   tableSelectionContainer: {

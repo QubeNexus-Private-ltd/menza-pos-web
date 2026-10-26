@@ -26,6 +26,7 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
+  KeyRound,
   MessageSquare,
   Scale,
   Sparkles,
@@ -66,6 +67,7 @@ export const LoginScreen: React.FC = () => {
   const isSendingOtpRef = useRef(false);
   const entranceAnim = useRef(new Animated.Value(0)).current;
   const setAuthData = useAuthStore((state) => state.setAuthData);
+  const setAuthMode = useAuthStore((state) => state.setAuthMode);
 
   const {
     isListening,
@@ -262,8 +264,16 @@ export const LoginScreen: React.FC = () => {
         },
         res.restaurants,
         res.activeRestaurantId,
-        res.isTermConditionChecked
+        res.isTermConditionChecked,
+        res.isPinConfigured
       );
+
+      if (!res.isPinConfigured) {
+        setAuthMode('setup_pin');
+      } else {
+        useAuthStore.setState({ isPinLocked: false });
+        setAuthMode('pin');
+      }
     } catch (err: any) {
       logger.auth(
         'OTP_VERIFICATION_FAILED',
@@ -619,6 +629,18 @@ export const LoginScreen: React.FC = () => {
                           )}
                         </TouchableOpacity>
                       </View>
+
+                      {/* Switch back to Terminal PIN */}
+                      <TouchableOpacity
+                        style={styles.switchPinBtn}
+                        onPress={() => setAuthMode('pin')}
+                        activeOpacity={0.75}
+                        accessibilityRole="button"
+                        accessibilityLabel="Switch to PIN Login"
+                      >
+                        <KeyRound size={15} color="#D96B14" />
+                        <Text style={styles.switchPinText}>Login with Terminal PIN instead</Text>
+                      </TouchableOpacity>
                     </View>
                   )}
 
@@ -1018,5 +1040,23 @@ const styles = StyleSheet.create({
     color: '#D96B14',
     fontWeight: '700',
     textDecorationLine: 'underline',
+  },
+  switchPinBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    marginTop: 14,
+    paddingVertical: 9,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    backgroundColor: '#FFF7ED',
+    borderWidth: 1,
+    borderColor: '#FED7AA',
+  },
+  switchPinText: {
+    fontSize: 12.5,
+    fontWeight: '600',
+    color: '#D96B14',
   },
 });

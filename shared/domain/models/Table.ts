@@ -112,3 +112,20 @@ export interface TableHistoryItem {
   remarks?: string;
   createdDateUTC: string;
 }
+
+export interface TableQrResponseDTO {
+  tableId: number;
+  tableNumber: string;
+  tableName: string;
+  restaurantId: number;
+  restaurantName: string;
+  sectionName?: string;
+  qrCodeBase64: string; // Base64 PNG image string
+  qrUrl: string; // Customer direct order URL
+  generatedAt: string;
+  isTimeBound?: boolean;
+  ttlSeconds?: number;
+  expiresAtUtc?: string;
+  encryptedRestaurantId?: string;
+  encryptedTableId?: string;
+}

@@ -6,11 +6,12 @@ import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { isOwnerUser, isSuperAdminUser } from '@shared/core/auth/rolePermissions';
 import { isSalesPersonUser } from '@/lib/auth/permissions';
 import { Loader2 } from 'lucide-react';
+import { PinLockView } from './PinLockView';
 
 export const AuthGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const router = useRouter();
   const pathname = usePathname();
-  const { isHydrating, isAuthenticated, hasCompletedOnboarding, hasAcceptedTerms, hydrateSession, user, activeRestaurant } = useAuthStore();
+  const { isHydrating, isAuthenticated, isPinLocked, hasCompletedOnboarding, hasAcceptedTerms, hydrateSession, user, activeRestaurant } = useAuthStore();
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -75,6 +76,26 @@ export const AuthGuard: React.FC<{ children: React.ReactNode }> = ({ children })
 
   if (!isAuthenticated && pathname !== '/login' && pathname !== '/onboarding') {
     return null;
+  }
+
+  if (isAuthenticated && isPinLocked && pathname !== '/login') {
+    return (
+      <PinLockView
+        isOverlay={false}
+        onSuccess={() => {
+          useAuthStore.setState({ isPinLocked: false });
+        }}
+        onForgotPin={(prefilledMobile) => {
+          const query = prefilledMobile
+            ? `/login?mode=forgot-pin&mobile=${prefilledMobile}`
+            : '/login?mode=forgot-pin';
+          router.push(query);
+        }}
+        onSwitchToOtp={() => {
+          router.push('/login?mode=otp');
+        }}
+      />
+    );
   }
 
   return <>{children}</>;

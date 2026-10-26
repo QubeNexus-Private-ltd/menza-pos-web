@@ -240,12 +240,17 @@ export default function SubscriptionBillingPage() {
 
   // Helper to resolve an entitlement by its configKey
   const resolveEntitlement = (configKey: string, fallbackPlanProp?: keyof SubscriptionPlan) => {
-    const activeEnt = (activeSub?.entitlements || []).find(
-      (e: any) => String(e.configKey || e.ConfigKey || '').toLowerCase() === configKey.toLowerCase()
-    );
-    const planEnt = (matchedPlan?.entitlements || []).find(
-      (e: any) => String(e.configKey || e.ConfigKey || '').toLowerCase() === configKey.toLowerCase()
-    );
+    const kLower = configKey.toLowerCase();
+    const isKds = kLower === 'iskdsenabled' || kLower === 'iskdsappenabled' || kLower === 'iscaptainmenzaappenabled';
+
+    const activeEnt = (activeSub?.entitlements || []).find((e: any) => {
+      const ek = String(e.configKey || e.ConfigKey || '').toLowerCase();
+      return isKds ? (ek === 'iskdsenabled' || ek === 'iskdsappenabled' || ek === 'iscaptainmenzaappenabled') : ek === kLower;
+    });
+    const planEnt = (matchedPlan?.entitlements || []).find((e: any) => {
+      const ek = String(e.configKey || e.ConfigKey || '').toLowerCase();
+      return isKds ? (ek === 'iskdsenabled' || ek === 'iskdsappenabled' || ek === 'iscaptainmenzaappenabled') : ek === kLower;
+    });
 
     let enabled = true;
     if (activeEnt !== undefined) {

@@ -4,6 +4,7 @@ import { Category } from '@shared/domain/models/Category';
 import { TableMaster } from '@shared/domain/models/Table';
 import { RestaurantConfig, StoreOperatingStatus } from '@shared/domain/models/RestaurantConfig';
 import { ActiveOrderType, OrderMaster } from '@shared/domain/models/Order';
+import { saveCatalogToOfflineDb, loadCatalogFromOfflineDb, initPosDatabase } from '@/lib/offline/webPosDatabase';
 
 interface ActiveTableOrderCache {
   order: OrderMaster | null;
@@ -31,6 +32,7 @@ interface PosCatalogState {
     operatingStatus?: StoreOperatingStatus | null;
     orderTypes?: ActiveOrderType[];
   }) => void;
+  hydrateFromOfflineDb: (restaurantId: number) => Promise<boolean>;
   updateTables: (tables: TableMaster[]) => void;
   updateOperatingStatus: (status: StoreOperatingStatus | null) => void;
   updateRestaurantConfig: (config: RestaurantConfig | null) => void;
@@ -53,22 +55,76 @@ export const usePosCatalogStore = create<PosCatalogState>((set, get) => ({
   lastFetchedAt: 0,
   activeTableOrders: {},
 
-  setCatalogData: (data) =>
-    set((state) => ({
-      restaurantId: data.restaurantId,
-      categories: data.categories !== undefined ? data.categories : state.categories,
-      items: data.items !== undefined ? data.items : state.items,
-      tables: data.tables !== undefined ? data.tables : state.tables,
-      restaurantConfig: data.restaurantConfig !== undefined ? data.restaurantConfig : state.restaurantConfig,
-      operatingStatus: data.operatingStatus !== undefined ? data.operatingStatus : state.operatingStatus,
-      orderTypes: data.orderTypes !== undefined ? data.orderTypes : state.orderTypes,
-      hasLoaded: true,
-      lastFetchedAt: Date.now(),
-    })),
+  hydrateFromOfflineDb: async (restaurantId: number) => {
+    if (!restaurantId) return false;
+    try {
+      await initPosDatabase();
+      const cached = await loadCatalogFromOfflineDb(restaurantId);
+      if (cached && cached.items && cached.items.length > 0) {
+        set({
+          restaurantId,
+          categories: cached.categories || [],
+          items: cached.items || [],
+          tables: cached.tables || [],
+          restaurantConfig: cached.restaurantConfig || null,
+          operatingStatus: cached.operatingStatus || null,
+          orderTypes: cached.orderTypes || [],
+          hasLoaded: true,
+          lastFetchedAt: Date.now(),
+        });
+        return true;
+      }
+      return false;
+    } catch (err) {
+      console.warn('[usePosCatalogStore] Failed to hydrate catalog from IndexedDB:', err);
+      return false;
+    }
+  },
 
-  updateTables: (tables) => set({ tables }),
-  updateOperatingStatus: (operatingStatus) => set({ operatingStatus }),
-  updateRestaurantConfig: (restaurantConfig) => set({ restaurantConfig }),
+  setCatalogData: (data) => {
+    set((state) => {
+      const nextState = {
+        restaurantId: data.restaurantId,
+        categories: data.categories !== undefined ? data.categories : state.categories,
+        items: data.items !== undefined ? data.items : state.items,
+        tables: data.tables !== undefined ? data.tables : state.tables,
+        restaurantConfig: data.restaurantConfig !== undefined ? data.restaurantConfig : state.restaurantConfig,
+        operatingStatus: data.operatingStatus !== undefined ? data.operatingStatus : state.operatingStatus,
+        orderTypes: data.orderTypes !== undefined ? data.orderTypes : state.orderTypes,
+        hasLoaded: true,
+        lastFetchedAt: Date.now(),
+      };
+
+      // Asynchronously cache updated catalog in IndexedDB for offline resilience
+      saveCatalogToOfflineDb(nextState).catch(() => {});
+
+      return nextState;
+    });
+  },
+
+  updateTables: (tables) => {
+    set({ tables });
+    const currentRestId = get().restaurantId;
+    if (currentRestId) {
+      saveCatalogToOfflineDb({ restaurantId: currentRestId, tables }).catch(() => {});
+    }
+  },
+
+  updateOperatingStatus: (operatingStatus) => {
+    set({ operatingStatus });
+    const currentRestId = get().restaurantId;
+    if (currentRestId) {
+      saveCatalogToOfflineDb({ restaurantId: currentRestId, operatingStatus }).catch(() => {});
+    }
+  },
+
+  updateRestaurantConfig: (restaurantConfig) => {
+    set({ restaurantConfig });
+    const currentRestId = get().restaurantId;
+    if (currentRestId) {
+      saveCatalogToOfflineDb({ restaurantId: currentRestId, restaurantConfig }).catch(() => {});
+    }
+  },
 
   setActiveTableOrder: (tableId, order) =>
     set((state) => ({

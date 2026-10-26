@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
+import clsx from 'clsx';
 import {
   Search,
   Plus,
@@ -39,9 +40,12 @@ import {
   Truck,
   CheckCircle2,
   Smartphone,
+  RefreshCw,
+  WifiOff,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
+import { FeatureGate } from '@/components/subscription/FeatureGate';
 import { DishImage } from '@/components/common/DishImage';
 import dynamic from 'next/dynamic';
 import type { CustomizationResult } from '@/components/pos/DishCustomizationModal';
@@ -79,6 +83,10 @@ const WebPrinterModal = dynamic(
   () => import('@/components/pos/WebPrinterModal').then((mod) => mod.WebPrinterModal),
   { ssr: false }
 );
+const OfflineShiftRegisterModal = dynamic(
+  () => import('@/components/pos/OfflineShiftRegisterModal').then((mod) => mod.OfflineShiftRegisterModal),
+  { ssr: false }
+);
 const WalletRechargeModal = dynamic(
   () => import('@/components/common/WalletRechargeModal').then((mod) => mod.WalletRechargeModal),
   { ssr: false }
@@ -103,6 +111,13 @@ import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataS
 import { OrderRepositoryImpl } from '@shared/data/repositories/OrderRepositoryImpl';
 import { TableRemoteDataSource } from '@shared/data/datasources/TableRemoteDataSource';
 import { RestaurantConfigRemoteDataSource } from '@shared/data/datasources/RestaurantConfigRemoteDataSource';
+import {
+  initPosDatabase,
+  getNextOfflineInvoiceNumber,
+  enqueueOfflineOrder,
+} from '@/lib/offline/webPosDatabase';
+import { useWebNetworkStore, setupWebNetworkListeners } from '@/lib/offline/useWebNetworkStore';
+import { startWebOfflineSyncWorker, syncPendingOfflineOrders } from '@/services/webOfflineSyncWorker';
 import { MenuItem } from '@shared/domain/models/Item';
 import { Category } from '@shared/domain/models/Category';
 import { TableMaster } from '@shared/domain/models/Table';
@@ -168,6 +183,10 @@ export default function PosPage() {
   const fetchSubscriptionStatus = useSubscriptionStore((s) => s.fetchSubscriptionStatus);
   const stations = useKitchenStationStore((s) => s.stations);
   const fetchStations = useKitchenStationStore((s) => s.fetchStations);
+  const isOnline = useWebNetworkStore((s) => s.isOnline);
+  const pendingOfflineCount = useWebNetworkStore((s) => s.pendingOfflineCount);
+  const isSyncing = useWebNetworkStore((s) => s.isSyncing);
+  const [offlineRegisterOpen, setOfflineRegisterOpen] = useState(false);
 
   const currentRestId =
     activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
@@ -377,6 +396,16 @@ export default function PosPage() {
     if (!currentRestId) return;
     let isMounted = true;
 
+    // Initialize offline IndexedDB & network listeners
+    initPosDatabase().then(() => {
+      useWebNetworkStore.getState().refreshPendingCount(currentRestId);
+    }).catch(() => {});
+    const cleanupNetworkListeners = setupWebNetworkListeners(() => {
+      useWebNetworkStore.getState().refreshPendingCount(currentRestId);
+      syncPendingOfflineOrders(currentRestId).catch(() => {});
+    });
+    const stopWorker = startWebOfflineSyncWorker(() => currentRestId);
+
     const loadAll = async () => {
       const s = usePosCatalogStore.getState();
       const isAlreadyCached = Boolean(
@@ -387,7 +416,19 @@ export default function PosPage() {
 
       try {
         if (!isAlreadyCached) {
-          setLoading(true);
+          const didHydrate = await usePosCatalogStore.getState().hydrateFromOfflineDb(currentRestId);
+          if (didHydrate && isMounted) {
+            const h = usePosCatalogStore.getState();
+            if (h.categories.length > 0) setCategories(h.categories);
+            if (h.items.length > 0) setItems(h.items);
+            if (h.tables.length > 0) setTables(h.tables);
+            if (h.restaurantConfig) setRestaurantConfig(h.restaurantConfig);
+            if (h.operatingStatus) setOperatingStatus(h.operatingStatus);
+            if (h.orderTypes.length > 0) setOrderTypes(h.orderTypes);
+            setLoading(false);
+          } else {
+            setLoading(true);
+          }
         }
         const [catsRes, itemsRes, tablesRes, cfgRes, opRes] = await Promise.allSettled([
           catalogDataSource.getCategories(currentRestId),
@@ -512,6 +553,8 @@ export default function PosPage() {
       unsubTable();
       unsubReconnect();
       unsubWalletEvents();
+      cleanupNetworkListeners();
+      stopWorker();
     };
   }, [currentRestId]);
 
@@ -913,6 +956,181 @@ export default function PosPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [cart, activeTableOrder, payableGrandTotal]);
 
+  // 9.5 Offline Checkout Execution Engine
+  const processOfflineCheckout = async (
+    mode: (typeof PosCheckoutModes)[keyof typeof PosCheckoutModes],
+    cleanPhone: string,
+    effectiveCustomerName: string
+  ) => {
+    if (!currentRestId) return;
+    const isPostPaid = mode === PosCheckoutModes.KOT_PAY_LATER;
+    const orderTendered =
+      !isPostPaid && selectedPaymentMode === 'CASH' && posNumericTendered > 0 ? posNumericTendered : undefined;
+    const orderChange =
+      !isPostPaid && selectedPaymentMode === 'CASH' && posChangeToReturn > 0 ? posChangeToReturn : undefined;
+
+    // 1. Generate local atomic sequential invoice number and idempotency key
+    const { orderNumber, offlineReferenceId } = await getNextOfflineInvoiceNumber(currentRestId);
+
+    const itemsPayload = cart.map((item) => ({
+      itemId: item.itemId,
+      itemName: item.itemName,
+      quantity: item.quantity,
+      unitId: 1,
+      amount: item.price,
+      totalAmount: item.price * item.quantity,
+      cookingInstruction: item.notes,
+    }));
+
+    const effectivePaymentMode = selectedPaymentMode;
+
+    // 2. Build full backend-compatible PlaceOrderModel payload
+    const orderPayload: any = {
+      restaurantId: currentRestId,
+      name: effectiveCustomerName,
+      mobileNumber: cleanPhone || undefined,
+      tableId: selectedTable?.id,
+      tableNumber: selectedTable?.tableNumber,
+      sectionName: selectedTable?.sectionName,
+      orderTypeId: selectedTable ? 1 : selectedOrderType,
+      orderStatus: 'Confirmed',
+      paymentStatus: isPostPaid ? 'Pending' : 'Paid',
+      billingMode: isPostPaid ? BillingModes.POST_PAID : BillingModes.PRE_PAID,
+      paymentMode: isPostPaid ? undefined : effectivePaymentMode,
+      tenderedAmount: orderTendered,
+      changeAmount: orderChange,
+      source: selectedTable ? `Table ${selectedTable.tableNumber}` : PosOrderSources.POS_ADMIN,
+      cgst: cgstAmount,
+      sgst: sgstAmount,
+      totalAmount: grandTotal,
+      items: itemsPayload,
+      offlineReferenceId,
+      originalCreatedAtUtc: new Date().toISOString(),
+      isOfflineSync: true,
+    };
+
+    const selectedTypeObj = orderTypes.find((t) => t.id === selectedOrderType);
+    const effectiveOrderType = selectedTable
+      ? 'Dine-in'
+      : selectedTypeObj?.typeName || 'Counter';
+
+    // 3. Assemble standard ReceiptData for immediate thermal printing & reprint
+    const receiptData: ReceiptData = {
+      orderId: 0,
+      orderNumber,
+      pickupToken: orderNumber,
+      restaurantName: restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant',
+      logoUrl: restaurantConfig?.logoUrl || activeRestaurant?.logoUrl || undefined,
+      address: restaurantConfig?.address || activeRestaurant?.address || '',
+      city: restaurantConfig?.city || activeRestaurant?.city || '',
+      state: restaurantConfig?.state || activeRestaurant?.state || '',
+      contactPhone: restaurantConfig?.contactNumber || (activeRestaurant as any)?.contactNumber || activeRestaurant?.ownerMobile || '',
+      gstNumber: hasGstNumber ? (restaurantConfig?.gstNumber || '') : undefined,
+      customerName: effectiveCustomerName,
+      customerPhone: cleanPhone || undefined,
+      orderType: effectiveOrderType,
+      tableName: selectedTable ? `Table ${selectedTable.tableNumber}` : undefined,
+      sectionName: selectedTable?.sectionName || undefined,
+      items: cart.map((c) => ({
+        itemName: c.itemName,
+        quantity: c.quantity,
+        unitPrice: c.price,
+        totalPrice: c.price * c.quantity,
+        cookingInstruction: c.notes,
+        stationName: c.stationName,
+        stationCode: c.stationCode,
+      })),
+      subtotal,
+      discountAmount,
+      cgstPercentage: hasGstNumber ? cgstRate : undefined,
+      cgstAmount: hasGstNumber ? cgstAmount : undefined,
+      sgstPercentage: hasGstNumber ? sgstRate : undefined,
+      sgstAmount: hasGstNumber ? sgstAmount : undefined,
+      taxAmount: totalTaxAmount,
+      grandTotal,
+      paymentMode: isPostPaid ? 'KOT (Pay Later)' : effectivePaymentMode,
+      tenderedAmount: orderTendered,
+      changeAmount: orderChange,
+      date: new Date().toLocaleString('en-IN'),
+      upiId: (restaurantConfig?.bankerUpiId || (restaurantConfig as any)?.upiId || (activeRestaurant as any)?.bankerUpiId || '').trim(),
+      upiPayeeName: restaurantConfig?.bankerAccountHolderName || restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant',
+      showUpiQr: restaurantConfig?.printUpiQrOnReceipts !== false && (activeRestaurant as any)?.printUpiQrOnReceipts !== false,
+      footerMessage: customFooter || 'Thank you! Please visit again. [OFFLINE BILL]',
+    };
+
+    // 4. Enqueue into IndexedDB (Outbox + 24hr Shift Register)
+    await enqueueOfflineOrder({
+      restaurantId: currentRestId,
+      orderNumber,
+      offlineReferenceId,
+      orderPayload,
+      receiptPayload: receiptData,
+      customerName: effectiveCustomerName,
+      tableNumber: selectedTable?.tableNumber,
+      totalAmount: grandTotal,
+      paymentMode: isPostPaid ? 'KOT' : effectivePaymentMode,
+      paymentStatus: isPostPaid ? 'Pending' : 'Paid',
+      billingMode: isPostPaid ? 'POST_PAID' : 'PRE_PAID',
+    });
+
+    // 5. Update Web Network Store pending count
+    await useWebNetworkStore.getState().refreshPendingCount(currentRestId);
+
+    // 6. Automatic Thermal Printing
+    if (!isPostPaid) {
+      if (autoPrintReceipt && autoPrintKot) {
+        WebPrinterService.printBifurcatedOrder(receiptData, paperWidth, true, true).catch(() => {});
+      } else if (autoPrintReceipt) {
+        WebPrinterService.printReceipt(receiptData, paperWidth).catch(() => {});
+      } else if (autoPrintKot) {
+        WebPrinterService.printStationKots(receiptData, paperWidth).catch(() => {});
+      }
+    } else {
+      if (autoPrintKot || isPostPaid) {
+        WebPrinterService.printStationKots(receiptData, paperWidth).catch(() => {});
+      }
+    }
+
+    // 7. Update UI State & Cart
+    if (isPostPaid) {
+      clearCart();
+      showAlert(
+        'Offline KOT Sent to Kitchen 🍳',
+        `Offline Order ${orderNumber} placed for ${effectiveCustomerName}.\nStatus: Recorded locally in queue. Will sync automatically once online.`,
+        'success'
+      );
+    } else {
+      setOrderSuccessData({
+        orderId: 0,
+        orderType: effectiveOrderType,
+        table: selectedTable?.tableNumber,
+        customerName: effectiveCustomerName,
+        customerPhone: cleanPhone,
+        items: cart,
+        subtotal,
+        totalTax: totalTaxAmount,
+        grandTotal,
+        paymentMode: effectivePaymentMode,
+        tendered: orderTendered,
+        change: orderChange,
+        date: new Date().toLocaleTimeString(),
+        receiptData,
+      });
+
+      if (selectedTable?.id) {
+        usePosCatalogStore.getState().freeTableInCatalog(selectedTable.id);
+        setTables((prev) =>
+          prev.map((t) => (t.id === selectedTable.id ? { ...t, status: 'Available', activeOrderId: undefined } : t))
+        );
+        setSelectedTable(null);
+        setActiveTableOrder(null);
+      }
+
+      clearCart();
+      setCartDrawerOpen(false);
+    }
+  };
+
   // 10. Order Placement & Checkout Execution
   const handleCheckout = async (mode: (typeof PosCheckoutModes)[keyof typeof PosCheckoutModes]) => {
     if (cart.length === 0 && !activeTableOrder) {
@@ -999,6 +1217,13 @@ export default function PosPage() {
         setIsKotLoading(true);
       } else {
         setIsSettling(true);
+      }
+
+      // Check offline mode
+      const isCurrentlyOnline = typeof navigator !== 'undefined' ? navigator.onLine : useWebNetworkStore.getState().isOnline;
+      if (!isCurrentlyOnline) {
+        await processOfflineCheckout(mode, cleanPhone, effectiveCustomerName);
+        return;
       }
 
       // Check if settling existing table order directly with no new cart items
@@ -1280,7 +1505,25 @@ export default function PosPage() {
         }
       }
     } catch (err: any) {
-      showAlert('Checkout Error', err?.message || 'Failed to process order. Please try again.', 'danger');
+      const isNetError =
+        (typeof navigator !== 'undefined' && !navigator.onLine) ||
+        err?.code === 'ERR_NETWORK' ||
+        err?.code === 'ECONNABORTED' ||
+        err?.message?.toLowerCase().includes('network') ||
+        err?.message?.toLowerCase().includes('timeout') ||
+        err?.message?.toLowerCase().includes('failed to fetch');
+
+      if (isNetError) {
+        try {
+          useWebNetworkStore.getState().setOnline(false);
+          await processOfflineCheckout(mode, cleanPhone, effectiveCustomerName);
+          return;
+        } catch (offlineErr: any) {
+          showAlert('Offline Billing Error', offlineErr?.message || 'Failed to record offline order.', 'danger');
+        }
+      } else {
+        showAlert('Checkout Error', err?.message || 'Failed to process order. Please try again.', 'danger');
+      }
     } finally {
       setIsKotLoading(false);
       setIsSettling(false);
@@ -1945,6 +2188,7 @@ export default function PosPage() {
   return (
     <AuthGuard>
       <AppShell>
+        <FeatureGate feature="posBilling" title="POS Billing Terminal" planSuggestion="Starter or Dine-In Pro">
         <div className="flex flex-1 h-full min-h-0 flex-col overflow-hidden bg-[#FAF7F2] dark:bg-[#111418]">
           {/* ======================================================== */}
           {/* 1. WARNING BANNERS (GRACE, EXHAUSTED WALLET, INACTIVE)   */}
@@ -1983,6 +2227,68 @@ export default function PosPage() {
                 >
                   Recharge
                 </button>
+              </div>
+            )}
+
+            {/* Offline Mode & Sync Status Capsule */}
+            {(!isOnline || pendingOfflineCount > 0) && (
+              <div className="flex items-center justify-between rounded-2xl border border-amber-500/40 bg-gradient-to-r from-amber-500/10 via-[#DE8626]/10 to-amber-500/5 px-3.5 py-2 text-xs shadow-xs transition-all">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span
+                    className={clsx(
+                      'h-2.5 w-2.5 rounded-full shrink-0',
+                      !isOnline ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'
+                    )}
+                  />
+                  <div className="min-w-0">
+                    <p className="font-extrabold text-amber-900 dark:text-amber-200 truncate flex items-center gap-1.5">
+                      {!isOnline ? 'OFFLINE BILLING MODE ACTIVE' : 'CLOUD CONNECTED'}
+                      {pendingOfflineCount > 0 && (
+                        <span className="rounded-full bg-[#DE8626] px-2 py-0.5 text-[10px] font-bold text-white shadow-xs">
+                          {pendingOfflineCount} queued {pendingOfflineCount === 1 ? 'order' : 'orders'}
+                        </span>
+                      )}
+                    </p>
+                    <p className="text-[10px] text-amber-800/80 dark:text-amber-300/80 truncate">
+                      {!isOnline
+                        ? 'Internet disconnected. Bills & KOTs print locally. Orders will sync automatically once reconnected.'
+                        : `Ready to sync ${pendingOfflineCount} offline order(s) to cloud.`}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => setOfflineRegisterOpen(true)}
+                    className="flex items-center gap-1 rounded-xl bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 px-2.5 py-1 text-xs font-bold text-amber-900 dark:text-amber-200 transition-colors cursor-pointer"
+                  >
+                    Shift Register 📋
+                  </button>
+
+                  {pendingOfflineCount > 0 && isOnline && (
+                    <button
+                      onClick={() => {
+                        if (currentRestId) {
+                          syncPendingOfflineOrders(currentRestId).catch(() => {});
+                        }
+                      }}
+                      disabled={isSyncing}
+                      className="flex items-center gap-1 rounded-xl bg-gradient-to-r from-[#DE8626] to-amber-600 px-3 py-1 text-xs font-bold text-white hover:opacity-90 disabled:opacity-50 transition-all shadow-xs cursor-pointer"
+                    >
+                      {isSyncing ? (
+                        <>
+                          <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                          Syncing...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="h-3.5 w-3.5" />
+                          Sync Now
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
               </div>
             )}
 
@@ -2803,6 +3109,13 @@ export default function PosPage() {
             onStatusUpdated={(updated) => setOperatingStatus(updated)}
           />
 
+          {/* Offline Shift Register Modal */}
+          <OfflineShiftRegisterModal
+            isOpen={offlineRegisterOpen}
+            onClose={() => setOfflineRegisterOpen(false)}
+            restaurantId={currentRestId}
+          />
+
           {/* Wallet Recharge Modal */}
           <WalletRechargeModal
             isOpen={walletModalOpen}
@@ -2849,6 +3162,7 @@ export default function PosPage() {
             onClose={() => setAlertConfig((prev) => ({ ...prev, visible: false }))}
           />
         </div>
+        </FeatureGate>
       </AppShell>
     </AuthGuard>
   );

@@ -38,6 +38,7 @@ import {
   Minimize2,
   Wifi,
   BellRing,
+  Lock,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 
@@ -93,7 +94,7 @@ interface AppShellProps {
 export const AppShell: React.FC<AppShellProps> = ({ children }) => {
   const pathname = usePathname();
   const router = useRouter();
-  const { user, activeRestaurant, restaurants, setActiveRestaurant, logout } = useAuthStore();
+  const { user, activeRestaurant, restaurants, setActiveRestaurant, logout, lockToPinScreen, activeStaffName } = useAuthStore();
   const { theme, toggleTheme, isDark } = useWebTheme();
   const {
     subscription,
@@ -1027,6 +1028,19 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
               {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
             </button>
 
+            {/* Quick Staff Lock Terminal Button */}
+            {!isSuperAdmin && !isSalesPerson && (
+              <button
+                type="button"
+                onClick={lockToPinScreen}
+                title="Lock Terminal • Fast Multi-Staff PIN Switch"
+                className="flex items-center gap-1.5 h-8 sm:h-9 px-2.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#78716C] hover:border-[#DE8626] hover:text-[#DE8626] transition-colors shadow-xs"
+              >
+                <Lock className="h-3.5 w-3.5 text-[#DE8626]" />
+                <span className="hidden sm:inline text-xs font-bold">Lock</span>
+              </button>
+            )}
+
             {/* Quick POS Terminal Button (when not on POS page) */}
             {!isSuperAdmin && !isSalesPerson && pathname !== '/pos' && (
               <button
@@ -1060,6 +1074,19 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                       {roleName}
                     </p>
                   </div>
+                  {!isSuperAdmin && !isSalesPerson && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setProfileMenuOpen(false);
+                        lockToPinScreen();
+                      }}
+                      className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-amber-500/10 hover:text-[#DE8626] transition-colors"
+                    >
+                      <Lock className="h-3.5 w-3.5 text-[#DE8626]" />
+                      <span>Lock Terminal (PIN)</span>
+                    </button>
+                  )}
                   {!isSuperAdmin && !isSalesPerson && currentRestId > 0 && (
                     <button
                       type="button"

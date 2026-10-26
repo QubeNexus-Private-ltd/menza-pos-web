@@ -175,7 +175,7 @@ export default function RestaurantConfigPage() {
         setGstNumber(c.gstNumber || '');
         setCgstRate(String(c.cgstPercentage ?? 2.5));
         setSgstRate(String(c.sgstPercentage ?? 2.5));
-        setDineInPaymentMode((c.dineInPaymentMode as any) || 'PREPAID');
+        setDineInPaymentMode(((c as any).dineInPaymentMode) || 'PREPAID');
       }
       if (op.status === 'fulfilled' && op.value) {
         setIsOpen(op.value.isOpen);

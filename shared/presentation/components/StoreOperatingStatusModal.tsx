@@ -40,6 +40,8 @@ import {
   Trash2,
   Power,
   Utensils,
+  Lock,
+  ChevronRight,
 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Colors } from '../../core/theme/colors';
@@ -49,6 +51,8 @@ import { RestaurantConfigRemoteDataSource } from '../../data/datasources/Restaur
 import { StoreOperatingStatus, RestaurantOperatingHistoryEntry } from '../../domain/models/RestaurantConfig';
 import { useKitchenStationStore } from '../state/useKitchenStationStore';
 import { useAuthStore } from '../state/useAuthStore';
+import { useSubscriptionStore, isTableOrderSubscriptionAllowed, extractTableOrderFlag } from '../state/useSubscriptionStore';
+import { apiCacheManager } from '../../core/network/apiClient';
 import { canConfigureKitchenStations } from '../../core/auth/rolePermissions';
 
 const configDataSource = new RestaurantConfigRemoteDataSource();
@@ -63,6 +67,7 @@ interface StoreOperatingStatusModalProps {
   initialStatus?: StoreOperatingStatus | null;
   isTableOrderingAllowed?: boolean;
   onEditHours?: () => void;
+  onUpgradePlan?: () => void;
   onStatusUpdated?: (status: StoreOperatingStatus) => void;
   onProfileUpdated?: (profile: 'QSR_CAFE' | 'DINE_IN' | 'HYBRID') => void;
 }
@@ -74,26 +79,63 @@ export const StoreOperatingStatusModal: React.FC<StoreOperatingStatusModalProps>
   restaurantName,
   isOwnerOrAdmin = false,
   initialStatus,
-  isTableOrderingAllowed = true,
+  isTableOrderingAllowed,
   onEditHours,
+  onUpgradePlan,
   onStatusUpdated,
   onProfileUpdated,
 }) => {
   const [loading, setLoading] = useState<boolean>(!initialStatus);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [status, setStatus] = useState<StoreOperatingStatus | null>(initialStatus || null);
-  const [selectedProfile, setSelectedProfile] = useState<'QSR_CAFE' | 'DINE_IN' | 'HYBRID'>(
-    isTableOrderingAllowed ? 'HYBRID' : 'QSR_CAFE'
+
+  // Auth role checking: Owner, Cashier, Manager can configure stations
+  const { user, activeRestaurant } = useAuthStore();
+  const canManageStations = canConfigureKitchenStations(user, activeRestaurant) || isOwnerOrAdmin;
+  const isSuperAdmin = Boolean(
+    user?.roles?.some((r) =>
+      ['SUPERADMIN', 'SUPER_ADMIN', 'SUPERADMINONLY'].includes(r.toUpperCase().replace(/[^A-Z]/g, ''))
+    ) || ((user as any)?.roleName && String((user as any).roleName).toLowerCase().includes('superadmin'))
   );
+
+  // Subscription check: verify if isTableOrder / istableorder is true
+  const { subscription: storeSub, plans, fetchSubscriptionStatus } = useSubscriptionStore();
+  const isTableOrderAllowed = React.useMemo(() => {
+    if (isSuperAdmin) return true;
+
+    // 1. Parent passed flag (from AdminDashboard or OrderPosScreen)
+    if (typeof isTableOrderingAllowed === 'boolean') {
+      return isTableOrderingAllowed;
+    }
+
+    // 2. Active Subscription check
+    if (storeSub) {
+      return isTableOrderSubscriptionAllowed(storeSub, plans);
+    }
+
+    // 3. Fallback check activeRestaurant in authStore
+    if (activeRestaurant) {
+      const restFlag = extractTableOrderFlag(activeRestaurant);
+      if (restFlag !== undefined) return restFlag;
+    }
+
+    return false;
+  }, [isSuperAdmin, storeSub, plans, isTableOrderingAllowed, activeRestaurant]);
+
+  const [selectedProfile, setSelectedProfile] = useState<'QSR_CAFE' | 'DINE_IN' | 'HYBRID'>(
+    (isTableOrderAllowed && initialStatus?.businessProfile) || (initialStatus?.businessProfile === 'QSR_CAFE' ? 'QSR_CAFE' : (isTableOrderAllowed ? 'HYBRID' : 'QSR_CAFE'))
+  );
+
+  useEffect(() => {
+    if (!isTableOrderAllowed && selectedProfile !== 'QSR_CAFE') {
+      setSelectedProfile('QSR_CAFE');
+    }
+  }, [isTableOrderAllowed, selectedProfile]);
   const [profileLoading, setProfileLoading] = useState<boolean>(false);
   const [stationActionLoading, setStationActionLoading] = useState<string | null>(null);
   const [history, setHistory] = useState<RestaurantOperatingHistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState<boolean>(false);
   const [showHistory, setShowHistory] = useState<boolean>(false);
-
-  // Auth role checking: Owner, Cashier, Manager can configure stations
-  const { user, activeRestaurant } = useAuthStore();
-  const canManageStations = canConfigureKitchenStations(user, activeRestaurant) || isOwnerOrAdmin;
 
   const {
     stations,
@@ -256,12 +298,35 @@ export const StoreOperatingStatusModal: React.FC<StoreOperatingStatusModalProps>
     }
   }, [restaurantId]);
 
+  const fetchStatus = useCallback(async (isSilent = false, forceRefresh = false) => {
+    if (!restaurantId || restaurantId <= 0) return;
+    try {
+      if (!isSilent) setLoading(true);
+      const res = await configDataSource.getOperatingStatus(restaurantId, forceRefresh);
+      if (res) {
+        setStatus(res);
+        if (res.businessProfile) {
+          setSelectedProfile(res.businessProfile as any);
+        }
+        onStatusUpdatedRef.current?.(res);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
+  }, [restaurantId]);
+
   useEffect(() => {
     if (visible && restaurantId > 0) {
+      apiCacheManager.invalidate('/Subscription');
+      apiCacheManager.invalidate('/RestaurantConfig');
       fetchStations(restaurantId);
       fetchHistory();
+      fetchSubscriptionStatus(restaurantId, true);
+      fetchStatus(Boolean(status || initialStatus), true);
     }
-  }, [visible, restaurantId, fetchStations, fetchHistory]);
+  }, [visible, restaurantId, fetchStations, fetchHistory, fetchSubscriptionStatus, fetchStatus]);
 
   const handleToggleStationActive = async (st: any) => {
     try {
@@ -305,11 +370,17 @@ export const StoreOperatingStatusModal: React.FC<StoreOperatingStatusModalProps>
 
   useEffect(() => {
     if (status?.businessProfile) {
-      setSelectedProfile(status.businessProfile as any);
+      if (isTableOrderAllowed || status.businessProfile === 'QSR_CAFE') {
+        setSelectedProfile(status.businessProfile as any);
+      } else {
+        setSelectedProfile('QSR_CAFE');
+      }
+    } else if (isTableOrderAllowed) {
+      setSelectedProfile('HYBRID');
     } else {
-      setSelectedProfile(isTableOrderingAllowed ? 'HYBRID' : 'QSR_CAFE');
+      setSelectedProfile('QSR_CAFE');
     }
-  }, [status?.businessProfile, isTableOrderingAllowed]);
+  }, [status?.businessProfile, isTableOrderAllowed]);
 
   const onStatusUpdatedRef = React.useRef(onStatusUpdated);
   useEffect(() => {
@@ -320,36 +391,15 @@ export const StoreOperatingStatusModal: React.FC<StoreOperatingStatusModalProps>
     if (initialStatus) {
       setStatus(initialStatus);
       if (initialStatus.businessProfile) {
-        setSelectedProfile(initialStatus.businessProfile as any);
-      }
-      setLoading(false);
-    }
-  }, [initialStatus]);
-
-  const fetchStatus = useCallback(async (isSilent = false) => {
-    if (!restaurantId || restaurantId <= 0) return;
-    try {
-      if (!isSilent) setLoading(true);
-      const res = await configDataSource.getOperatingStatus(restaurantId);
-      if (res) {
-        setStatus(res);
-        if (res.businessProfile) {
-          setSelectedProfile(res.businessProfile as any);
+        if (isTableOrderAllowed || initialStatus.businessProfile === 'QSR_CAFE') {
+          setSelectedProfile(initialStatus.businessProfile as any);
+        } else {
+          setSelectedProfile('QSR_CAFE');
         }
-        onStatusUpdatedRef.current?.(res);
       }
-    } catch {
-      // ignore
-    } finally {
       setLoading(false);
     }
-  }, [restaurantId]);
-
-  useEffect(() => {
-    if (visible && restaurantId > 0) {
-      fetchStatus(Boolean(status || initialStatus));
-    }
-  }, [visible, restaurantId]);
+  }, [initialStatus, isTableOrderAllowed]);
 
   const handleToggle = async (
     options: {
@@ -407,8 +457,36 @@ export const StoreOperatingStatusModal: React.FC<StoreOperatingStatusModalProps>
     );
   };
 
+  const handleLockedProfilePress = (profileName: string) => {
+    Alert.alert(
+      `${profileName} Mode Locked 🔒`,
+      `${profileName} mode requires Table Ordering (isTableOrder) in your active subscription plan.\n\nUpgrade your plan to unlock interactive QR tables, running tabs, and live floor management.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        ...(onUpgradePlan
+          ? [
+              {
+                text: 'View Upgrade Plans',
+                style: 'default' as const,
+                onPress: () => {
+                  onClose();
+                  setTimeout(() => {
+                    onUpgradePlan?.();
+                  }, 250);
+                },
+              },
+            ]
+          : [{ text: 'OK', style: 'default' as const }]),
+      ]
+    );
+  };
+
   const handleProfileChange = async (profile: 'QSR_CAFE' | 'DINE_IN' | 'HYBRID') => {
     if (!restaurantId || restaurantId <= 0) return;
+    if ((profile === 'DINE_IN' || profile === 'HYBRID') && !isTableOrderAllowed) {
+      handleLockedProfilePress(profile === 'DINE_IN' ? 'Dine-In Restaurant' : 'Hybrid Store');
+      return;
+    }
     try {
       setProfileLoading(true);
       setSelectedProfile(profile);
@@ -702,60 +780,170 @@ export const StoreOperatingStatusModal: React.FC<StoreOperatingStatusModalProps>
                     <TouchableOpacity
                       style={[
                         styles.profileOptionCard,
-                        selectedProfile === 'DINE_IN' && styles.profileOptionCardActive,
+                        selectedProfile === 'DINE_IN' && isTableOrderAllowed && styles.profileOptionCardActive,
+                        !isTableOrderAllowed && styles.profileOptionCardLocked,
                       ]}
-                      onPress={() => handleProfileChange('DINE_IN')}
+                      onPress={() => {
+                        if (!isTableOrderAllowed) {
+                          handleLockedProfilePress('Dine-In Restaurant');
+                          return;
+                        }
+                        handleProfileChange('DINE_IN');
+                      }}
                       disabled={profileLoading}
                       activeOpacity={0.8}
                     >
                       <View style={styles.profileOptionHeader}>
-                        <View style={[styles.profileIconBox, selectedProfile === 'DINE_IN' && styles.profileIconBoxActive]}>
-                          <UtensilsCrossed size={16} color={selectedProfile === 'DINE_IN' ? '#DE8626' : '#78716C'} />
+                        <View
+                          style={[
+                            styles.profileIconBox,
+                            selectedProfile === 'DINE_IN' && isTableOrderAllowed && styles.profileIconBoxActive,
+                            !isTableOrderAllowed && styles.profileIconBoxLocked,
+                          ]}
+                        >
+                          <UtensilsCrossed
+                            size={16}
+                            color={
+                              !isTableOrderAllowed
+                                ? '#A89F91'
+                                : selectedProfile === 'DINE_IN'
+                                ? '#DE8626'
+                                : '#78716C'
+                            }
+                          />
+                          {!isTableOrderAllowed && (
+                            <View style={styles.profileIconLockBadge}>
+                              <Lock size={8} color="#FFFFFF" />
+                            </View>
+                          )}
                         </View>
                         <View style={{ flex: 1 }}>
                           <View style={styles.profileTitleRow}>
-                            <Text style={[styles.profileTitle, selectedProfile === 'DINE_IN' && styles.profileTitleActive]}>
+                            <Text
+                              style={[
+                                styles.profileTitle,
+                                selectedProfile === 'DINE_IN' && isTableOrderAllowed && styles.profileTitleActive,
+                                !isTableOrderAllowed && styles.profileTitleLocked,
+                              ]}
+                            >
                               Dine-In Restaurant
                             </Text>
-                            <View style={[styles.profileBadge, { backgroundColor: '#EFF6FF', borderColor: '#BFDBFE' }]}>
-                              <Text style={[styles.profileBadgeText, { color: '#1D4ED8' }]}>🪑 TABLE DINE-IN</Text>
-                            </View>
+                            {isTableOrderAllowed ? (
+                              <View style={[styles.profileBadge, { backgroundColor: '#EFF6FF', borderColor: '#BFDBFE' }]}>
+                                <Text style={[styles.profileBadgeText, { color: '#1D4ED8' }]}>🪑 TABLE DINE-IN</Text>
+                              </View>
+                            ) : (
+                              <View style={styles.profileBadgeLocked}>
+                                <Lock size={9} color="#B45309" />
+                                <Text style={styles.profileBadgeTextLocked}>PRO FEATURE</Text>
+                              </View>
+                            )}
                           </View>
-                          <Text style={styles.profileDesc}>
+                          <Text style={[styles.profileDesc, !isTableOrderAllowed && styles.profileDescLocked]}>
                             QR code per table, interactive floor map, running table tabs, and waiter service.
                           </Text>
                         </View>
                       </View>
+
+                      {!isTableOrderAllowed && (
+                        <View style={styles.profileLockedFooter}>
+                          <View style={styles.profileLockedFooterLeft}>
+                            <Lock size={11} color="#B45309" />
+                            <Text style={styles.profileLockedFooterText}>
+                              Requires <Text style={styles.profileLockedFooterHighlight}>isTableOrder</Text> plan
+                            </Text>
+                          </View>
+                          <View style={styles.profileUnlockBtn}>
+                            <Text style={styles.profileUnlockBtnText}>Unlock</Text>
+                            <ChevronRight size={11} color="#DE8626" />
+                          </View>
+                        </View>
+                      )}
                     </TouchableOpacity>
 
                     {/* Option 3: Hybrid */}
                     <TouchableOpacity
                       style={[
                         styles.profileOptionCard,
-                        selectedProfile === 'HYBRID' && styles.profileOptionCardActive,
+                        selectedProfile === 'HYBRID' && isTableOrderAllowed && styles.profileOptionCardActive,
+                        !isTableOrderAllowed && styles.profileOptionCardLocked,
                       ]}
-                      onPress={() => handleProfileChange('HYBRID')}
+                      onPress={() => {
+                        if (!isTableOrderAllowed) {
+                          handleLockedProfilePress('Hybrid Store');
+                          return;
+                        }
+                        handleProfileChange('HYBRID');
+                      }}
                       disabled={profileLoading}
                       activeOpacity={0.8}
                     >
                       <View style={styles.profileOptionHeader}>
-                        <View style={[styles.profileIconBox, selectedProfile === 'HYBRID' && styles.profileIconBoxActive]}>
-                          <Layers size={16} color={selectedProfile === 'HYBRID' ? '#DE8626' : '#78716C'} />
+                        <View
+                          style={[
+                            styles.profileIconBox,
+                            selectedProfile === 'HYBRID' && isTableOrderAllowed && styles.profileIconBoxActive,
+                            !isTableOrderAllowed && styles.profileIconBoxLocked,
+                          ]}
+                        >
+                          <Layers
+                            size={16}
+                            color={
+                              !isTableOrderAllowed
+                                ? '#A89F91'
+                                : selectedProfile === 'HYBRID'
+                                ? '#DE8626'
+                                : '#78716C'
+                            }
+                          />
+                          {!isTableOrderAllowed && (
+                            <View style={styles.profileIconLockBadge}>
+                              <Lock size={8} color="#FFFFFF" />
+                            </View>
+                          )}
                         </View>
                         <View style={{ flex: 1 }}>
                           <View style={styles.profileTitleRow}>
-                            <Text style={[styles.profileTitle, selectedProfile === 'HYBRID' && styles.profileTitleActive]}>
+                            <Text
+                              style={[
+                                styles.profileTitle,
+                                selectedProfile === 'HYBRID' && isTableOrderAllowed && styles.profileTitleActive,
+                                !isTableOrderAllowed && styles.profileTitleLocked,
+                              ]}
+                            >
                               Hybrid Store
                             </Text>
-                            <View style={[styles.profileBadge, { backgroundColor: '#F0FDF4', borderColor: '#BBF7D0' }]}>
-                              <Text style={[styles.profileBadgeText, { color: '#15803D' }]}>🪑 TABLES + 🎟️ TOKEN</Text>
-                            </View>
+                            {isTableOrderAllowed ? (
+                              <View style={[styles.profileBadge, { backgroundColor: '#F0FDF4', borderColor: '#BBF7D0' }]}>
+                                <Text style={[styles.profileBadgeText, { color: '#15803D' }]}>🪑 TABLES + 🎟️ TOKEN</Text>
+                              </View>
+                            ) : (
+                              <View style={styles.profileBadgeLocked}>
+                                <Lock size={9} color="#B45309" />
+                                <Text style={styles.profileBadgeTextLocked}>PRO FEATURE</Text>
+                              </View>
+                            )}
                           </View>
-                          <Text style={styles.profileDesc}>
+                          <Text style={[styles.profileDesc, !isTableOrderAllowed && styles.profileDescLocked]}>
                             Both table seating with running tabs and quick counter takeaway token ordering.
                           </Text>
                         </View>
                       </View>
+
+                      {!isTableOrderAllowed && (
+                        <View style={styles.profileLockedFooter}>
+                          <View style={styles.profileLockedFooterLeft}>
+                            <Lock size={11} color="#B45309" />
+                            <Text style={styles.profileLockedFooterText}>
+                              Requires <Text style={styles.profileLockedFooterHighlight}>isTableOrder</Text> plan
+                            </Text>
+                          </View>
+                          <View style={styles.profileUnlockBtn}>
+                            <Text style={styles.profileUnlockBtnText}>Unlock</Text>
+                            <ChevronRight size={11} color="#DE8626" />
+                          </View>
+                        </View>
+                      )}
                     </TouchableOpacity>
                   </View>
                 </View>
@@ -1924,6 +2112,93 @@ const styles = StyleSheet.create({
     fontSize: 10.5,
     color: '#78716C',
     lineHeight: 14,
+  },
+  profileOptionCardLocked: {
+    backgroundColor: '#FBF9F6',
+    borderColor: '#E8E1D7',
+    borderWidth: 1,
+    borderStyle: 'dashed',
+  },
+  profileIconBoxLocked: {
+    backgroundColor: '#EFEBE4',
+    position: 'relative',
+  },
+  profileIconLockBadge: {
+    position: 'absolute',
+    bottom: -3,
+    right: -3,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#B45309',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#FBF9F6',
+  },
+  profileTitleLocked: {
+    color: '#4B4237',
+  },
+  profileBadgeLocked: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3.5,
+    paddingHorizontal: 7,
+    paddingVertical: 2.5,
+    borderRadius: 6,
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  profileBadgeTextLocked: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#B45309',
+    letterSpacing: 0.3,
+  },
+  profileDescLocked: {
+    color: '#8C7A6B',
+  },
+  profileLockedFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 10,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#EBE4DA',
+  },
+  profileLockedFooterLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    flex: 1,
+  },
+  profileLockedFooterText: {
+    fontSize: 10.5,
+    color: '#78716C',
+    fontWeight: '600',
+  },
+  profileLockedFooterHighlight: {
+    fontWeight: '800',
+    color: '#92400E',
+  },
+  profileUnlockBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    backgroundColor: '#FFF7ED',
+    paddingHorizontal: 8,
+    paddingVertical: 3.5,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#FFEDD5',
+  },
+  profileUnlockBtnText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#DE8626',
+    letterSpacing: 0.2,
   },
 
   /* SHORTCUT */

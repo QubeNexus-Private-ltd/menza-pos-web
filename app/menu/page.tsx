@@ -118,6 +118,24 @@ function MenuCatalogContent() {
   // Alias currentRestId to effectiveRestId so all existing code works with zero regressions
   const currentRestId = effectiveRestId;
 
+  // Sync selectedRestId when active restaurant changes from the AppShell header
+  useEffect(() => {
+    if (activeRestaurant?.restaurantId && activeRestaurant.restaurantId !== selectedRestId) {
+      setSelectedRestId(activeRestaurant.restaurantId);
+    }
+  }, [activeRestaurant?.restaurantId]);
+
+  // Clean slate and show skeleton immediately on store change
+  useEffect(() => {
+    setCategories([]);
+    setItems([]);
+    setStations([]);
+    setSelectedCategory(null);
+    setCurrentPage(1);
+    setLoading(true);
+  }, [currentRestId]);
+
+
   // Sync effectiveRestId to global active rest id so apiClient includes X-Restaurant-Id header
   useEffect(() => {
     if (effectiveRestId > 0) {

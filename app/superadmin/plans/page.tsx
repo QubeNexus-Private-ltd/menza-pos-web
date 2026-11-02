@@ -25,6 +25,11 @@ import {
   CreditCard,
   ChevronRight,
   ReceiptIndianRupee as Receipt,
+  ChefHat,
+  Smartphone,
+  Laptop,
+  QrCode,
+  Store,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
@@ -48,6 +53,71 @@ interface DynamicEntitlementState {
   featureFlatFeePerOrder: string;
 }
 
+
+interface MenzaAppConfig {
+  appKey: string;
+  name: string;
+  platformBadge: string;
+  category: string;
+  desc: string;
+  iconName: 'ChefHat' | 'Smartphone' | 'Laptop' | 'UtensilsCrossed' | 'QrCode';
+  autoEnablesFeatureKey?: string;
+  autoEnablesFeatureLabel?: string;
+}
+
+const MENZA_ECOSYSTEM_APPS: MenzaAppConfig[] = [
+  {
+    appKey: 'app_captain_menza',
+    name: 'CaptainMenza App',
+    platformBadge: 'Kitchen Tablet',
+    category: 'Kitchen Display',
+    desc: 'Paperless Kitchen Display System (KDS) for chef stations, prep timers & order bumping',
+    iconName: 'ChefHat',
+    autoEnablesFeatureKey: 'IsKdsEnabled',
+    autoEnablesFeatureLabel: 'Kitchen Display System (KDS)',
+  },
+  {
+    appKey: 'app_menza_pos_terminal',
+    name: 'Menza POS Terminal App',
+    platformBadge: 'Android Hardware',
+    category: 'Counter POS',
+    desc: 'Native POS terminal hardware app (Sunmi, Elo, iMin) with physical thermal receipt printing',
+    iconName: 'Smartphone',
+    autoEnablesFeatureKey: 'IsCounterOrderingEnabled',
+    autoEnablesFeatureLabel: 'Express Counter POS',
+  },
+  {
+    appKey: 'app_menza_pos_web',
+    name: 'Menza POS Web',
+    platformBadge: 'Web Browser',
+    category: 'Desktop Suite',
+    desc: 'Browser-based POS terminal for PC, Mac, laptops, and iPads with cloud & offline billing',
+    iconName: 'Laptop',
+    autoEnablesFeatureKey: 'IsCounterOrderingEnabled',
+    autoEnablesFeatureLabel: 'Express Counter POS',
+  },
+  {
+    appKey: 'app_menza_serve',
+    name: 'MenzaServe App',
+    platformBadge: 'Waiter Mobile',
+    category: 'Floor Service',
+    desc: 'Floor captain & steward app for table-side ordering, food runner alerts & service calls',
+    iconName: 'UtensilsCrossed',
+    autoEnablesFeatureKey: 'IsTableOrderingEnabled',
+    autoEnablesFeatureLabel: 'Dine-In Table Management',
+  },
+  {
+    appKey: 'app_menza_order',
+    name: 'MenzaOrderApp',
+    platformBadge: 'Customer QR & Web',
+    category: 'Customer Ordering',
+    desc: 'Customer contactless QR table menu, self-checkout, takeaway & live food tracking',
+    iconName: 'QrCode',
+    autoEnablesFeatureKey: 'IsTableOrderingEnabled',
+    autoEnablesFeatureLabel: 'Table QR Ordering',
+  },
+];
+
 const CANONICAL_TOGGLE_ORDER: Record<string, number> = {
   IsTableOrderingEnabled: 1,
   IsCounterOrderingEnabled: 2,
@@ -62,6 +132,15 @@ const CANONICAL_TOGGLE_ORDER: Record<string, number> = {
   IsPaymentRequiredForTableOrder: 11,
   IsPaymentRequiredForPickupOrder: 12,
   IsPaymentRequiredForDeliveryOrder: 13,
+};
+
+// Utility to remove any accidental drive paths or file system references like (F:\Menza) or F:\MenzaServe
+const sanitizeDescription = (text: string): string => {
+  if (!text) return '';
+  return text
+    .replace(/\s*\([A-Z]:\\[^)]*\)/gi, '')
+    .replace(/[A-Z]:\\[\w\-.]+/gi, '')
+    .trim();
 };
 
 const FRIENDLY_FEATURE_NAMES: Record<string, { name: string; category: string; desc: string }> = {
@@ -99,6 +178,32 @@ const FRIENDLY_FEATURE_NAMES: Record<string, { name: string; category: string; d
     name: 'Online Payment Gateway',
     category: 'Payments',
     desc: 'Accept UPI, credit/debit cards, and netbanking payments',
+  },
+  // Application licenses mapped to clean official product names
+  IsMobilePosEnabled: {
+    name: 'Menza POS Terminal App',
+    category: 'Applications',
+    desc: 'Native Android POS terminal hardware app (Sunmi, Elo, iMin) with physical thermal receipt printing',
+  },
+  IsPosWebEnabled: {
+    name: 'Menza POS Web',
+    category: 'Applications',
+    desc: 'Browser-based POS terminal for PC, Mac, laptops, and iPads with cloud & offline billing',
+  },
+  IsWaiterAppEnabled: {
+    name: 'MenzaServe App',
+    category: 'Applications',
+    desc: 'Floor captain & steward app for table-side ordering, food runner alerts & service calls',
+  },
+  IsKdsAppEnabled: {
+    name: 'CaptainMenza App',
+    category: 'Applications',
+    desc: 'Paperless Kitchen Display System (KDS) for chef stations, prep timers & order bumping',
+  },
+  IsPosOrderWebEnabled: {
+    name: 'MenzaOrderApp',
+    category: 'Applications',
+    desc: 'Customer contactless QR table menu, self-checkout, takeaway & live food tracking',
   },
 };
 
@@ -234,6 +339,13 @@ export default function SuperAdminPlansPage() {
 
   // Step 3: Entitlements
   const [dynamicEntitlements, setDynamicEntitlements] = useState<DynamicEntitlementState[]>(DEFAULT_ENTITLEMENTS);
+  const [selectedApps, setSelectedApps] = useState<Record<string, boolean>>({
+    app_captain_menza: true,
+    app_menza_pos_terminal: true,
+    app_menza_pos_web: true,
+    app_menza_serve: true,
+    app_menza_order: true,
+  });
 
   const [savingPlan, setSavingPlan] = useState(false);
 
@@ -263,18 +375,41 @@ export default function SuperAdminPlansPage() {
         });
 
         masterList.forEach((master: any) => {
+          const masterCode = (master.configCode || master.ConfigCode || '').toUpperCase();
+          // Application channels are directly managed via Pillars 1, 2, 3, and 4
+          if (masterCode === 'APPLICATION_CHANNELS') {
+            return;
+          }
+
           const detailsList = master.details || master.Details || [];
           if (Array.isArray(detailsList) && detailsList.length > 0) {
             detailsList.forEach((detail: any) => {
               const key = detail.configKey || detail.ConfigKey || '';
               if (!key) return;
+
+              // Skip application license keys from dynamic operational list to prevent duplication
+              if (
+                key === 'IsMobilePosEnabled' ||
+                key === 'IsPosWebEnabled' ||
+                key === 'IsWaiterAppEnabled' ||
+                key === 'IsKdsAppEnabled' ||
+                key === 'IsPosOrderWebEnabled' ||
+                key.toLowerCase().includes('appenabled')
+              ) {
+                return;
+              }
+
               const meta = FRIENDLY_FEATURE_NAMES[key];
+              const rawDesc = detail.description || detail.Description || '';
+              const cleanDesc = sanitizeDescription(meta?.desc || rawDesc);
+              const cleanName = sanitizeDescription(meta?.name || rawDesc || key || 'Feature');
+
               featuresMap.set(key.toLowerCase(), {
                 orderConfigId: detail.id || detail.Id || 0,
                 configKey: key,
-                configName: meta?.name || detail.description || detail.Description || key || 'Feature',
+                configName: cleanName,
                 category: meta?.category || detail.category || detail.Category || master.configName || 'Ordering Channels',
-                description: meta?.desc || detail.description || detail.Description || '',
+                description: cleanDesc,
                 isAllowed: true,
                 featureCommissionPercentage: '0',
                 featureFlatFeePerOrder: '0',
@@ -370,11 +505,225 @@ export default function SuperAdminPlansPage() {
     [commissionType, aggregatedCommissionPct, aggregatedFlatFee, parsedMinFloor, parsedMaxCap]
   );
 
-  const handleToggleEntitlement = (configKey: string) => {
+  // =========================================================================
+  // PILLAR-BASED SYNCHRONIZED TOGGLE HANDLERS (SOLUTION B)
+  // =========================================================================
+
+  // Pillar 1: Kitchen Operations (CaptainMenza App & KDS Engine)
+  const handleToggleKitchenKds = () => {
+    const nextSelected = !selectedApps.app_captain_menza;
+    setSelectedApps((prev) => ({ ...prev, app_captain_menza: nextSelected }));
+    // Strict 2-way sync: CaptainMenza App = IsKdsEnabled (both true or both false)
     setDynamicEntitlements((prev) =>
       prev.map((item) =>
-        item.configKey === configKey ? { ...item, isAllowed: !item.isAllowed } : item
+        item.configKey === 'IsKdsEnabled' ? { ...item, isAllowed: nextSelected } : item
       )
+    );
+  };
+
+  // Pillar 2: Counter & Express POS Billing
+  const handleToggleCounterApp = (appKey: 'app_menza_pos_terminal' | 'app_menza_pos_web') => {
+    const nextSelected = !selectedApps[appKey];
+    const otherAppKey =
+      appKey === 'app_menza_pos_terminal' ? 'app_menza_pos_web' : 'app_menza_pos_terminal';
+    const isEitherActive = nextSelected || selectedApps[otherAppKey];
+
+    setSelectedApps((prev) => ({ ...prev, [appKey]: nextSelected }));
+    setDynamicEntitlements((prev) =>
+      prev.map((item) =>
+        item.configKey === 'IsCounterOrderingEnabled'
+          ? { ...item, isAllowed: isEitherActive }
+          : item
+      )
+    );
+  };
+
+  const handleToggleCounterChannel = () => {
+    const currentCounter =
+      dynamicEntitlements.find((e) => e.configKey === 'IsCounterOrderingEnabled')?.isAllowed ?? true;
+    const nextVal = !currentCounter;
+
+    setDynamicEntitlements((prev) =>
+      prev.map((item) =>
+        item.configKey === 'IsCounterOrderingEnabled' ? { ...item, isAllowed: nextVal } : item
+      )
+    );
+    setSelectedApps((prev) => ({
+      ...prev,
+      app_menza_pos_terminal: nextVal,
+      app_menza_pos_web: nextVal,
+    }));
+  };
+
+  // Pillar 3: Floor Service (MenzaServe App)
+  const handleToggleFloorService = () => {
+    const nextSelected = !selectedApps.app_menza_serve;
+    setSelectedApps((prev) => ({ ...prev, app_menza_serve: nextSelected }));
+  };
+
+  // Pillar 4: Customer Channels (MenzaOrderApp & Delivery & Pickup)
+  const handleToggleTableQrOrder = () => {
+    const nextSelected = !selectedApps.app_menza_order;
+    setSelectedApps((prev) => ({ ...prev, app_menza_order: nextSelected }));
+    // Strict 2-way sync: MenzaOrderApp = IsTableOrderingEnabled
+    setDynamicEntitlements((prev) =>
+      prev.map((item) =>
+        item.configKey === 'IsTableOrderingEnabled' ? { ...item, isAllowed: nextSelected } : item
+      )
+    );
+  };
+
+  // Backward compatibility router
+  const handleToggleApp = (appKey: string) => {
+    if (appKey === 'app_captain_menza') {
+      handleToggleKitchenKds();
+    } else if (appKey === 'app_menza_pos_terminal' || appKey === 'app_menza_pos_web') {
+      handleToggleCounterApp(appKey as any);
+    } else if (appKey === 'app_menza_serve') {
+      handleToggleFloorService();
+    } else if (appKey === 'app_menza_order') {
+      handleToggleTableQrOrder();
+    }
+  };
+
+  // Generic toggle for entitlements with bidirectional safety guards
+  const handleToggleEntitlement = (configKey: string) => {
+    setDynamicEntitlements((prev) =>
+      prev.map((item) => {
+        if (item.configKey === configKey) {
+          const nextAllowed = !item.isAllowed;
+
+          // Strict 2-way sync guards in BOTH directions:
+          if (configKey === 'IsKdsEnabled') {
+            setSelectedApps((apps) => ({ ...apps, app_captain_menza: nextAllowed }));
+          }
+          if (configKey === 'IsTableOrderingEnabled') {
+            setSelectedApps((apps) => ({ ...apps, app_menza_order: nextAllowed }));
+          }
+          if (configKey === 'IsCounterOrderingEnabled') {
+            setSelectedApps((apps) => ({
+              ...apps,
+              app_menza_pos_terminal: nextAllowed,
+              app_menza_pos_web: nextAllowed,
+            }));
+          }
+
+          return { ...item, isAllowed: nextAllowed };
+        }
+        return item;
+      })
+    );
+  };
+
+  const renderAppIcon = (iconName: string) => {
+    switch (iconName) {
+      case 'ChefHat':
+        return <ChefHat className="h-4 w-4" />;
+      case 'Smartphone':
+        return <Smartphone className="h-4 w-4" />;
+      case 'Laptop':
+        return <Laptop className="h-4 w-4" />;
+      case 'UtensilsCrossed':
+        return <UtensilsCrossed className="h-4 w-4" />;
+      case 'QrCode':
+        return <QrCode className="h-4 w-4" />;
+      default:
+        return <Store className="h-4 w-4" />;
+    }
+  };
+
+  const renderEntitlementCard = (
+    item: DynamicEntitlementState,
+    customBadge?: string,
+    customAction?: () => void
+  ) => {
+    return (
+      <div
+        key={item.configKey}
+        className={`rounded-2xl border p-3.5 transition-all ${
+          item.isAllowed
+            ? 'border-[#DE8626]/40 bg-white dark:bg-[#1B2127] shadow-xs'
+            : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2]/60 dark:bg-[#151A20]/60 opacity-60'
+        }`}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-bold text-xs text-[#1E2930] dark:text-[#F3F4F6]">
+                {item.configName}
+              </span>
+              <span className="rounded bg-stone-100 dark:bg-[#252C34] px-1.5 py-0.5 text-[9px] font-medium text-[#667085] dark:text-[#94A3B8]">
+                {customBadge || item.category}
+              </span>
+            </div>
+            {item.description && (
+              <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] mt-0.5">
+                {item.description}
+              </p>
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={customAction || (() => handleToggleEntitlement(item.configKey))}
+            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+              item.isAllowed ? 'bg-emerald-500' : 'bg-stone-300 dark:bg-stone-700'
+            }`}
+          >
+            <span
+              className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition duration-200 ease-in-out ${
+                item.isAllowed ? 'translate-x-5' : 'translate-x-0'
+              }`}
+            />
+          </button>
+        </div>
+
+        {commissionType === 'FEATURE_DRIVEN' && item.isAllowed && (
+          <div className="mt-3 pt-3 border-t border-[#E7E1DA] dark:border-[#2B3540] grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[10px] font-bold text-[#667085] uppercase mb-1">
+                Add-on Fee Rate (%)
+              </label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={item.featureCommissionPercentage}
+                onChange={(e) =>
+                  handleUpdateEntitlementFee(
+                    item.configKey,
+                    'featureCommissionPercentage',
+                    e.target.value
+                  )
+                }
+                placeholder="0.0"
+                className="w-full rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-2.5 py-1.5 text-xs outline-none focus:border-[#DE8626]"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-bold text-[#667085] uppercase mb-1">
+                Add-on Flat Fee (₹)
+              </label>
+              <input
+                type="number"
+                min="0"
+                step="0.1"
+                value={item.featureFlatFeePerOrder}
+                onChange={(e) =>
+                  handleUpdateEntitlementFee(
+                    item.configKey,
+                    'featureFlatFeePerOrder',
+                    e.target.value
+                  )
+                }
+                placeholder="0.00"
+                className="w-full rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-2.5 py-1.5 text-xs outline-none focus:border-[#DE8626]"
+              />
+            </div>
+          </div>
+        )}
+      </div>
     );
   };
 
@@ -406,6 +755,13 @@ export default function SuperAdminPlansPage() {
     setMaxCommissionCapPerOrder('0');
     setSimOrderAmount('1000');
     setDynamicEntitlements(DEFAULT_ENTITLEMENTS);
+    setSelectedApps({
+      app_captain_menza: true,
+      app_menza_pos_terminal: true,
+      app_menza_pos_web: true,
+      app_menza_serve: true,
+      app_menza_order: true,
+    });
   };
 
   const handleNextStep = () => {
@@ -474,17 +830,95 @@ export default function SuperAdminPlansPage() {
         allowCounterOrdering: dynamicEntitlements.find((d) => d.configKey.includes('Counter'))?.isAllowed ?? true,
         allowSelfPickup: dynamicEntitlements.find((d) => d.configKey.includes('Pickup'))?.isAllowed ?? true,
         allowDelivery: dynamicEntitlements.find((d) => d.configKey.includes('Delivery'))?.isAllowed ?? true,
-        allowKds: dynamicEntitlements.find((d) => d.configKey.includes('Kds'))?.isAllowed ?? true,
+        allowKds: !!selectedApps.app_captain_menza,
         allowOnlinePayment: dynamicEntitlements.find((d) => d.configKey.includes('Payment'))?.isAllowed ?? true,
         allowSmsNotifications: dynamicEntitlements.find((d) => d.configKey.toLowerCase().includes('sms'))?.isAllowed ?? true,
         isActive: true,
-        entitlements: dynamicEntitlements.map((item) => ({
-          orderConfigId: item.orderConfigId,
-          configKey: item.configKey,
-          isAllowed: item.isAllowed,
-          featureCommissionPercentage: parseFloat(item.featureCommissionPercentage) || 0,
-          featureFlatFeePerOrder: parseFloat(item.featureFlatFeePerOrder) || 0,
-        })),
+        entitlements: [
+          ...dynamicEntitlements.map((item) => ({
+            orderConfigId: item.orderConfigId,
+            configKey: item.configKey,
+            isAllowed:
+              item.configKey === 'IsKdsEnabled'
+                ? !!selectedApps.app_captain_menza
+                : item.configKey === 'IsTableOrderingEnabled'
+                ? !!selectedApps.app_menza_order
+                : item.isAllowed,
+            featureCommissionPercentage: parseFloat(item.featureCommissionPercentage) || 0,
+            featureFlatFeePerOrder: parseFloat(item.featureFlatFeePerOrder) || 0,
+          })),
+          {
+            orderConfigId: 101,
+            configKey: 'IsCaptainMenzaAppEnabled',
+            isAllowed: !!selectedApps.app_captain_menza,
+            featureCommissionPercentage: 0,
+            featureFlatFeePerOrder: 0,
+          },
+          {
+            orderConfigId: 102,
+            configKey: 'IsMenzaPosTerminalAppEnabled',
+            isAllowed: !!selectedApps.app_menza_pos_terminal,
+            featureCommissionPercentage: 0,
+            featureFlatFeePerOrder: 0,
+          },
+          {
+            orderConfigId: 103,
+            configKey: 'IsMenzaPosWebAppEnabled',
+            isAllowed: !!selectedApps.app_menza_pos_web,
+            featureCommissionPercentage: 0,
+            featureFlatFeePerOrder: 0,
+          },
+          {
+            orderConfigId: 104,
+            configKey: 'IsMenzaServeAppEnabled',
+            isAllowed: !!selectedApps.app_menza_serve,
+            featureCommissionPercentage: 0,
+            featureFlatFeePerOrder: 0,
+          },
+          {
+            orderConfigId: 105,
+            configKey: 'IsMenzaOrderAppEnabled',
+            isAllowed: !!selectedApps.app_menza_order,
+            featureCommissionPercentage: 0,
+            featureFlatFeePerOrder: 0,
+          },
+          // Legacy Tier 1 database keys for backward compatibility
+          {
+            orderConfigId: 19,
+            configKey: 'IsMobilePosEnabled',
+            isAllowed: !!selectedApps.app_menza_pos_terminal,
+            featureCommissionPercentage: 0,
+            featureFlatFeePerOrder: 0,
+          },
+          {
+            orderConfigId: 20,
+            configKey: 'IsPosWebEnabled',
+            isAllowed: !!selectedApps.app_menza_pos_web,
+            featureCommissionPercentage: 0,
+            featureFlatFeePerOrder: 0,
+          },
+          {
+            orderConfigId: 21,
+            configKey: 'IsWaiterAppEnabled',
+            isAllowed: !!selectedApps.app_menza_serve,
+            featureCommissionPercentage: 0,
+            featureFlatFeePerOrder: 0,
+          },
+          {
+            orderConfigId: 22,
+            configKey: 'IsKdsAppEnabled',
+            isAllowed: !!selectedApps.app_captain_menza,
+            featureCommissionPercentage: 0,
+            featureFlatFeePerOrder: 0,
+          },
+          {
+            orderConfigId: 23,
+            configKey: 'IsPosOrderWebEnabled',
+            isAllowed: !!selectedApps.app_menza_order,
+            featureCommissionPercentage: 0,
+            featureFlatFeePerOrder: 0,
+          },
+        ],
       });
 
       if (res.success) {
@@ -1123,111 +1557,587 @@ export default function SuperAdminPlansPage() {
                 )}
 
                 {/* ------------------------------------------------------------- */}
-                {/* STEP 3: ORDERING CHANNELS & ENTITLEMENTS */}
+                {/* STEP 3: DEPARTMENT-BASED OPERATIONAL PILLARS (SOLUTION B) */}
                 {/* ------------------------------------------------------------- */}
                 {currentStep === 3 && (
-                  <div className="space-y-4">
-                    <div className="rounded-2xl border border-stone-200 dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-3.5 flex items-start gap-3">
+                  <div className="space-y-6">
+                    {/* Header Banner */}
+                    <div className="rounded-2xl border border-stone-200 dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-4 flex items-start gap-3">
                       <Sliders className="h-5 w-5 text-[#DE8626] shrink-0 mt-0.5" />
                       <div>
                         <h4 className="text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6]">
-                          Ordering Channels & Feature Entitlements
+                          Department-Based Plan Entitlements (5 Pillars)
                         </h4>
                         <p className="text-[11px] text-[#667085] dark:text-[#94A3B8]">
-                          Toggle feature permissions available under this plan tier. In Feature-Driven mode, you can also attach channel-specific surcharge fees.
+                          Configure kitchen stations, POS billing counters, waiter floor steward apps, customer channels, and platform add-ons.
                         </p>
                       </div>
                     </div>
 
-                    <div className="space-y-2.5">
-                      {dynamicEntitlements.map((item) => (
-                        <div
-                          key={item.configKey}
-                          className={`rounded-2xl border p-3.5 transition-all ${
-                            item.isAllowed
-                              ? 'border-[#DE8626]/40 bg-white dark:bg-[#1B2127]'
-                              : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2]/60 dark:bg-[#151A20]/60 opacity-60'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2">
-                                <span className="font-bold text-xs text-[#1E2930] dark:text-[#F3F4F6]">
-                                  {item.configName}
-                                </span>
-                                <span className="rounded bg-stone-100 dark:bg-[#252C34] px-1.5 py-0.5 text-[9px] font-medium text-[#667085] dark:text-[#94A3B8]">
-                                  {item.category}
-                                </span>
+                    {/* ========================================================================= */}
+                    {/* PILLAR 1: KITCHEN OPERATIONS (CAPTAINMENZA KDS) */}
+                    {/* ========================================================================= */}
+                    <div className="rounded-2xl border border-[#DE8626]/30 bg-gradient-to-br from-amber-500/10 via-[#DE8626]/5 to-transparent p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="p-2 rounded-xl bg-[#DE8626] text-white shadow-xs">
+                            <ChefHat className="h-4 w-4" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h4 className="text-xs font-black uppercase text-[#1E2930] dark:text-[#F3F4F6] tracking-wider">
+                                1. Kitchen Operations
+                              </h4>
+                              <span
+                                className={`rounded-full px-2 py-0.5 text-[9px] font-bold ${
+                                  selectedApps.app_captain_menza
+                                    ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
+                                    : 'bg-stone-200 dark:bg-stone-800 text-[#667085]'
+                                }`}
+                              >
+                                {selectedApps.app_captain_menza ? 'Active' : 'Disabled'}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                              Paperless chef displays, kitchen bump bar & live station ticket routing.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Unified CaptainMenza KDS Card */}
+                      {(() => {
+                        const kdsEntitlement = dynamicEntitlements.find(
+                          (e) => e.configKey === 'IsKdsEnabled'
+                        );
+                        const isKdsActive = !!selectedApps.app_captain_menza;
+                        return (
+                          <div
+                            className={`p-4 rounded-2xl border transition-all ${
+                              isKdsActive
+                                ? 'border-[#DE8626] bg-white dark:bg-[#1B2127] shadow-sm'
+                                : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2]/60 dark:bg-[#151A20]/60 opacity-60'
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex items-start gap-3">
+                                <div
+                                  className={`p-2.5 rounded-xl text-white shadow-xs shrink-0 ${
+                                    isKdsActive
+                                      ? 'bg-gradient-to-br from-[#DE8626] to-amber-600'
+                                      : 'bg-stone-400'
+                                  }`}
+                                >
+                                  <ChefHat className="h-5 w-5" />
+                                </div>
+                                <div>
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="font-extrabold text-sm text-[#1E2930] dark:text-[#F3F4F6]">
+                                      CaptainMenza App
+                                    </span>
+                                    <span className="rounded bg-amber-500/10 text-[#DE8626] border border-[#DE8626]/20 px-2 py-0.5 text-[9px] font-bold">
+                                      Kitchen Display System (KDS)
+                                    </span>
+                                    <span className="rounded bg-stone-100 dark:bg-[#252C34] px-1.5 py-0.5 text-[9px] font-bold text-[#667085] dark:text-[#94A3B8]">
+                                      Android Tablet
+                                    </span>
+                                  </div>
+                                  <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] mt-1 leading-relaxed">
+                                    Dedicated paperless kitchen order ticketing, real-time preparation timers, multi-station order routing (Grill, Fryer, Tandoor, Pantry), and order course bumping.
+                                  </p>
+                                  <div className="mt-2 flex items-center gap-1.5 text-[10px] text-amber-700 dark:text-amber-400 font-medium">
+                                    <Sparkles className="h-3 w-3 text-[#DE8626]" />
+                                    <span>
+                                      Enabling CaptainMenza App automatically unlocks full KDS routing across all POS channels.
+                                    </span>
+                                  </div>
+                                </div>
                               </div>
-                              {item.description && (
-                                <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] mt-0.5">
-                                  {item.description}
-                                </p>
-                              )}
+
+                              {/* Master Switch */}
+                              <button
+                                type="button"
+                                onClick={handleToggleKitchenKds}
+                                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                                  isKdsActive ? 'bg-emerald-500' : 'bg-stone-300 dark:bg-stone-700'
+                                }`}
+                              >
+                                <span
+                                  className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition duration-200 ease-in-out ${
+                                    isKdsActive ? 'translate-x-5' : 'translate-x-0'
+                                  }`}
+                                />
+                              </button>
                             </div>
 
+                            {/* Feature-Driven Fee Inputs */}
+                            {commissionType === 'FEATURE_DRIVEN' && isKdsActive && kdsEntitlement && (
+                              <div className="mt-3 pt-3 border-t border-[#E7E1DA] dark:border-[#2B3540] grid grid-cols-2 gap-3">
+                                <div>
+                                  <label className="block text-[10px] font-bold text-[#667085] uppercase mb-1">
+                                    KDS Add-on Fee Rate (%)
+                                  </label>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    value={kdsEntitlement.featureCommissionPercentage}
+                                    onChange={(e) =>
+                                      handleUpdateEntitlementFee(
+                                        'IsKdsEnabled',
+                                        'featureCommissionPercentage',
+                                        e.target.value
+                                      )
+                                    }
+                                    placeholder="0.0"
+                                    className="w-full rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-2.5 py-1.5 text-xs outline-none focus:border-[#DE8626]"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-[10px] font-bold text-[#667085] uppercase mb-1">
+                                    KDS Flat Fee / Order (₹)
+                                  </label>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.1"
+                                    value={kdsEntitlement.featureFlatFeePerOrder}
+                                    onChange={(e) =>
+                                      handleUpdateEntitlementFee(
+                                        'IsKdsEnabled',
+                                        'featureFlatFeePerOrder',
+                                        e.target.value
+                                      )
+                                    }
+                                    placeholder="0.00"
+                                    className="w-full rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-2.5 py-1.5 text-xs outline-none focus:border-[#DE8626]"
+                                  />
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
+
+                    {/* ========================================================================= */}
+                    {/* PILLAR 2: COUNTER & EXPRESS POS BILLING */}
+                    {/* ========================================================================= */}
+                    <div className="rounded-2xl border border-blue-500/20 bg-blue-500/5 p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="p-2 rounded-xl bg-blue-600 text-white shadow-xs">
+                            <Store className="h-4 w-4" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h4 className="text-xs font-black uppercase text-[#1E2930] dark:text-[#F3F4F6] tracking-wider">
+                                2. Counter & Express POS Billing
+                              </h4>
+                              <span
+                                className={`rounded-full px-2 py-0.5 text-[9px] font-bold ${
+                                  dynamicEntitlements.find((e) => e.configKey === 'IsCounterOrderingEnabled')
+                                    ?.isAllowed
+                                    ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
+                                    : 'bg-stone-200 dark:bg-stone-800 text-[#667085]'
+                                }`}
+                              >
+                                {dynamicEntitlements.find((e) => e.configKey === 'IsCounterOrderingEnabled')
+                                  ?.isAllowed
+                                  ? 'Active'
+                                  : 'Disabled'}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                              Cash desk counters, express takeaways, thermal receipt printing & offline billing.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Master Channel: Express Counter POS */}
+                      {(() => {
+                        const counterEntitlement = dynamicEntitlements.find(
+                          (e) => e.configKey === 'IsCounterOrderingEnabled'
+                        );
+                        if (!counterEntitlement) return null;
+                        return renderEntitlementCard(
+                          counterEntitlement,
+                          'Express Counter POS Channel',
+                          handleToggleCounterChannel
+                        );
+                      })()}
+
+                      {/* Client Applications for Counter POS */}
+                      <div className="pt-2">
+                        <p className="text-[10px] font-bold text-[#667085] dark:text-[#94A3B8] uppercase mb-2">
+                          Bundled POS Client Software:
+                        </p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          {/* Menza POS Terminal App */}
+                          <div
+                            onClick={() => handleToggleCounterApp('app_menza_pos_terminal')}
+                            className={`p-3 rounded-xl border transition-all cursor-pointer flex items-start justify-between gap-2.5 ${
+                              selectedApps.app_menza_pos_terminal
+                                ? 'border-blue-500/40 bg-white dark:bg-[#1B2127] shadow-xs'
+                                : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2]/60 dark:bg-[#151A20]/60 opacity-60'
+                            }`}
+                          >
+                            <div className="flex items-start gap-2">
+                              <div
+                                className={`p-1.5 rounded-lg text-white shrink-0 ${
+                                  selectedApps.app_menza_pos_terminal ? 'bg-blue-600' : 'bg-stone-400'
+                                }`}
+                              >
+                                <Smartphone className="h-4 w-4" />
+                              </div>
+                              <div>
+                                <span className="font-bold text-xs text-[#1E2930] dark:text-[#F3F4F6] block">
+                                  Menza POS Terminal App
+                                </span>
+                                <span className="text-[10px] text-[#667085] dark:text-[#94A3B8] leading-tight block mt-0.5">
+                                  Android POS hardware (Sunmi, Elo, iMin) with built-in thermal printing.
+                                </span>
+                              </div>
+                            </div>
                             <button
                               type="button"
-                              onClick={() => handleToggleEntitlement(item.configKey)}
-                              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                                item.isAllowed ? 'bg-emerald-500' : 'bg-stone-300 dark:bg-stone-700'
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleToggleCounterApp('app_menza_pos_terminal');
+                              }}
+                              className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
+                                selectedApps.app_menza_pos_terminal ? 'bg-emerald-500' : 'bg-stone-300 dark:bg-stone-700'
                               }`}
                             >
                               <span
-                                className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition duration-200 ease-in-out ${
-                                  item.isAllowed ? 'translate-x-5' : 'translate-x-0'
+                                className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200 ease-in-out ${
+                                  selectedApps.app_menza_pos_terminal ? 'translate-x-4' : 'translate-x-0'
                                 }`}
                               />
                             </button>
                           </div>
 
-                          {commissionType === 'FEATURE_DRIVEN' && item.isAllowed && (
-                            <div className="mt-3 pt-3 border-t border-[#E7E1DA] dark:border-[#2B3540] grid grid-cols-2 gap-3">
-                              <div>
-                                <label className="block text-[10px] font-bold text-[#667085] uppercase mb-1">
-                                  Add-on Fee Rate (%)
-                                </label>
-                                <input
-                                  type="number"
-                                  min="0"
-                                  step="0.01"
-                                  value={item.featureCommissionPercentage}
-                                  onChange={(e) =>
-                                    handleUpdateEntitlementFee(
-                                      item.configKey,
-                                      'featureCommissionPercentage',
-                                      e.target.value
-                                    )
-                                  }
-                                  placeholder="0.0"
-                                  className="w-full rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-2.5 py-1.5 text-xs outline-none focus:border-[#DE8626]"
-                                />
+                          {/* Menza POS Web */}
+                          <div
+                            onClick={() => handleToggleCounterApp('app_menza_pos_web')}
+                            className={`p-3 rounded-xl border transition-all cursor-pointer flex items-start justify-between gap-2.5 ${
+                              selectedApps.app_menza_pos_web
+                                ? 'border-blue-500/40 bg-white dark:bg-[#1B2127] shadow-xs'
+                                : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2]/60 dark:bg-[#151A20]/60 opacity-60'
+                            }`}
+                          >
+                            <div className="flex items-start gap-2">
+                              <div
+                                className={`p-1.5 rounded-lg text-white shrink-0 ${
+                                  selectedApps.app_menza_pos_web ? 'bg-blue-600' : 'bg-stone-400'
+                                }`}
+                              >
+                                <Laptop className="h-4 w-4" />
                               </div>
-
                               <div>
-                                <label className="block text-[10px] font-bold text-[#667085] uppercase mb-1">
-                                  Add-on Flat Fee (₹)
-                                </label>
-                                <input
-                                  type="number"
-                                  min="0"
-                                  step="0.1"
-                                  value={item.featureFlatFeePerOrder}
-                                  onChange={(e) =>
-                                    handleUpdateEntitlementFee(
-                                      item.configKey,
-                                      'featureFlatFeePerOrder',
-                                      e.target.value
-                                    )
-                                  }
-                                  placeholder="0.00"
-                                  className="w-full rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-2.5 py-1.5 text-xs outline-none focus:border-[#DE8626]"
-                                />
+                                <span className="font-bold text-xs text-[#1E2930] dark:text-[#F3F4F6] block">
+                                  Menza POS Web
+                                </span>
+                                <span className="text-[10px] text-[#667085] dark:text-[#94A3B8] leading-tight block mt-0.5">
+                                  Web browser POS for laptops, PCs & iPads with cloud & offline billing outbox.
+                                </span>
                               </div>
                             </div>
-                          )}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleToggleCounterApp('app_menza_pos_web');
+                              }}
+                              className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
+                                selectedApps.app_menza_pos_web ? 'bg-emerald-500' : 'bg-stone-300 dark:bg-stone-700'
+                              }`}
+                            >
+                              <span
+                                className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200 ease-in-out ${
+                                  selectedApps.app_menza_pos_web ? 'translate-x-4' : 'translate-x-0'
+                                }`}
+                              />
+                            </button>
+                          </div>
                         </div>
-                      ))}
+                      </div>
+                    </div>
+
+                    {/* ========================================================================= */}
+                    {/* PILLAR 3: FLOOR SERVICE & STEWARD OPERATIONS */}
+                    {/* ========================================================================= */}
+                    <div className="rounded-2xl border border-purple-500/20 bg-purple-500/5 p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="p-2 rounded-xl bg-purple-600 text-white shadow-xs">
+                            <UtensilsCrossed className="h-4 w-4" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h4 className="text-xs font-black uppercase text-[#1E2930] dark:text-[#F3F4F6] tracking-wider">
+                                3. Floor Service & Waiter Stewards
+                              </h4>
+                              <span
+                                className={`rounded-full px-2 py-0.5 text-[9px] font-bold ${
+                                  selectedApps.app_menza_serve
+                                    ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
+                                    : 'bg-stone-200 dark:bg-stone-800 text-[#667085]'
+                                }`}
+                              >
+                                {selectedApps.app_menza_serve ? 'Active' : 'Disabled'}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                              Table-side ordering for captains, food runner alerts & service bell calls.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* MenzaServe App Card */}
+                      <div
+                        className={`p-4 rounded-2xl border transition-all ${
+                          selectedApps.app_menza_serve
+                            ? 'border-purple-500/40 bg-white dark:bg-[#1B2127] shadow-sm'
+                            : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2]/60 dark:bg-[#151A20]/60 opacity-60'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-start gap-3">
+                            <div
+                              className={`p-2.5 rounded-xl text-white shadow-xs shrink-0 ${
+                                selectedApps.app_menza_serve
+                                  ? 'bg-gradient-to-br from-purple-600 to-indigo-600'
+                                  : 'bg-stone-400'
+                              }`}
+                            >
+                              <UtensilsCrossed className="h-5 w-5" />
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-extrabold text-sm text-[#1E2930] dark:text-[#F3F4F6]">
+                                  MenzaServe App
+                                </span>
+                                <span className="rounded bg-purple-500/10 text-purple-600 border border-purple-500/20 px-2 py-0.5 text-[9px] font-bold">
+                                  Waiter Mobile Suite
+                                </span>
+                                <span className="rounded bg-stone-100 dark:bg-[#252C34] px-1.5 py-0.5 text-[9px] font-bold text-[#667085] dark:text-[#94A3B8]">
+                                  Android & iOS
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] mt-1 leading-relaxed">
+                                Floor captain and steward mobile terminal for live table occupancy layouts, rapid table-side order taking, instant KDS punch-in, and guest bill settlement requests.
+                              </p>
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={handleToggleFloorService}
+                            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                              selectedApps.app_menza_serve
+                                ? 'bg-emerald-500'
+                                : 'bg-stone-300 dark:bg-stone-700'
+                            }`}
+                          >
+                            <span
+                              className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition duration-200 ease-in-out ${
+                                selectedApps.app_menza_serve ? 'translate-x-5' : 'translate-x-0'
+                              }`}
+                            />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* ========================================================================= */}
+                    {/* PILLAR 4: CUSTOMER ORDERING CHANNELS */}
+                    {/* ========================================================================= */}
+                    <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="p-2 rounded-xl bg-emerald-600 text-white shadow-xs">
+                            <QrCode className="h-4 w-4" />
+                          </div>
+                          <div>
+                            <h4 className="text-xs font-black uppercase text-[#1E2930] dark:text-[#F3F4F6] tracking-wider">
+                              4. Customer Ordering Channels
+                            </h4>
+                            <p className="text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                              Guest self-ordering touchpoints: contactless QR table scan, takeaway parcel, and direct home delivery.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2.5">
+                        {/* MenzaOrderApp (Table QR Ordering) */}
+                        {(() => {
+                          const tableEntitlement = dynamicEntitlements.find(
+                            (e) => e.configKey === 'IsTableOrderingEnabled'
+                          );
+                          const isTableActive = !!selectedApps.app_menza_order;
+                          return (
+                            <div
+                              className={`p-3.5 rounded-2xl border transition-all ${
+                                isTableActive
+                                  ? 'border-emerald-500/40 bg-white dark:bg-[#1B2127] shadow-xs'
+                                  : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2]/60 dark:bg-[#151A20]/60 opacity-60'
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="flex items-start gap-2.5">
+                                  <div
+                                    className={`p-2 rounded-xl text-white shadow-xs shrink-0 ${
+                                      isTableActive ? 'bg-emerald-600' : 'bg-stone-400'
+                                    }`}
+                                  >
+                                    <QrCode className="h-4 w-4" />
+                                  </div>
+                                  <div>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <span className="font-bold text-xs text-[#1E2930] dark:text-[#F3F4F6]">
+                                        MenzaOrderApp (Table QR Ordering)
+                                      </span>
+                                      <span className="rounded bg-emerald-500/10 text-emerald-600 px-1.5 py-0.5 text-[9px] font-bold">
+                                        Dine-In Channel
+                                      </span>
+                                      <span className="rounded bg-stone-100 dark:bg-[#252C34] px-1.5 py-0.5 text-[9px] font-bold text-[#667085] dark:text-[#94A3B8]">
+                                        PWA & Web
+                                      </span>
+                                    </div>
+                                    <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] mt-0.5">
+                                      Interactive table sticker QR scan, rich mobile menu, contactless cart, live preparation progress & instant checkout.
+                                    </p>
+                                  </div>
+                                </div>
+
+                                <button
+                                  type="button"
+                                  onClick={handleToggleTableQrOrder}
+                                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                                    isTableActive ? 'bg-emerald-500' : 'bg-stone-300 dark:bg-stone-700'
+                                  }`}
+                                >
+                                  <span
+                                    className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition duration-200 ease-in-out ${
+                                      isTableActive ? 'translate-x-5' : 'translate-x-0'
+                                    }`}
+                                  />
+                                </button>
+                              </div>
+
+                              {commissionType === 'FEATURE_DRIVEN' &&
+                                isTableActive &&
+                                tableEntitlement && (
+                                  <div className="mt-3 pt-3 border-t border-[#E7E1DA] dark:border-[#2B3540] grid grid-cols-2 gap-3">
+                                    <div>
+                                      <label className="block text-[10px] font-bold text-[#667085] uppercase mb-1">
+                                        Table QR Fee Rate (%)
+                                      </label>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        step="0.01"
+                                        value={tableEntitlement.featureCommissionPercentage}
+                                        onChange={(e) =>
+                                          handleUpdateEntitlementFee(
+                                            'IsTableOrderingEnabled',
+                                            'featureCommissionPercentage',
+                                            e.target.value
+                                          )
+                                        }
+                                        placeholder="0.0"
+                                        className="w-full rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-2.5 py-1.5 text-xs outline-none focus:border-[#DE8626]"
+                                      />
+                                    </div>
+                                    <div>
+                                      <label className="block text-[10px] font-bold text-[#667085] uppercase mb-1">
+                                        Table QR Flat Fee (₹)
+                                      </label>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        step="0.1"
+                                        value={tableEntitlement.featureFlatFeePerOrder}
+                                        onChange={(e) =>
+                                          handleUpdateEntitlementFee(
+                                            'IsTableOrderingEnabled',
+                                            'featureFlatFeePerOrder',
+                                            e.target.value
+                                          )
+                                        }
+                                        placeholder="0.00"
+                                        className="w-full rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-2.5 py-1.5 text-xs outline-none focus:border-[#DE8626]"
+                                      />
+                                    </div>
+                                  </div>
+                                )}
+                            </div>
+                          );
+                        })()}
+
+                        {/* Direct Home Delivery */}
+                        {(() => {
+                          const deliveryEntitlement = dynamicEntitlements.find(
+                            (e) => e.configKey === 'IsDeliveryEnabled'
+                          );
+                          if (!deliveryEntitlement) return null;
+                          return renderEntitlementCard(
+                            deliveryEntitlement,
+                            'Direct Home Delivery Channel'
+                          );
+                        })()}
+
+                        {/* Self-Pickup / Takeaway */}
+                        {(() => {
+                          const pickupEntitlement = dynamicEntitlements.find(
+                            (e) => e.configKey === 'IsSelfPickupEnabled'
+                          );
+                          if (!pickupEntitlement) return null;
+                          return renderEntitlementCard(
+                            pickupEntitlement,
+                            'Self-Pickup / Takeaway Channel'
+                          );
+                        })()}
+                      </div>
+                    </div>
+
+                    {/* ========================================================================= */}
+                    {/* PILLAR 5: PLATFORM INTEGRATIONS & ADD-ONS */}
+                    {/* ========================================================================= */}
+                    <div className="rounded-2xl border border-stone-300 dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="p-2 rounded-xl bg-amber-600 text-white shadow-xs">
+                            <CreditCard className="h-4 w-4" />
+                          </div>
+                          <div>
+                            <h4 className="text-xs font-black uppercase text-[#1E2930] dark:text-[#F3F4F6] tracking-wider">
+                              5. Platform Integrations & Add-ons
+                            </h4>
+                            <p className="text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                              Automated customer notifications, online payment gateway & order automation.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2.5">
+                        {/* Dynamic entitlements excluding the ones already in Pillars 1-4 */}
+                        {dynamicEntitlements
+                          .filter(
+                            (item) =>
+                              item.configKey !== 'IsKdsEnabled' &&
+                              item.configKey !== 'IsCounterOrderingEnabled' &&
+                              item.configKey !== 'IsTableOrderingEnabled' &&
+                              item.configKey !== 'IsDeliveryEnabled' &&
+                              item.configKey !== 'IsSelfPickupEnabled'
+                          )
+                          .map((item) => renderEntitlementCard(item))}
+                      </div>
                     </div>
                   </div>
                 )}
@@ -1289,6 +2199,26 @@ export default function SuperAdminPlansPage() {
                             {' / '}
                             {parsedMaxCap > 0 ? `Max Cap ₹${parsedMaxCap}` : 'No Cap'}
                           </span>
+                        </div>
+                      </div>
+
+                      {/* Enabled Menza Applications */}
+                      <div>
+                        <p className="text-[10px] font-bold text-[#667085] uppercase mb-1.5">
+                          Enabled Menza Applications ({MENZA_ECOSYSTEM_APPS.filter((a) => selectedApps[a.appKey]).length} of 5)
+                        </p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {MENZA_ECOSYSTEM_APPS
+                            .filter((a) => selectedApps[a.appKey])
+                            .map((a) => (
+                              <span
+                                key={a.appKey}
+                                className="rounded-md bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 text-[10px] font-bold text-[#DE8626] flex items-center gap-1"
+                              >
+                                <Check className="h-3 w-3 text-[#DE8626]" />
+                                <span>{a.name}</span>
+                              </span>
+                            ))}
                         </div>
                       </div>
 

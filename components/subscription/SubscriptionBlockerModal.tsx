@@ -36,6 +36,11 @@ import { SubscriptionPlan } from '@/types/subscription';
 import { PaymentGatewayService } from '@/payments/paymentGatewayService.web';
 import { WalletEvents } from '@shared/core/utils/walletEvents';
 import { TaxInvoiceModal, TaxInvoiceItem } from '@/components/invoice/TaxInvoiceModal';
+import {
+  getSubscriptionFeatureList,
+  getPlanFeatureList,
+  CANONICAL_FEATURES as CANONICAL_CATALOG_FEATURES,
+} from '@shared/core/utils/entitlementCatalog';
 
 export const SubscriptionBlockerModal: React.FC = () => {
   const router = useRouter();
@@ -1198,42 +1203,70 @@ export const SubscriptionBlockerModal: React.FC = () => {
                           Includes {gstRate}% GST • Menza GSTIN: <span className="font-mono font-semibold text-[#DE8626]">{platformGstin}</span>
                         </p>
 
-                        {/* Commercial Highlights */}
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          {plan.billingCycle && (
-                            <span className="rounded-md bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-[#DE8626] uppercase">
-                              {plan.billingCycle}
-                            </span>
-                          )}
+                        {/* Commercial & Benefit Badges */}
+                        <div className="mt-2.5 flex flex-wrap gap-1.5">
+                          <span className="rounded-md bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[10px] font-extrabold text-[#92400E] dark:text-amber-300">
+                            {plan.baseCommissionPercentage !== undefined && plan.baseCommissionPercentage > 0
+                              ? `${plan.baseCommissionPercentage}% QR Platform Fee`
+                              : '0% Platform Fee'}
+                            {plan.minCommissionFloorPerOrder && plan.minCommissionFloorPerOrder > 0
+                              ? ` (Min ₹${plan.minCommissionFloorPerOrder})`
+                              : ''}
+                          </span>
+                          <span className="rounded-md bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-extrabold text-emerald-700 dark:text-emerald-300">
+                            🛡️ Menza Absorbs PG Fee
+                          </span>
                           {plan.includedWalletCredit ? (
                             <span className="rounded-md bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold text-emerald-600">
                               +₹{plan.includedWalletCredit} Wallet Credit
                             </span>
                           ) : null}
+                          {plan.billingCycle && (
+                            <span className="rounded-md bg-stone-100 dark:bg-stone-800 px-2 py-0.5 text-[10px] font-bold text-[#667085] dark:text-[#94A3B8] uppercase">
+                              {plan.billingCycle}
+                            </span>
+                          )}
                         </div>
 
-                        <div className="mt-4 space-y-1.5 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60 pt-3 text-[11px] text-[#667085] dark:text-[#94A3B8]">
-                          <div className="flex items-center gap-1.5">
-                            <Check className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
-                            <span>Counter POS & Billing</span>
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <Check className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
-                            <span>Kitchen KOT Routing & Print</span>
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <Check className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
-                            <span>Live Floor Table Status</span>
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <Check className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
-                            <span>
-                              {plan.baseCommissionPercentage !== undefined && plan.baseCommissionPercentage > 0
-                                ? `${plan.baseCommissionPercentage}% Platform Fee`
-                                : 'Daily Revenue & GST Analytics'}
-                            </span>
-                          </div>
-                        </div>
+                        {/* Consolidated Feature Entitlement Highlights Grid (Pills) */}
+                        {(() => {
+                          const planFeatures = getPlanFeatureList(plan as any);
+                          const enabledCount = planFeatures.filter((f) => f.enabled).length;
+                          return (
+                            <div className="mt-3.5 pt-3 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60">
+                              <div className="flex items-center justify-between text-[10px] font-extrabold uppercase tracking-wider text-[#667085] dark:text-[#94A3B8] mb-2">
+                                <span>Plan Entitlements</span>
+                                <span className="text-emerald-600 dark:text-emerald-400 font-bold">
+                                  {enabledCount} / {planFeatures.length} Included
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-2 gap-1.5">
+                                {planFeatures.map((feat) => (
+                                  <div
+                                    key={`plan-${plan.id}-feat-${feat.key}`}
+                                    className={`flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-semibold border transition-all ${
+                                      feat.enabled
+                                        ? 'border-emerald-500/20 bg-emerald-500/5 text-[#1E2930] dark:text-[#F3F4F6]'
+                                        : 'border-stone-200 dark:border-stone-800 bg-stone-100/40 dark:bg-stone-900/40 text-[#8C7A6B] dark:text-[#64748B] opacity-50'
+                                    }`}
+                                  >
+                                    {feat.enabled ? (
+                                      <CheckCircle2 className="h-3 w-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                                    ) : (
+                                      <Lock className="h-2.5 w-2.5 text-stone-400 shrink-0" />
+                                    )}
+                                    <span className="truncate">{feat.shortLabel}</span>
+                                    {feat.enabled && feat.commissionBadge ? (
+                                      <span className="ml-auto text-[9px] font-extrabold text-[#DE8626] shrink-0">
+                                        {feat.commissionBadge}
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
 
                       <div className="mt-5 pt-3 border-t border-[#E7E1DA]/40 dark:border-[#2B3540]/40">
@@ -1244,7 +1277,7 @@ export const SubscriptionBlockerModal: React.FC = () => {
                               : 'bg-black/5 dark:bg-white/5 text-[#667085] hover:text-[#1E2930]'
                           }`}
                         >
-                          {isSelected ? 'Selected' : 'Select Plan'}
+                          {isSelected ? '✓ Selected Tier' : 'Select Plan'}
                         </span>
                       </div>
                     </div>
@@ -1252,8 +1285,119 @@ export const SubscriptionBlockerModal: React.FC = () => {
                 })}
               </div>
 
-              {/* Primary Action Button for Selected Plan */}
-              {isOwner && selectedPlan && (
+              {/* Detailed Consolidated Entitlement Breakdown for Selected Plan */}
+              {selectedPlan && (
+                <div className="rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-5 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E7E1DA]/80 dark:border-[#2B3540]/80 pb-3">
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Crown className="h-4 w-4 text-[#DE8626]" />
+                        <h4 className="text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                          Detailed Entitlements for {selectedPlan.subscriptionName || selectedPlan.planName}
+                        </h4>
+                        <span className="rounded-md bg-stone-100 dark:bg-[#252C34] px-2 py-0.5 text-[10px] font-bold text-[#DE8626]">
+                          {selectedPlan.baseCommissionPercentage !== undefined && selectedPlan.baseCommissionPercentage > 0
+                            ? `${selectedPlan.baseCommissionPercentage}% QR Platform Fee`
+                            : '0% Platform Fee'}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] mt-0.5">
+                        Consolidated feature entitlement checklist for store owner and cashier clarity
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/25 px-2.5 py-1 text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        <span>
+                          {getPlanFeatureList(selectedPlan as any).filter((f) => f.enabled).length} / {getPlanFeatureList(selectedPlan as any).length} Included
+                        </span>
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* 5-Category Breakdown Grid */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {getPlanFeatureList(selectedPlan as any).map((item) => (
+                      <div
+                        key={`selected-plan-ent-${item.key}`}
+                        className={`flex flex-col justify-between rounded-2xl p-3.5 border transition-all ${
+                          item.enabled
+                            ? 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] shadow-xs'
+                            : 'border-[#E7E1DA]/50 dark:border-[#2B3540]/50 bg-black/[0.02] dark:bg-white/[0.02] opacity-60'
+                        }`}
+                      >
+                        <div>
+                          <div className="flex items-center justify-between gap-1.5 mb-1.5">
+                            <span className="rounded-md bg-stone-100 dark:bg-[#252C34] px-2 py-0.5 text-[9px] font-bold text-[#667085] dark:text-[#94A3B8] uppercase tracking-wider">
+                              {item.category}
+                            </span>
+                            {item.enabled ? (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
+                                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                Included
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-stone-200/80 dark:bg-stone-800 px-2 py-0.5 text-[10px] font-bold text-[#667085] dark:text-[#94A3B8]">
+                                <Lock className="h-2.5 w-2.5" />
+                                Locked
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-start gap-2">
+                            <div
+                              className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg ${
+                                item.enabled
+                                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                                  : 'bg-stone-100 dark:bg-stone-800 text-[#667085]'
+                              }`}
+                            >
+                              {item.enabled ? (
+                                <CheckCircle2 className="h-3.5 w-3.5" />
+                              ) : (
+                                <Lock className="h-3 w-3" />
+                              )}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <h5
+                                className={`text-xs font-bold leading-tight ${
+                                  item.enabled
+                                    ? 'text-[#1E2930] dark:text-[#F3F4F6]'
+                                    : 'text-[#667085] dark:text-[#94A3B8] line-through'
+                                }`}
+                              >
+                                {item.label}
+                              </h5>
+                              <p className="text-[10px] text-[#667085] dark:text-[#94A3B8] mt-0.5 line-clamp-2 leading-relaxed">
+                                {item.description}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="mt-3 pt-2 border-t border-[#E7E1DA]/70 dark:border-[#2B3540]/70 flex items-center justify-between text-[10px]">
+                          <span className="text-[#667085] dark:text-[#94A3B8]">Fee Structure:</span>
+                          <span
+                            className={`font-extrabold ${
+                              !item.enabled
+                                ? 'text-[#667085]'
+                                : item.commissionBadge
+                                ? 'text-[#DE8626]'
+                                : 'text-emerald-600 dark:text-emerald-400'
+                            }`}
+                          >
+                            {item.enabled ? (item.commissionBadge ? `${item.commissionBadge} Take-Rate` : 'Included in Plan') : 'Requires Upgrade'}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Action Bar for Selected Plan */}
+              {selectedPlan && (
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-t border-[#E7E1DA] dark:border-[#2B3540] pt-4">
                   <div className="text-xs text-[#667085]">
                     <div>
@@ -1271,27 +1415,34 @@ export const SubscriptionBlockerModal: React.FC = () => {
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    disabled={submitting}
-                    onClick={() => handlePayAndActivate(selectedPlan, isMatchingPlan(selectedPlan))}
-                    className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#DE8626] px-6 py-3 text-xs font-extrabold text-white shadow-lg shadow-[#DE8626]/20 hover:bg-[#C4721C] disabled:opacity-50 transition-all hover:scale-[1.02] active:scale-[0.98]"
-                  >
-                    {submitting ? (
-                      <>
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        <span>Processing...</span>
-                      </>
-                    ) : (
-                      <>
-                        <CreditCard className="h-4 w-4" />
-                        <span>
-                          {isMatchingPlan(selectedPlan) ? 'Renew' : 'Activate'} {selectedPlan.subscriptionName || selectedPlan.planName} (₹{Number(selectedPlan.finalPrice ?? selectedPlan.price ?? 0).toLocaleString('en-IN')})
-                        </span>
-                        <ArrowRight className="h-3.5 w-3.5" />
-                      </>
-                    )}
-                  </button>
+                  {isOwner ? (
+                    <button
+                      type="button"
+                      disabled={submitting}
+                      onClick={() => handlePayAndActivate(selectedPlan, isMatchingPlan(selectedPlan))}
+                      className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[#DE8626] px-6 py-3 text-xs font-extrabold text-white shadow-lg shadow-[#DE8626]/20 hover:bg-[#C4721C] disabled:opacity-50 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
+                    >
+                      {submitting ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          <span>Processing...</span>
+                        </>
+                      ) : (
+                        <>
+                          <CreditCard className="h-4 w-4" />
+                          <span>
+                            {isMatchingPlan(selectedPlan) ? 'Renew Current Plan' : 'Activate Plan'} ({selectedPlan.subscriptionName || selectedPlan.planName} • ₹{Number(selectedPlan.finalPrice ?? selectedPlan.price ?? 0).toLocaleString('en-IN')})
+                          </span>
+                          <ArrowRight className="h-3.5 w-3.5" />
+                        </>
+                      )}
+                    </button>
+                  ) : (
+                    <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-xs text-amber-800 dark:text-amber-200 font-semibold flex items-center gap-2">
+                      <AlertCircle className="h-4 w-4 text-[#DE8626] shrink-0" />
+                      <span>Staff View: You are viewing tier entitlements as a staff member. Only the store owner can process payments or switch tiers.</span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

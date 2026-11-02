@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, StyleProp, ViewStyle } from 'react-native';
 import { Wallet, Plus, AlertCircle, ChevronRight } from 'lucide-react-native';
 import { Colors } from '../../core/theme/colors';
 import { Typography } from '../../core/theme/typography';
@@ -20,12 +20,14 @@ interface WalletBalanceWidgetProps {
   restaurantId?: number;
   onPress?: () => void;
   variant?: 'card' | 'compact' | 'pill';
+  style?: StyleProp<ViewStyle>;
 }
 
 export const WalletBalanceWidget: React.FC<WalletBalanceWidgetProps> = ({
   restaurantId,
   onPress,
   variant = 'card',
+  style,
 }) => {
   const { activeRestaurant } = useAuthStore();
   const [wallet, setWallet] = useState<RestaurantWallet | null>(null);
@@ -82,7 +84,7 @@ export const WalletBalanceWidget: React.FC<WalletBalanceWidgetProps> = ({
     return (
       <>
         <TouchableOpacity
-          style={[styles.pillContainer, isLowBalance && styles.pillLowBalance]}
+          style={[styles.pillContainer, isLowBalance && styles.pillLowBalance, style]}
           onPress={handleOpenModal}
           activeOpacity={0.8}
         >
@@ -90,7 +92,7 @@ export const WalletBalanceWidget: React.FC<WalletBalanceWidgetProps> = ({
           {loading && !wallet ? (
             <SkeletonLoader width={40} height={12} borderRadius={4} />
           ) : (
-            <Text style={styles.pillText}>₹{balance.toLocaleString('en-IN')}</Text>
+            <Text style={styles.pillText} numberOfLines={1}>₹{balance.toLocaleString('en-IN')}</Text>
           )}
           <View style={styles.pillPlus}>
             <Plus size={10} color="#FFFFFF" strokeWidth={3} />

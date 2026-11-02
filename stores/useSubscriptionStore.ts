@@ -71,6 +71,8 @@ interface SubscriptionStoreState {
   ) => Promise<{ success: boolean; isPaid: boolean; message?: string }>;
   canTakeOrders: () => boolean;
   hasEntitlement: (configKey: string) => boolean;
+  isAppAllowed: (appKey: string) => boolean;
+  isFeatureAllowed: (featureKey: string) => boolean;
   reset: () => void;
 }
 
@@ -325,10 +327,78 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
       return false;
     }
     const entitlements = subscription.entitlements || [];
+    const k = configKey.toLowerCase();
+    if (k === 'iskdsenabled' || k === 'iskdsappenabled' || k === 'iscaptainmenzaappenabled') {
+      const match = entitlements.find((e: any) => {
+        const ek = (e.configKey || e.ConfigKey || '').toLowerCase();
+        return ek === 'iskdsenabled' || ek === 'iskdsappenabled' || ek === 'iscaptainmenzaappenabled';
+      });
+      if (match) return Boolean(match.isAllowed ?? (match as any).IsAllowed);
+      return Boolean(subscription.isKdsEnabled ?? subscription.allowKds ?? subscription.isKdsAppEnabled);
+    }
     const item = entitlements.find(
-      (e: any) => (e.configKey || e.ConfigKey || '').toLowerCase() === configKey.toLowerCase()
+      (e: any) => (e.configKey || e.ConfigKey || '').toLowerCase() === k
     );
     return item ? Boolean(item.isAllowed ?? (item as any).IsAllowed) : true;
+  },
+
+  isAppAllowed: (appKey: string): boolean => {
+    const { subscription, lifecycleState, isExpired, isNoSubscription, hasLoaded } = get();
+    if (!hasLoaded) return true;
+    if (isNoSubscription || !subscription || lifecycleState === 'NONE' || lifecycleState === 'EXPIRED' || isExpired) {
+      return false;
+    }
+    const apps = subscription.applications;
+    const k = appKey.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (apps && typeof apps === 'object') {
+      for (const [key, val] of Object.entries(apps)) {
+        if (key.toLowerCase().replace(/[^a-z0-9]/g, '') === k) {
+          return Boolean(val);
+        }
+      }
+    }
+    if (k === 'webpos' || k === 'posweb') {
+      return subscription.isPosWebEnabled ?? true;
+    }
+    return true;
+  },
+
+  isFeatureAllowed: (featureKey: string): boolean => {
+    const { subscription, lifecycleState, isExpired, isNoSubscription, hasLoaded } = get();
+    if (!hasLoaded) return true;
+    if (isNoSubscription || !subscription || lifecycleState === 'NONE' || lifecycleState === 'EXPIRED' || isExpired) {
+      return false;
+    }
+    const feats = subscription.features;
+    const k = featureKey.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (feats && typeof feats === 'object') {
+      for (const [key, val] of Object.entries(feats)) {
+        if (key.toLowerCase().replace(/[^a-z0-9]/g, '') === k) {
+          return Boolean(val);
+        }
+      }
+    }
+    if (k === 'posbilling' || k === 'posterminal') {
+      return subscription.isPosTerminalEnabled ?? subscription.allowCounterOrdering ?? true;
+    }
+    if (k === 'tableconfiguration') {
+      return subscription.isTableConfigurationEnabled ?? true;
+    }
+    if (k === 'advancereservation' || k === 'reservation') {
+      return subscription.isReservationEnabled ?? false;
+    }
+    if (k === 'kitchenrouting' || k === 'kds' || k === 'iskdsenabled' || k === 'iskdsappenabled') {
+      return Boolean(
+        subscription.isKdsEnabled ||
+        subscription.allowKds ||
+        subscription.isKdsAppEnabled ||
+        get().hasEntitlement('IsKdsEnabled')
+      );
+    }
+    if (k === 'reports') {
+      return subscription.isReportsEnabled ?? true;
+    }
+    return get().hasEntitlement(featureKey);
   },
 
   reset: () => {

@@ -16,6 +16,8 @@ const tableStatusListeners = new Set<(tableData: any) => void>();
 const serviceRequestListeners = new Set<(request: any) => void>();
 const serviceRequestResolvedListeners = new Set<(request: any) => void>();
 const paymentVerifiedListeners = new Set<(payment: any) => void>();
+const menuItemAvailabilityListeners = new Set<(itemData: any) => void>();
+const waiterDutyStatusListeners = new Set<(dutyData: any) => void>();
 const reconnectedListeners = new Set<() => void>();
 
 // Browser tab visibility auto-reconnect
@@ -205,6 +207,30 @@ export async function startPosSignalRConnection(restaurantId: number): Promise<v
   };
   connection.on('ServiceRequestResolved', handleServiceResolved);
   connection.on('OnServiceRequestResolved', handleServiceResolved);
+
+  const handleMenuItemAvailability = (data: any) => {
+    menuItemAvailabilityListeners.forEach((listener) => {
+      try {
+        listener(data);
+      } catch (err) {
+        console.warn('[SignalR] Error in OnMenuItemAvailabilityChanged listener:', err);
+      }
+    });
+  };
+  connection.on('OnMenuItemAvailabilityChanged', handleMenuItemAvailability);
+  connection.on('MenuItemAvailabilityChanged', handleMenuItemAvailability);
+
+  const handleWaiterDutyStatus = (data: any) => {
+    waiterDutyStatusListeners.forEach((listener) => {
+      try {
+        listener(data);
+      } catch (err) {
+        console.warn('[SignalR] Error in OnWaiterDutyStatusChanged listener:', err);
+      }
+    });
+  };
+  connection.on('OnWaiterDutyStatusChanged', handleWaiterDutyStatus);
+  connection.on('WaiterDutyStatusChanged', handleWaiterDutyStatus);
 
   connection.on('OnPaymentVerified', (data) => {
     try {

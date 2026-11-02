@@ -53,8 +53,10 @@ import { MenuItem } from '../../../domain/models/Item';
 import { Category } from '../../../domain/models/Category';
 import { UnitMaster } from '../../../domain/models/MasterData';
 import { CatalogRemoteDataSource } from '../../../data/datasources/CatalogRemoteDataSource';
+import { parseDietaryIsVeg } from '../../../core/utils/dietary';
 import { MasterDataRemoteDataSource } from '../../../data/datasources/MasterDataRemoteDataSource';
 import { useAuthStore } from '../../state/useAuthStore';
+import { useSubscriptionStore } from '../../state/useSubscriptionStore';
 import { useKitchenStationStore } from '../../state/useKitchenStationStore';
 import { GildedAlertModal, GildedAlertConfig } from '../../components/GildedAlertModal';
 import { SkeletonLoader } from '../../components/SkeletonLoader';
@@ -130,7 +132,8 @@ interface MenuCatalogScreenProps {
 }
 
 export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose }) => {
-  const { activeRestaurant } = useAuthStore();
+  const { activeRestaurant, user } = useAuthStore();
+  const isSuperAdmin = Boolean(user?.roles?.some((r: any) => ['SUPERADMIN', 'SUPER_ADMIN', 'SUPERADMINONLY'].includes(String(r).toUpperCase().replace(/[^A-Z]/g, ''))));
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [units, setUnits] = useState<UnitMaster[]>([]);
@@ -252,8 +255,11 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
   const verifySubscriptionAndLoadData = async () => {
     try {
       setCheckingSub(true);
-      setHasActiveSub(true);
-      await loadCatalogData();
+      const isAllowed = isSuperAdmin || useSubscriptionStore.getState().canTakeOrders();
+      setHasActiveSub(isAllowed);
+      if (isAllowed) {
+        await loadCatalogData();
+      }
     } catch {
       setHasActiveSub(true);
       await loadCatalogData();
@@ -323,7 +329,7 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
             portionDisplay: it.portionDisplay || (it as any).PortionDisplay || (it.unitName ? `${it.quantity && it.quantity > 0 ? it.quantity : 1} ${it.unitName}` : undefined),
             unitId: it.unitId ? Number(it.unitId) : undefined,
             unitName: it.unitName || '',
-            isVeg: it.isVeg !== undefined ? !!it.isVeg : true,
+            isVeg: parseDietaryIsVeg(it),
             isSpicy: !!it.isSpicy,
             isAvailable: it.isAvailable !== undefined ? !!it.isAvailable : (it.isActive !== undefined ? !!it.isActive : true),
             preparationTimeMinutes: it.preparationTimeMinutes || 15,
@@ -649,7 +655,7 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
     setItemQuantity((item.quantity && item.quantity > 0 ? item.quantity : 1).toString());
     setItemUnitName(item.unitName || '');
     setItemImageUrl(item.imageUrl || '');
-    setItemIsVeg(!!item.isVeg);
+    setItemIsVeg(parseDietaryIsVeg(item));
     setItemIsSpicy(!!item.isSpicy);
     setItemPrepTime((item.preparationTimeMinutes || 15).toString());
     setItemCatId(item.categoryId || 0);
@@ -1205,7 +1211,7 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
                           <View style={[styles.vegBadge, { borderColor: item.isVeg ? '#17845A' : '#DC2626' }]}>
                             <View style={[styles.vegInnerDot, { backgroundColor: item.isVeg ? '#17845A' : '#DC2626' }]} />
                           </View>
-                          <Text style={styles.dishName}>
+                          <Text style={styles.dishName} numberOfLines={1}>
                             {item.itemName}
                           </Text>
 
@@ -2482,7 +2488,7 @@ const styles = StyleSheet.create({
   },
   dishTitleRow: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: 6,
   },
   vegBadge: {
@@ -2492,7 +2498,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 2,
-    marginTop: 3,
   },
   vegInnerDot: {
     width: 4,

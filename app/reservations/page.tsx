@@ -22,6 +22,8 @@ import {
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
+import { ReservationListSkeleton } from '@/components/common/Skeleton';
+import { FeatureGate } from '@/components/subscription/FeatureGate';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { WebReservationService, ReservationResponseDTO, CreateReservationRequestModel } from '@/services/reservationService';
 import { TableRemoteDataSource } from '@shared/data/datasources/TableRemoteDataSource';
@@ -32,6 +34,7 @@ const tableDataSource = new TableRemoteDataSource();
 export default function ReservationsPage() {
   const { activeRestaurant, restaurants } = useAuthStore();
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
+
 
   const [reservations, setReservations] = useState<ReservationResponseDTO[]>([]);
   const [tables, setTables] = useState<TableMaster[]>([]);
@@ -50,6 +53,14 @@ export default function ReservationsPage() {
   const [selectedTableId, setSelectedTableId] = useState<number | undefined>(undefined);
   const [specialNotes, setSpecialNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Clean slate and show skeleton immediately upon restaurant switch
+  useEffect(() => {
+    setReservations([]);
+    setTables([]);
+    setLoading(true);
+  }, [currentRestId]);
+
 
   const loadData = useCallback(async () => {
     if (!currentRestId) return;
@@ -154,6 +165,7 @@ export default function ReservationsPage() {
   return (
     <AuthGuard>
       <AppShell>
+        <FeatureGate feature="advanceReservation" title="Advance Table Reservations" planSuggestion="Dine-In Pro or Enterprise">
         <div className="p-4 sm:p-6 lg:p-8 space-y-6 max-w-7xl mx-auto">
           {/* Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -243,10 +255,8 @@ export default function ReservationsPage() {
           </div>
 
           {/* Reservations List */}
-          {loading ? (
-            <div className="py-16 text-center text-xs text-[#667085] dark:text-[#94A3B8]">
-              Loading reservations...
-            </div>
+          {loading && reservations.length === 0 ? (
+            <ReservationListSkeleton count={6} />
           ) : filteredReservations.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-[#E7E1DA] dark:border-[#2B3540] p-12 text-center">
               <CalendarCheck className="h-10 w-10 text-[#667085] mx-auto mb-3 opacity-40" />
@@ -510,6 +520,7 @@ export default function ReservationsPage() {
             </div>
           </div>
         )}
+        </FeatureGate>
       </AppShell>
     </AuthGuard>
   );

@@ -12,6 +12,8 @@ export interface StaffMember {
   isActive: boolean;
   userRoleId?: number;
   createdAt?: string;
+  staffPin?: string;
+  isPinLoginAllowed?: boolean;
 }
 
 export interface CreateStaffRequest {
@@ -22,4 +24,5 @@ export interface CreateStaffRequest {
   restaurantId: number;
   employeeCode?: string;
   shift?: string;
+  pin?: string;
 }

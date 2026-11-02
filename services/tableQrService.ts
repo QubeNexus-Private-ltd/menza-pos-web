@@ -47,7 +47,7 @@ export class WebTableQrService {
     }
   }
 
-  static async getRollingTableQr(tableId: number, ttlMinutes: number = 5): Promise<TableQrResponseDTO | null> {
+  static async getRollingTableQr(tableId: number, ttlMinutes: number = 15): Promise<TableQrResponseDTO | null> {
     try {
       const response = await apiClient.get(`/TableMaster/${tableId}/rolling-qr`, {
         params: { ttlMinutes },

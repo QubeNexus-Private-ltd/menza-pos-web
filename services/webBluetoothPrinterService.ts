@@ -26,18 +26,101 @@ export const BLE_PRINTER_SERVICE_UUIDS = [
 const STORAGE_KEY_BLE_DEVICE_NAME = '@menza_web_ble_device_name';
 const STORAGE_KEY_BLE_DEVICE_ID = '@menza_web_ble_device_id';
 
+export interface BleConnectionStatus {
+  isConnected: boolean;
+  isConnecting: boolean;
+  deviceName: string | null;
+  hasSavedDevice: boolean;
+}
+
+export type BleStatusListener = (status: BleConnectionStatus) => void;
+
 export class WebBluetoothPrinterService {
   private static instance: WebBluetoothPrinterService;
   private device: any = null;
   private server: any = null;
   private characteristic: any = null;
   private isConnecting = false;
+  private reconnectPromise: Promise<boolean> | null = null;
+  private boundOnDisconnected = this.onDisconnected.bind(this);
+  private statusListeners = new Set<BleStatusListener>();
 
   public static getInstance(): WebBluetoothPrinterService {
     if (!WebBluetoothPrinterService.instance) {
       WebBluetoothPrinterService.instance = new WebBluetoothPrinterService();
+      // Silently attempt auto-reconnect in the background if a saved device is known
+      if (typeof window !== 'undefined') {
+        setTimeout(() => {
+          WebBluetoothPrinterService.instance.autoReconnect(true).catch(() => {});
+        }, 300);
+      }
     }
     return WebBluetoothPrinterService.instance;
+  }
+
+  /**
+   * Subscribe to real-time Bluetooth connection state changes
+   */
+  public onStatusChange(listener: BleStatusListener): () => void {
+    this.statusListeners.add(listener);
+    // Immediately emit current state
+    listener(this.getStatus());
+    return () => {
+      this.statusListeners.delete(listener);
+    };
+  }
+
+  private notifyListeners(): void {
+    const status = this.getStatus();
+    this.statusListeners.forEach((listener) => {
+      try {
+        listener(status);
+      } catch (err) {
+        console.warn('[WebBluetoothPrinter] Status listener error:', err);
+      }
+    });
+  }
+
+  public getStatus(): BleConnectionStatus {
+    return {
+      isConnected: this.isConnected(),
+      isConnecting: this.isConnecting,
+      deviceName: this.getConnectedDeviceName(),
+      hasSavedDevice: this.hasSavedDevice(),
+    };
+  }
+
+  /**
+   * Returns true if a device was previously paired and stored in localStorage
+   */
+  public hasSavedDevice(): boolean {
+    if (typeof window === 'undefined') return false;
+    try {
+      return Boolean(
+        window.localStorage.getItem(STORAGE_KEY_BLE_DEVICE_NAME) ||
+        window.localStorage.getItem(STORAGE_KEY_BLE_DEVICE_ID)
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  public getSavedDeviceName(): string | null {
+    if (typeof window === 'undefined') return null;
+    try {
+      return window.localStorage.getItem(STORAGE_KEY_BLE_DEVICE_NAME);
+    } catch {
+      return null;
+    }
+  }
+
+  public getSavedDeviceId(): string | null {
+    if (typeof window === 'undefined') return null;
+    try {
+      return window.localStorage.getItem(STORAGE_KEY_BLE_DEVICE_ID);
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -65,6 +148,10 @@ export class WebBluetoothPrinterService {
     );
   }
 
+  public isConnectingBle(): boolean {
+    return this.isConnecting;
+  }
+
   /**
    * Returns the name of the currently or last connected device
    */
@@ -72,12 +159,120 @@ export class WebBluetoothPrinterService {
     if (this.device?.name) {
       return this.device.name;
     }
-    if (typeof window !== 'undefined') {
-      try {
-        return window.localStorage.getItem(STORAGE_KEY_BLE_DEVICE_NAME);
-      } catch {}
+    return this.getSavedDeviceName();
+  }
+
+  /**
+   * Automatically re-establishes connection to previously paired Bluetooth printer.
+   * Leverages navigator.bluetooth.getDevices() to restore connection without UI pickers.
+   */
+  public async autoReconnect(silent = true): Promise<boolean> {
+    if (!this.isSupported()) return false;
+    if (this.isConnected()) return true;
+
+    // Deduplicate concurrent auto-reconnect attempts
+    if (this.reconnectPromise) {
+      return this.reconnectPromise;
     }
-    return null;
+
+    this.reconnectPromise = (async () => {
+      try {
+        this.isConnecting = true;
+        this.notifyListeners();
+
+        const nav = navigator as any;
+
+        // 1. If we already have a device reference in memory, try to reconnect its GATT server
+        if (this.device) {
+          try {
+            const server = await Promise.race([
+              this.device.gatt.connect(),
+              new Promise<never>((_, reject) => setTimeout(() => reject(new Error('GATT connect timeout')), 4500)),
+            ]);
+            this.server = server;
+            const char = await this.findWriteCharacteristic(server);
+            if (char) {
+              this.characteristic = char;
+              console.log(`[WebBluetoothPrinter] Reconnected to existing device "${this.device.name}"`);
+              return true;
+            }
+          } catch (e) {
+            // Fall through to getDevices() lookup
+          }
+        }
+
+        // 2. Query previously permitted devices from browser permissions storage
+        if (typeof nav.bluetooth?.getDevices === 'function') {
+          const devices: any[] = await nav.bluetooth.getDevices();
+          if (devices && devices.length > 0) {
+            const savedId = this.getSavedDeviceId();
+            const savedName = this.getSavedDeviceName();
+
+            const matched =
+              devices.find((d: any) => savedId && d.id === savedId) ||
+              devices.find((d: any) => savedName && d.name === savedName) ||
+              (savedId || savedName ? null : devices[0]);
+
+            if (matched) {
+              this.device = matched;
+              matched.removeEventListener('gattserverdisconnected', this.boundOnDisconnected);
+              matched.addEventListener('gattserverdisconnected', this.boundOnDisconnected);
+
+              try {
+                const server = await Promise.race([
+                  matched.gatt.connect(),
+                  new Promise<never>((_, reject) => setTimeout(() => reject(new Error('GATT connect timeout')), 5000)),
+                ]);
+                this.server = server;
+                const char = await this.findWriteCharacteristic(server);
+                if (char) {
+                  this.characteristic = char;
+                  console.log(`[WebBluetoothPrinter] Successfully restored connection to "${matched.name}" via getDevices()`);
+                  return true;
+                }
+              } catch (connErr) {
+                if (!silent) {
+                  console.warn('[WebBluetoothPrinter] GATT connect to matched device failed:', connErr);
+                }
+              }
+            }
+          }
+        }
+
+        return false;
+      } catch (err: any) {
+        if (!silent) {
+          console.warn('[WebBluetoothPrinter] autoReconnect error:', err?.message || err);
+        }
+        return false;
+      } finally {
+        this.isConnecting = false;
+        this.reconnectPromise = null;
+        this.notifyListeners();
+      }
+    })();
+
+    return this.reconnectPromise;
+  }
+
+  /**
+   * Explicit user-triggered reconnect to the previously saved printer
+   */
+  public async reconnect(): Promise<{ success: boolean; deviceName?: string; message: string }> {
+    const savedName = this.getSavedDeviceName() || 'Bluetooth Printer';
+    const ok = await this.autoReconnect(false);
+    if (ok) {
+      return {
+        success: true,
+        deviceName: this.getConnectedDeviceName() || savedName,
+        message: `Successfully reconnected to "${this.getConnectedDeviceName() || savedName}"!`,
+      };
+    }
+
+    return {
+      success: false,
+      message: `Could not connect to "${savedName}". Please make sure the printer is turned ON and within Bluetooth range, or click Pair to select again.`,
+    };
   }
 
   /**
@@ -115,7 +310,8 @@ export class WebBluetoothPrinterService {
       }
 
       this.device = device;
-      device.addEventListener('gattserverdisconnected', this.onDisconnected.bind(this));
+      device.removeEventListener('gattserverdisconnected', this.boundOnDisconnected);
+      device.addEventListener('gattserverdisconnected', this.boundOnDisconnected);
 
       // Connect to GATT server
       const server = await device.gatt.connect();
@@ -132,7 +328,7 @@ export class WebBluetoothPrinterService {
 
       this.characteristic = characteristic;
 
-      // Persist device name in localStorage for seamless UI tracking
+      // Persist device name in localStorage for seamless UI tracking across reloads
       const devName = device.name || 'Thermal BLE Printer';
       if (typeof window !== 'undefined') {
         try {
@@ -142,6 +338,8 @@ export class WebBluetoothPrinterService {
           }
         } catch {}
       }
+
+      this.notifyListeners();
 
       return {
         success: true,
@@ -158,11 +356,12 @@ export class WebBluetoothPrinterService {
       };
     } finally {
       this.isConnecting = false;
+      this.notifyListeners();
     }
   }
 
   /**
-   * Disconnects the active Bluetooth LE session
+   * Disconnects the active Bluetooth LE session without forgetting the paired printer
    */
   public async disconnect(): Promise<void> {
     try {
@@ -171,6 +370,23 @@ export class WebBluetoothPrinterService {
       }
     } catch (e) {
       console.warn('Error disconnecting BLE device:', e);
+    } finally {
+      this.server = null;
+      this.characteristic = null;
+      this.notifyListeners();
+    }
+  }
+
+  /**
+   * Completely forgets the paired printer and removes saved credentials from storage
+   */
+  public async forgetDevice(): Promise<void> {
+    try {
+      if (this.device?.gatt?.connected) {
+        this.device.gatt.disconnect();
+      }
+    } catch (e) {
+      console.warn('Error disconnecting BLE device on forget:', e);
     } finally {
       this.device = null;
       this.server = null;
@@ -181,24 +397,23 @@ export class WebBluetoothPrinterService {
           window.localStorage.removeItem(STORAGE_KEY_BLE_DEVICE_ID);
         } catch {}
       }
+      this.notifyListeners();
     }
   }
 
   /**
-   * Sends raw ESC/POS binary data to the thermal printer in throttled chunks
+   * Sends raw ESC/POS binary data to the thermal printer in throttled chunks.
+   * Automatically re-establishes connection if session dropped or refreshed.
    */
   public async print(bytes: number[] | Uint8Array): Promise<boolean> {
     if (!this.isConnected()) {
-      // Attempt auto-reconnect if device reference is present
-      if (this.device && !this.device.gatt?.connected) {
-        try {
-          const server = await this.device.gatt.connect();
-          this.server = server;
-          this.characteristic = await this.findWriteCharacteristic(server);
-        } catch {
-          throw new Error('Bluetooth printer is disconnected. Please reconnect from settings.');
+      // Seamlessly auto-reconnect before printing
+      const reconnected = await this.autoReconnect(false);
+      if (!reconnected) {
+        const savedName = this.getSavedDeviceName();
+        if (savedName) {
+          throw new Error(`Bluetooth printer "${savedName}" is offline or disconnected. Please check that printer power is ON.`);
         }
-      } else {
         throw new Error('No Bluetooth thermal printer connected. Pair a printer first.');
       }
     }
@@ -281,5 +496,6 @@ export class WebBluetoothPrinterService {
     console.log('[WebBluetoothPrinter] Device disconnected');
     this.server = null;
     this.characteristic = null;
+    this.notifyListeners();
   }
 }

@@ -215,7 +215,15 @@ class Logger {
       | 'TOKEN_REFRESH_FAILED'
       | 'TERMS_ACCEPTED'
       | 'LOGOUT_STARTED'
-      | 'LOGOUT_COMPLETED',
+      | 'LOGOUT_COMPLETED'
+      | 'STAFF_PIN_SAVED'
+      | 'PIN_LOCK_TOGGLED'
+      | 'POS_PIN_LOCKED'
+      | 'POS_PIN_UNLOCKED'
+      | 'POS_PIN_UNLOCK_FAILED'
+      | 'POS_PIN_OFFLINE_FALLBACK'
+      | 'STAFF_PIN_SYNCED_BACKEND'
+      | 'STAFF_PIN_CONFIGURED',
     message: string,
     metadata?: Record<string, any>
   ): void {

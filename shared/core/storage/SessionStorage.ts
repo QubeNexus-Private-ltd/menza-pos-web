@@ -11,6 +11,12 @@ const STORAGE_KEYS = {
   ACTIVE_RESTAURANT: '@menza_session_active_restaurant',
   ONBOARDING_COMPLETED: '@menza_has_completed_onboarding',
   TERMS_ACCEPTED: '@menza_has_accepted_terms',
+  STAFF_PIN: '@menza_staff_pin',
+  IS_PIN_LOCK_ENABLED: '@menza_is_pin_lock_enabled',
+  ACTIVE_STAFF_NAME: '@menza_active_staff_name',
+  REMEMBERED_MOBILE: '@menza_remembered_mobile',
+  IS_PIN_LOCKED: '@menza_is_pin_locked',
+  LAST_UNLOCKED_AT: '@menza_last_unlocked_at',
 };
 
 export interface PersistedSession {
@@ -21,22 +27,48 @@ export interface PersistedSession {
   activeRestaurant: RestaurantDetail | null;
   hasCompletedOnboarding: boolean;
   hasAcceptedTerms: boolean;
+  staffPin?: string | null;
+  isPinLockEnabled?: boolean;
+  activeStaffName?: string | null;
+  rememberedMobile?: string | null;
+  isPinLocked?: boolean | null;
+  lastUnlockedAt?: number | null;
 }
 
 export class SessionStorage {
+  /**
+   * Check if terms & conditions were accepted on this device
+   */
+  static async isTermsAccepted(): Promise<boolean> {
+    try {
+      const val = await AsyncStorage.getItem(STORAGE_KEYS.TERMS_ACCEPTED);
+      return val === 'true';
+    } catch {
+      return false;
+    }
+  }
+
   /**
    * Persist full user session after successful login / OTP verification
    */
   static async saveSession(session: PersistedSession): Promise<void> {
 
     try {
+      let isTermsAccepted = session.hasAcceptedTerms;
+      if (!isTermsAccepted) {
+        const storedTerms = await AsyncStorage.getItem(STORAGE_KEYS.TERMS_ACCEPTED);
+        if (storedTerms === 'true') {
+          isTermsAccepted = true;
+        }
+      }
+
       const items: [string, string][] = [
         [STORAGE_KEYS.TOKEN, session.token || ''],
         [STORAGE_KEYS.REFRESH_TOKEN, session.refreshToken || ''],
         [STORAGE_KEYS.USER, JSON.stringify(session.user || null)],
         [STORAGE_KEYS.RESTAURANTS, JSON.stringify(session.restaurants || [])],
         [STORAGE_KEYS.ONBOARDING_COMPLETED, 'true'],
-        [STORAGE_KEYS.TERMS_ACCEPTED, session.hasAcceptedTerms ? 'true' : 'false'],
+        [STORAGE_KEYS.TERMS_ACCEPTED, isTermsAccepted ? 'true' : 'false'],
       ];
 
       if (session.activeRestaurant) {
@@ -44,6 +76,10 @@ export class SessionStorage {
           STORAGE_KEYS.ACTIVE_RESTAURANT, 
           session.activeRestaurant ? JSON.stringify(session.activeRestaurant) : '',
         ]);
+      }
+
+      if (session.user?.mobile) {
+        items.push([STORAGE_KEYS.REMEMBERED_MOBILE, session.user.mobile]);
       }
 
       await AsyncStorage.multiSet(items);
@@ -66,6 +102,12 @@ export class SessionStorage {
         STORAGE_KEYS.ACTIVE_RESTAURANT,
         STORAGE_KEYS.ONBOARDING_COMPLETED,
         STORAGE_KEYS.TERMS_ACCEPTED,
+        STORAGE_KEYS.STAFF_PIN,
+        STORAGE_KEYS.IS_PIN_LOCK_ENABLED,
+        STORAGE_KEYS.ACTIVE_STAFF_NAME,
+        STORAGE_KEYS.REMEMBERED_MOBILE,
+        STORAGE_KEYS.IS_PIN_LOCKED,
+        STORAGE_KEYS.LAST_UNLOCKED_AT,
       ];
 
       const stores = await AsyncStorage.multiGet(keys);
@@ -78,6 +120,14 @@ export class SessionStorage {
       const refreshToken = data[STORAGE_KEYS.REFRESH_TOKEN] || null;
       const hasCompletedOnboarding = data[STORAGE_KEYS.ONBOARDING_COMPLETED] === 'true';
       const hasAcceptedTerms = data[STORAGE_KEYS.TERMS_ACCEPTED] === 'true';
+      const staffPin = data[STORAGE_KEYS.STAFF_PIN] || null;
+      const isPinLockEnabled = data[STORAGE_KEYS.IS_PIN_LOCK_ENABLED] === 'true';
+      const activeStaffName = data[STORAGE_KEYS.ACTIVE_STAFF_NAME] || null;
+      const rememberedMobile = data[STORAGE_KEYS.REMEMBERED_MOBILE] || null;
+      const isPinLockedRaw = data[STORAGE_KEYS.IS_PIN_LOCKED];
+      const isPinLocked = isPinLockedRaw !== null && isPinLockedRaw !== undefined ? isPinLockedRaw === 'true' : null;
+      const lastUnlockedAtRaw = data[STORAGE_KEYS.LAST_UNLOCKED_AT];
+      const lastUnlockedAt = lastUnlockedAtRaw ? Number(lastUnlockedAtRaw) : null;
 
       let user: User | null = null;
       let restaurants: RestaurantDetail[] = [];
@@ -115,6 +165,12 @@ export class SessionStorage {
         activeRestaurant,
         hasCompletedOnboarding,
         hasAcceptedTerms,
+        staffPin,
+        isPinLockEnabled,
+        activeStaffName,
+        rememberedMobile: rememberedMobile || user?.mobile || null,
+        isPinLocked,
+        lastUnlockedAt,
       };
     } catch (err: any) {
       logger.api('API_ERROR', 'Failed to load session from AsyncStorage', { error: err?.message });
@@ -126,7 +182,27 @@ export class SessionStorage {
         activeRestaurant: null,
         hasCompletedOnboarding: false,
         hasAcceptedTerms: false,
+        staffPin: null,
+        isPinLockEnabled: false,
+        activeStaffName: null,
+        rememberedMobile: null,
+        isPinLocked: null,
+        lastUnlockedAt: null,
       };
+    }
+  }
+
+  static async saveRememberedMobile(mobile: string): Promise<void> {
+    try {
+      await AsyncStorage.setItem(STORAGE_KEYS.REMEMBERED_MOBILE, mobile);
+    } catch {}
+  }
+
+  static async getRememberedMobile(): Promise<string | null> {
+    try {
+      return await AsyncStorage.getItem(STORAGE_KEYS.REMEMBERED_MOBILE);
+    } catch {
+      return null;
     }
   }
 
@@ -183,6 +259,13 @@ export class SessionStorage {
    */
   static async saveTermsAccepted(status: boolean): Promise<void> {
     try {
+      // Once accepted, never revert to false on this device
+      if (!status) {
+        const alreadyAccepted = await SessionStorage.isTermsAccepted();
+        if (alreadyAccepted) {
+          return;
+        }
+      }
       await AsyncStorage.setItem(STORAGE_KEYS.TERMS_ACCEPTED, status ? 'true' : 'false');
       logger.auth('TERMS_ACCEPTED', `Terms acceptance status saved: ${status}`);
     } catch (err: any) {
@@ -201,10 +284,69 @@ export class SessionStorage {
         STORAGE_KEYS.USER,
         STORAGE_KEYS.RESTAURANTS,
         STORAGE_KEYS.ACTIVE_RESTAURANT,
+        STORAGE_KEYS.IS_PIN_LOCKED,
+        STORAGE_KEYS.LAST_UNLOCKED_AT,
       ]);
       logger.auth('LOGOUT_COMPLETED', 'Session cleared from AsyncStorage');
     } catch (err: any) {
       logger.api('API_ERROR', 'Failed to clear session from AsyncStorage', { error: err?.message });
+    }
+  }
+
+  /**
+   * Persist terminal PIN locked state
+   */
+  static async savePinLocked(isLocked: boolean): Promise<void> {
+    try {
+      await AsyncStorage.setItem(STORAGE_KEYS.IS_PIN_LOCKED, isLocked ? 'true' : 'false');
+    } catch (err: any) {
+      logger.api('API_ERROR', 'Failed to save PIN locked state in storage', { error: err?.message });
+    }
+  }
+
+  /**
+   * Persist last unlocked timestamp for inactivity auto-lock calculation
+   */
+  static async saveLastUnlockedAt(timestamp: number): Promise<void> {
+    try {
+      await AsyncStorage.setItem(STORAGE_KEYS.LAST_UNLOCKED_AT, String(timestamp));
+    } catch (err: any) {
+      logger.api('API_ERROR', 'Failed to save last unlocked timestamp in storage', { error: err?.message });
+    }
+  }
+
+  /**
+   * Persist custom staff unlock PIN
+   */
+  static async saveStaffPin(pin: string): Promise<void> {
+    try {
+      await AsyncStorage.setItem(STORAGE_KEYS.STAFF_PIN, pin);
+      logger.auth('STAFF_PIN_SAVED', 'Staff unlock PIN saved in storage');
+    } catch (err: any) {
+      logger.api('API_ERROR', 'Failed to save staff PIN in storage', { error: err?.message });
+    }
+  }
+
+  /**
+   * Persist PIN lock enabled toggle
+   */
+  static async savePinLockEnabled(enabled: boolean): Promise<void> {
+    try {
+      await AsyncStorage.setItem(STORAGE_KEYS.IS_PIN_LOCK_ENABLED, enabled ? 'true' : 'false');
+      logger.auth('PIN_LOCK_TOGGLED', `PIN lock enabled setting saved: ${enabled}`);
+    } catch (err: any) {
+      logger.api('API_ERROR', 'Failed to save PIN lock enabled setting', { error: err?.message });
+    }
+  }
+
+  /**
+   * Persist current active staff operator name
+   */
+  static async saveActiveStaffName(name: string): Promise<void> {
+    try {
+      await AsyncStorage.setItem(STORAGE_KEYS.ACTIVE_STAFF_NAME, name);
+    } catch (err: any) {
+      logger.api('API_ERROR', 'Failed to save active staff name', { error: err?.message });
     }
   }
 }

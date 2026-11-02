@@ -40,6 +40,8 @@ import {
   Trash2,
   Power,
   Utensils,
+  Lock,
+  ChevronRight,
 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Colors } from '../../core/theme/colors';
@@ -49,6 +51,8 @@ import { RestaurantConfigRemoteDataSource } from '../../data/datasources/Restaur
 import { StoreOperatingStatus, RestaurantOperatingHistoryEntry } from '../../domain/models/RestaurantConfig';
 import { useKitchenStationStore } from '../state/useKitchenStationStore';
 import { useAuthStore } from '../state/useAuthStore';
+import { useSubscriptionStore, isTableOrderSubscriptionAllowed, extractTableOrderFlag } from '../state/useSubscriptionStore';
+import { apiCacheManager } from '../../core/network/apiClient';
 import { canConfigureKitchenStations } from '../../core/auth/rolePermissions';
 
 const configDataSource = new RestaurantConfigRemoteDataSource();
@@ -63,6 +67,7 @@ interface StoreOperatingStatusModalProps {
   initialStatus?: StoreOperatingStatus | null;
   isTableOrderingAllowed?: boolean;
   onEditHours?: () => void;
+  onUpgradePlan?: () => void;
   onStatusUpdated?: (status: StoreOperatingStatus) => void;
   onProfileUpdated?: (profile: 'QSR_CAFE' | 'DINE_IN' | 'HYBRID') => void;
 }
@@ -74,26 +79,63 @@ export const StoreOperatingStatusModal: React.FC<StoreOperatingStatusModalProps>
   restaurantName,
   isOwnerOrAdmin = false,
   initialStatus,
-  isTableOrderingAllowed = true,
+  isTableOrderingAllowed,
   onEditHours,
+  onUpgradePlan,
   onStatusUpdated,
   onProfileUpdated,
 }) => {
   const [loading, setLoading] = useState<boolean>(!initialStatus);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [status, setStatus] = useState<StoreOperatingStatus | null>(initialStatus || null);
-  const [selectedProfile, setSelectedProfile] = useState<'QSR_CAFE' | 'DINE_IN' | 'HYBRID'>(
-    isTableOrderingAllowed ? 'HYBRID' : 'QSR_CAFE'
+
+  // Auth role checking: Owner, Cashier, Manager can configure stations
+  const { user, activeRestaurant } = useAuthStore();
+  const canManageStations = canConfigureKitchenStations(user, activeRestaurant) || isOwnerOrAdmin;
+  const isSuperAdmin = Boolean(
+    user?.roles?.some((r) =>
+      ['SUPERADMIN', 'SUPER_ADMIN', 'SUPERADMINONLY'].includes(r.toUpperCase().replace(/[^A-Z]/g, ''))
+    ) || ((user as any)?.roleName && String((user as any).roleName).toLowerCase().includes('superadmin'))
   );
+
+  // Subscription check: verify if isTableOrder / istableorder is true
+  const { subscription: storeSub, plans, fetchSubscriptionStatus } = useSubscriptionStore();
+  const isTableOrderAllowed = React.useMemo(() => {
+    if (isSuperAdmin) return true;
+
+    // 1. Parent passed flag (from AdminDashboard or OrderPosScreen)
+    if (typeof isTableOrderingAllowed === 'boolean') {
+      return isTableOrderingAllowed;
+    }
+
+    // 2. Active Subscription check
+    if (storeSub) {
+      return isTableOrderSubscriptionAllowed(storeSub, plans);
+    }
+
+    // 3. Fallback check activeRestaurant in authStore
+    if (activeRestaurant) {
+      const restFlag = extractTableOrderFlag(activeRestaurant);
+      if (restFlag !== undefined) return restFlag;
+    }
+
+    return false;
+  }, [isSuperAdmin, storeSub, plans, isTableOrderingAllowed, activeRestaurant]);
+
+  const [selectedProfile, setSelectedProfile] = useState<'QSR_CAFE' | 'DINE_IN' | 'HYBRID'>(
+    (isTableOrderAllowed && initialStatus?.businessProfile) || (initialStatus?.businessProfile === 'QSR_CAFE' ? 'QSR_CAFE' : (isTableOrderAllowed ? 'HYBRID' : 'QSR_CAFE'))
+  );
+
+  useEffect(() => {
+    if (!isTableOrderAllowed && selectedProfile !== 'QSR_CAFE') {
+      setSelectedProfile('QSR_CAFE');
+    }
+  }, [isTableOrderAllowed, selectedProfile]);
   const [profileLoading, setProfileLoading] = useState<boolean>(false);
   const [stationActionLoading, setStationActionLoading] = useState<string | null>(null);
   const [history, setHistory] = useState<RestaurantOperatingHistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState<boolean>(false);
   const [showHistory, setShowHistory] = useState<boolean>(false);
-
-  // Auth role checking: Owner, Cashier, Manager can configure stations
-  const { user, activeRestaurant } = useAuthStore();
-  const canManageStations = canConfigureKitchenStations(user, activeRestaurant) || isOwnerOrAdmin;
 
   const {
     stations,
@@ -117,6 +159,10 @@ export const StoreOperatingStatusModal: React.FC<StoreOperatingStatusModalProps>
   const [stationIsActive, setStationIsActive] = useState<boolean>(true);
 
   const handleOpenAddStation = () => {
+    if (!isKdsAllowed) {
+      promptKdsUpgrade('Adding Kitchen Stations');
+      return;
+    }
     setEditingStationId(null);
     setStationCode('');
     setStationName('');
@@ -219,6 +265,10 @@ export const StoreOperatingStatusModal: React.FC<StoreOperatingStatusModalProps>
 
   const handleInitializeDefaults = async () => {
     if (!restaurantId || restaurantId <= 0) return;
+    if (!isKdsAllowed) {
+      promptKdsUpgrade('Standard Kitchen Stations Setup');
+      return;
+    }
     Alert.alert(
       'Initialize Standard 7 Stations?',
       'This will set up standard kitchen stations (Tandoor & Grill, Curries & Rice, Chinese & Wok, Beverages & Bar, Desserts & Bakery, Starters & Snacks, Main Kitchen).',
@@ -256,14 +306,41 @@ export const StoreOperatingStatusModal: React.FC<StoreOperatingStatusModalProps>
     }
   }, [restaurantId]);
 
+  const fetchStatus = useCallback(async (isSilent = false, forceRefresh = false) => {
+    if (!restaurantId || restaurantId <= 0) return;
+    try {
+      if (!isSilent) setLoading(true);
+      const res = await configDataSource.getOperatingStatus(restaurantId, forceRefresh);
+      if (res) {
+        setStatus(res);
+        if (res.businessProfile) {
+          setSelectedProfile(res.businessProfile as any);
+        }
+        onStatusUpdatedRef.current?.(res);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
+  }, [restaurantId]);
+
   useEffect(() => {
     if (visible && restaurantId > 0) {
+      apiCacheManager.invalidate('/Subscription');
+      apiCacheManager.invalidate('/RestaurantConfig');
       fetchStations(restaurantId);
       fetchHistory();
+      fetchSubscriptionStatus(restaurantId, true);
+      fetchStatus(Boolean(status || initialStatus), true);
     }
-  }, [visible, restaurantId, fetchStations, fetchHistory]);
+  }, [visible, restaurantId, fetchStations, fetchHistory, fetchSubscriptionStatus, fetchStatus]);
 
   const handleToggleStationActive = async (st: any) => {
+    if (!isKdsAllowed) {
+      promptKdsUpgrade('Toggling Kitchen Station Active Status');
+      return;
+    }
     try {
       setStationActionLoading(`active_${st.id}`);
       await toggleStationStatus(st.id, { isActive: !st.isActive, pauseMinutes: 0 });
@@ -305,11 +382,17 @@ export const StoreOperatingStatusModal: React.FC<StoreOperatingStatusModalProps>
 
   useEffect(() => {
     if (status?.businessProfile) {
-      setSelectedProfile(status.businessProfile as any);
+      if (isTableOrderAllowed || status.businessProfile === 'QSR_CAFE') {
+        setSelectedProfile(status.businessProfile as any);
+      } else {
+        setSelectedProfile('QSR_CAFE');
+      }
+    } else if (isTableOrderAllowed) {
+      setSelectedProfile('HYBRID');
     } else {
-      setSelectedProfile(isTableOrderingAllowed ? 'HYBRID' : 'QSR_CAFE');
+      setSelectedProfile('QSR_CAFE');
     }
-  }, [status?.businessProfile, isTableOrderingAllowed]);
+  }, [status?.businessProfile, isTableOrderAllowed]);
 
   const onStatusUpdatedRef = React.useRef(onStatusUpdated);
   useEffect(() => {
@@ -320,36 +403,15 @@ export const StoreOperatingStatusModal: React.FC<StoreOperatingStatusModalProps>
     if (initialStatus) {
       setStatus(initialStatus);
       if (initialStatus.businessProfile) {
-        setSelectedProfile(initialStatus.businessProfile as any);
-      }
-      setLoading(false);
-    }
-  }, [initialStatus]);
-
-  const fetchStatus = useCallback(async (isSilent = false) => {
-    if (!restaurantId || restaurantId <= 0) return;
-    try {
-      if (!isSilent) setLoading(true);
-      const res = await configDataSource.getOperatingStatus(restaurantId);
-      if (res) {
-        setStatus(res);
-        if (res.businessProfile) {
-          setSelectedProfile(res.businessProfile as any);
+        if (isTableOrderAllowed || initialStatus.businessProfile === 'QSR_CAFE') {
+          setSelectedProfile(initialStatus.businessProfile as any);
+        } else {
+          setSelectedProfile('QSR_CAFE');
         }
-        onStatusUpdatedRef.current?.(res);
       }
-    } catch {
-      // ignore
-    } finally {
       setLoading(false);
     }
-  }, [restaurantId]);
-
-  useEffect(() => {
-    if (visible && restaurantId > 0) {
-      fetchStatus(Boolean(status || initialStatus));
-    }
-  }, [visible, restaurantId]);
+  }, [initialStatus, isTableOrderAllowed]);
 
   const handleToggle = async (
     options: {
@@ -395,7 +457,54 @@ export const StoreOperatingStatusModal: React.FC<StoreOperatingStatusModalProps>
       ? (status as any).status.isKitchenActive
       : status?.isKitchenActive !== false;
 
+  const isKdsAllowed = React.useMemo(() => {
+    if (isSuperAdmin) return true;
+    const sub = storeSub || useSubscriptionStore.getState().subscription;
+    if (sub) {
+      if ((sub as any).allowKds || (sub as any).isKdsAppEnabled) return true;
+    }
+    return (
+      useSubscriptionStore.getState().isFeatureAllowed('kitchenRouting') ||
+      useSubscriptionStore.getState().hasEntitlement('IsKdsEnabled') ||
+      useSubscriptionStore.getState().isAppAllowed('kdsApp')
+    );
+  }, [isSuperAdmin, storeSub]);
+
+  const promptKdsUpgrade = (featureName = 'Multi-Station Kitchen Routing') => {
+    Alert.alert(
+      `${featureName} Locked 🔒`,
+      'Configuring custom preparation stations, multi-station order routing, and live kitchen tracking require a subscription plan with Kitchen Routing enabled.\n\nUpgrade your plan to unlock.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Upgrade Plan',
+          onPress: () => {
+            if (onUpgradePlan) onUpgradePlan();
+            else useSubscriptionStore.getState().openRenewalModal();
+          },
+        },
+      ]
+    );
+  };
+
   const handleToggleKitchenActive = async () => {
+    if (!isKdsAllowed && !isKitchenActive) {
+      Alert.alert(
+        'Live KDS Tracking Locked 🔒',
+        'Live Kitchen Display System (KDS), multi-station routing, and cooking timers require a subscription plan with Kitchen Routing enabled.\n\nUpgrade your plan to unlock live kitchen operations.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Upgrade Plan',
+            onPress: () => {
+              if (onUpgradePlan) onUpgradePlan();
+              else useSubscriptionStore.getState().openRenewalModal();
+            },
+          },
+        ]
+      );
+      return;
+    }
     const nextVal = !isKitchenActive;
     setStatus((prev) => (prev ? { ...prev, isKitchenActive: nextVal } : prev));
     await handleToggle({ isKitchenActive: nextVal }, 'toggleKitchenActive');
@@ -407,8 +516,36 @@ export const StoreOperatingStatusModal: React.FC<StoreOperatingStatusModalProps>
     );
   };
 
+  const handleLockedProfilePress = (profileName: string) => {
+    Alert.alert(
+      `${profileName} Mode Locked 🔒`,
+      `${profileName} mode requires Table Ordering (isTableOrder) in your active subscription plan.\n\nUpgrade your plan to unlock interactive QR tables, running tabs, and live floor management.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        ...(onUpgradePlan
+          ? [
+              {
+                text: 'View Upgrade Plans',
+                style: 'default' as const,
+                onPress: () => {
+                  onClose();
+                  setTimeout(() => {
+                    onUpgradePlan?.();
+                  }, 250);
+                },
+              },
+            ]
+          : [{ text: 'OK', style: 'default' as const }]),
+      ]
+    );
+  };
+
   const handleProfileChange = async (profile: 'QSR_CAFE' | 'DINE_IN' | 'HYBRID') => {
     if (!restaurantId || restaurantId <= 0) return;
+    if ((profile === 'DINE_IN' || profile === 'HYBRID') && !isTableOrderAllowed) {
+      handleLockedProfilePress(profile === 'DINE_IN' ? 'Dine-In Restaurant' : 'Hybrid Store');
+      return;
+    }
     try {
       setProfileLoading(true);
       setSelectedProfile(profile);
@@ -657,106 +794,56 @@ export const StoreOperatingStatusModal: React.FC<StoreOperatingStatusModalProps>
                   </View>
                 )}
 
-                {/* 2. Store Business Profile Selector (QSR vs Dine-In vs Hybrid) */}
+                {/* 2. Store Business Profile Summary (Configured in Store Settings) */}
                 <View style={styles.sectionContainer}>
-                  <View style={styles.sectionHeaderRow}>
-                    <Store size={14} color="#DE8626" />
-                    <Text style={styles.sectionTitle}>STORE BUSINESS PROFILE</Text>
-                  </View>
-                  <Text style={styles.sectionDesc}>
-                    Select how ordering and seating operate for this outlet.
-                  </Text>
-
-                  <View style={styles.serviceProfileCol}>
-                    {/* Option 1: Quick Cafe / QSR */}
-                    <TouchableOpacity
-                      style={[
-                        styles.profileOptionCard,
-                        selectedProfile === 'QSR_CAFE' && styles.profileOptionCardActive,
-                      ]}
-                      onPress={() => handleProfileChange('QSR_CAFE')}
-                      disabled={profileLoading}
-                      activeOpacity={0.8}
-                    >
-                      <View style={styles.profileOptionHeader}>
-                        <View style={[styles.profileIconBox, selectedProfile === 'QSR_CAFE' && styles.profileIconBoxActive]}>
-                          <Coffee size={16} color={selectedProfile === 'QSR_CAFE' ? '#DE8626' : '#78716C'} />
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <View style={styles.profileTitleRow}>
-                            <Text style={[styles.profileTitle, selectedProfile === 'QSR_CAFE' && styles.profileTitleActive]}>
-                              Quick Cafe / QSR
-                            </Text>
-                            <View style={styles.profileBadge}>
-                              <Text style={styles.profileBadgeText}>🎟️ TOKEN SYSTEM</Text>
-                            </View>
-                          </View>
-                          <Text style={styles.profileDesc}>
-                            Counter takeout & token pickup. Table seating & floor map are hidden.
-                          </Text>
-                        </View>
+                  <View style={styles.profileSummaryCard}>
+                    <View style={styles.profileSummaryLeft}>
+                      <View style={styles.profileSummaryIconBox}>
+                        {selectedProfile === 'QSR_CAFE' ? (
+                          <Coffee size={16} color="#DE8626" />
+                        ) : selectedProfile === 'DINE_IN' ? (
+                          <UtensilsCrossed size={16} color="#DE8626" />
+                        ) : (
+                          <Layers size={16} color="#DE8626" />
+                        )}
                       </View>
-                    </TouchableOpacity>
-
-                    {/* Option 2: Dine-In Restaurant */}
-                    <TouchableOpacity
-                      style={[
-                        styles.profileOptionCard,
-                        selectedProfile === 'DINE_IN' && styles.profileOptionCardActive,
-                      ]}
-                      onPress={() => handleProfileChange('DINE_IN')}
-                      disabled={profileLoading}
-                      activeOpacity={0.8}
-                    >
-                      <View style={styles.profileOptionHeader}>
-                        <View style={[styles.profileIconBox, selectedProfile === 'DINE_IN' && styles.profileIconBoxActive]}>
-                          <UtensilsCrossed size={16} color={selectedProfile === 'DINE_IN' ? '#DE8626' : '#78716C'} />
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <View style={styles.profileTitleRow}>
-                            <Text style={[styles.profileTitle, selectedProfile === 'DINE_IN' && styles.profileTitleActive]}>
-                              Dine-In Restaurant
+                      <View style={{ flex: 1 }}>
+                        <View style={styles.profileSummaryTitleRow}>
+                          <Text style={styles.profileSummaryLabel}>ACTIVE OPERATING PROFILE</Text>
+                          <View style={styles.profileSummaryBadge}>
+                            <Text style={styles.profileSummaryBadgeText}>
+                              {selectedProfile === 'QSR_CAFE'
+                                ? '🎟️ QUICK CAFE / QSR'
+                                : selectedProfile === 'DINE_IN'
+                                ? '🪑 DINE-IN RESTAURANT'
+                                : '🪑 TABLES + 🎟️ TOKEN HYBRID'}
                             </Text>
-                            <View style={[styles.profileBadge, { backgroundColor: '#EFF6FF', borderColor: '#BFDBFE' }]}>
-                              <Text style={[styles.profileBadgeText, { color: '#1D4ED8' }]}>🪑 TABLE DINE-IN</Text>
-                            </View>
                           </View>
-                          <Text style={styles.profileDesc}>
-                            QR code per table, interactive floor map, running table tabs, and waiter service.
-                          </Text>
                         </View>
+                        <Text style={styles.profileSummaryDesc}>
+                          {selectedProfile === 'QSR_CAFE'
+                            ? 'Counter takeout & token pickup. Table seating & floor map hidden.'
+                            : selectedProfile === 'DINE_IN'
+                            ? 'Table QR codes, interactive floor map, running table tabs active.'
+                            : 'Hybrid mode: Table dine-in seating and takeaway token ordering both active.'}
+                        </Text>
                       </View>
-                    </TouchableOpacity>
-
-                    {/* Option 3: Hybrid */}
-                    <TouchableOpacity
-                      style={[
-                        styles.profileOptionCard,
-                        selectedProfile === 'HYBRID' && styles.profileOptionCardActive,
-                      ]}
-                      onPress={() => handleProfileChange('HYBRID')}
-                      disabled={profileLoading}
-                      activeOpacity={0.8}
-                    >
-                      <View style={styles.profileOptionHeader}>
-                        <View style={[styles.profileIconBox, selectedProfile === 'HYBRID' && styles.profileIconBoxActive]}>
-                          <Layers size={16} color={selectedProfile === 'HYBRID' ? '#DE8626' : '#78716C'} />
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <View style={styles.profileTitleRow}>
-                            <Text style={[styles.profileTitle, selectedProfile === 'HYBRID' && styles.profileTitleActive]}>
-                              Hybrid Store
-                            </Text>
-                            <View style={[styles.profileBadge, { backgroundColor: '#F0FDF4', borderColor: '#BBF7D0' }]}>
-                              <Text style={[styles.profileBadgeText, { color: '#15803D' }]}>🪑 TABLES + 🎟️ TOKEN</Text>
-                            </View>
-                          </View>
-                          <Text style={styles.profileDesc}>
-                            Both table seating with running tabs and quick counter takeaway token ordering.
-                          </Text>
-                        </View>
-                      </View>
-                    </TouchableOpacity>
+                    </View>
+                    {isOwnerOrAdmin && (
+                      <TouchableOpacity
+                        style={styles.profileSummaryConfigureBtn}
+                        onPress={() => {
+                          onClose();
+                          if (onEditHours) {
+                            onEditHours();
+                          }
+                        }}
+                        activeOpacity={0.7}
+                      >
+                        <Settings size={12} color="#DE8626" />
+                        <Text style={styles.profileSummaryConfigureText}>Configure</Text>
+                      </TouchableOpacity>
+                    )}
                   </View>
                 </View>
 
@@ -841,91 +928,139 @@ export const StoreOperatingStatusModal: React.FC<StoreOperatingStatusModalProps>
                   <View style={styles.sectionHeaderRow}>
                     <ChefHat size={14} color="#DE8626" />
                     <Text style={styles.sectionTitle}>KITCHEN LIVE STATUS (CUSTOMER TRACKING)</Text>
+                    {!isKdsAllowed && (
+                      <View style={styles.proLockedBadge}>
+                        <Lock size={9} color="#D97706" />
+                        <Text style={styles.proLockedBadgeText}>PRO</Text>
+                      </View>
+                    )}
                   </View>
                   <Text style={styles.sectionDesc}>
                     Control whether customers see real-time 5-stage kitchen progress and decreasing countdown timers or a simplified order status.
                   </Text>
 
-                  <View
-                    style={[
-                      styles.kitchenLiveCard,
-                      isKitchenActive ? styles.kitchenLiveCardActive : styles.kitchenLiveCardInactive,
-                    ]}
-                  >
-                    <View style={styles.kitchenLiveHeader}>
-                      <View
-                        style={[
-                          styles.kitchenLiveIconBox,
-                          isKitchenActive ? styles.kitchenLiveIconBoxActive : styles.kitchenLiveIconBoxInactive,
-                        ]}
-                      >
-                        {isKitchenActive ? (
-                          <Flame size={18} color="#D97706" />
-                        ) : (
-                          <UtensilsCrossed size={18} color="#78716C" />
-                        )}
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <View style={styles.kitchenLiveTitleRow}>
-                          <Text style={[styles.kitchenLiveTitle, isKitchenActive && styles.kitchenLiveTitleActive]}>
-                            {isKitchenActive ? 'Live Kitchen Tracking Active' : 'Live Kitchen Tracking Deactivated'}
-                          </Text>
-                          <View
-                            style={[
-                              styles.kitchenLiveBadge,
-                              isKitchenActive ? styles.kitchenLiveBadgeActive : styles.kitchenLiveBadgeInactive,
-                            ]}
-                          >
-                            <Text
-                              style={[
-                                styles.kitchenLiveBadgeText,
-                                isKitchenActive ? styles.kitchenLiveBadgeTextActive : styles.kitchenLiveBadgeTextInactive,
-                              ]}
-                            >
-                              {isKitchenActive ? '🟢 ACTIVE' : '⚪ DEACTIVATED'}
-                            </Text>
-                          </View>
+                  {isKdsAllowed ? (
+                    <View
+                      style={[
+                        styles.kitchenLiveCard,
+                        isKitchenActive ? styles.kitchenLiveCardActive : styles.kitchenLiveCardInactive,
+                      ]}
+                    >
+                      <View style={styles.kitchenLiveHeader}>
+                        <View
+                          style={[
+                            styles.kitchenLiveIconBox,
+                            isKitchenActive ? styles.kitchenLiveIconBoxActive : styles.kitchenLiveIconBoxInactive,
+                          ]}
+                        >
+                          {isKitchenActive ? (
+                            <Flame size={18} color="#D97706" />
+                          ) : (
+                            <UtensilsCrossed size={18} color="#78716C" />
+                          )}
                         </View>
-                        <Text style={styles.kitchenLiveDesc}>
-                          {isKitchenActive
-                            ? 'Customers see the 5-step KDS stepper (Pending → Confirmed → Preparing → Ready → Served), live 1-second countdown clock, and chef cooking alerts.'
-                            : 'Simplified mode: Ticking timers, chef flame alerts, and item prep badges are hidden from customers. Clean confirmation displayed.'}
-                        </Text>
-                      </View>
-                    </View>
-
-                    <View style={styles.kitchenLiveActionRow}>
-                      <TouchableOpacity
-                        style={[
-                          styles.kitchenLiveActionBtn,
-                          isKitchenActive
-                            ? styles.kitchenLiveActionBtnDeactivate
-                            : styles.kitchenLiveActionBtnActivate,
-                        ]}
-                        onPress={handleToggleKitchenActive}
-                        disabled={actionLoading !== null}
-                        activeOpacity={0.85}
-                      >
-                        {actionLoading === 'toggleKitchenActive' ? (
-                          <ActivityIndicator size="small" color={isKitchenActive ? '#DC2626' : '#16A34A'} />
-                        ) : (
-                          <>
-                            <PowerOff size={13} color={isKitchenActive ? '#DC2626' : '#16A34A'} />
-                            <Text
+                        <View style={{ flex: 1 }}>
+                          <View style={styles.kitchenLiveTitleRow}>
+                            <Text style={[styles.kitchenLiveTitle, isKitchenActive && styles.kitchenLiveTitleActive]}>
+                              {isKitchenActive ? 'Live Kitchen Tracking Active' : 'Live Kitchen Tracking Deactivated'}
+                            </Text>
+                            <View
                               style={[
-                                styles.kitchenLiveActionBtnText,
-                                { color: isKitchenActive ? '#DC2626' : '#16A34A' },
+                                styles.kitchenLiveBadge,
+                                isKitchenActive ? styles.kitchenLiveBadgeActive : styles.kitchenLiveBadgeInactive,
                               ]}
                             >
-                              {isKitchenActive
-                                ? 'DEACTIVATE KITCHEN LIVE STATUS'
-                                : 'ACTIVATE KITCHEN LIVE STATUS'}
-                            </Text>
-                          </>
-                        )}
-                      </TouchableOpacity>
+                              <Text
+                                style={[
+                                  styles.kitchenLiveBadgeText,
+                                  isKitchenActive ? styles.kitchenLiveBadgeTextActive : styles.kitchenLiveBadgeTextInactive,
+                                ]}
+                              >
+                                {isKitchenActive ? '🟢 ACTIVE' : '⚪ DEACTIVATED'}
+                              </Text>
+                            </View>
+                          </View>
+                          <Text style={styles.kitchenLiveDesc}>
+                            {isKitchenActive
+                              ? 'Customers see the 5-step KDS stepper (Pending → Confirmed → Preparing → Ready → Served), live 1-second countdown clock, and chef cooking alerts.'
+                              : 'Simplified mode: Ticking timers, chef flame alerts, and item prep badges are hidden from customers. Clean confirmation displayed.'}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <View style={styles.kitchenLiveActionRow}>
+                        <TouchableOpacity
+                          style={[
+                            styles.kitchenLiveActionBtn,
+                            isKitchenActive
+                              ? styles.kitchenLiveActionBtnDeactivate
+                              : styles.kitchenLiveActionBtnActivate,
+                          ]}
+                          onPress={handleToggleKitchenActive}
+                          disabled={actionLoading !== null}
+                          activeOpacity={0.85}
+                        >
+                          {actionLoading === 'toggleKitchenActive' ? (
+                            <ActivityIndicator size="small" color={isKitchenActive ? '#DC2626' : '#16A34A'} />
+                          ) : (
+                            <>
+                              <PowerOff size={13} color={isKitchenActive ? '#DC2626' : '#16A34A'} />
+                              <Text
+                                style={[
+                                  styles.kitchenLiveActionBtnText,
+                                  { color: isKitchenActive ? '#DC2626' : '#16A34A' },
+                                ]}
+                              >
+                                {isKitchenActive
+                                  ? 'DEACTIVATE KITCHEN LIVE STATUS'
+                                  : 'ACTIVATE KITCHEN LIVE STATUS'}
+                              </Text>
+                            </>
+                          )}
+                        </TouchableOpacity>
+                      </View>
                     </View>
-                  </View>
+                  ) : (
+                    <View style={styles.kdsLockedCard}>
+                      <View style={styles.kdsLockedHeader}>
+                        <View style={styles.kdsLockedIconBox}>
+                          <Lock size={16} color="#B45309" />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                            <Text style={styles.kdsLockedTitle}>Kitchen Display System (KDS) Tracking</Text>
+                            <View style={styles.proLockedBadge}>
+                              <Lock size={8} color="#D97706" />
+                              <Text style={styles.proLockedBadgeText}>PRO FEATURE</Text>
+                            </View>
+                          </View>
+                          <Text style={styles.kdsLockedDesc}>
+                            Live 5-stage order progress (Pending → Confirmed → Preparing → Ready → Served), real-time countdown clocks, and chef cooking alerts require a subscription plan with Kitchen Routing enabled.
+                          </Text>
+                        </View>
+                      </View>
+                      {isOwnerOrAdmin ? (
+                        <TouchableOpacity
+                          style={styles.kdsLockedUpgradeBtn}
+                          onPress={() => {
+                            if (onUpgradePlan) onUpgradePlan();
+                            else useSubscriptionStore.getState().openRenewalModal();
+                          }}
+                          activeOpacity={0.85}
+                        >
+                          <Sparkles size={13} color="#FFFFFF" />
+                          <Text style={styles.kdsLockedUpgradeBtnText}>Upgrade Plan to Unlock Live KDS</Text>
+                          <ChevronRight size={13} color="#FFFFFF" />
+                        </TouchableOpacity>
+                      ) : (
+                        <View style={styles.kdsLockedStaffNotice}>
+                          <Text style={styles.kdsLockedStaffNoticeText}>
+                            Simplified order confirmation active for customer orders. Only store owner can upgrade subscription.
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  )}
                 </View>
 
                 {/* 4. Kitchen Stations Live Status & Fast Controls (Multi-Station) */}
@@ -934,10 +1069,16 @@ export const StoreOperatingStatusModal: React.FC<StoreOperatingStatusModalProps>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
                       <UtensilsCrossed size={14} color="#DE8626" />
                       <Text style={styles.sectionTitle}>
-                        PREPARATION STATIONS ({stations.length})
+                        PREPARATION STATIONS {isKdsAllowed ? `(${stations.length})` : ''}
                       </Text>
+                      {!isKdsAllowed && (
+                        <View style={styles.proLockedBadge}>
+                          <Lock size={9} color="#D97706" />
+                          <Text style={styles.proLockedBadgeText}>PRO</Text>
+                        </View>
+                      )}
                     </View>
-                    {canManageStations && (
+                    {isKdsAllowed && canManageStations && (
                       <TouchableOpacity
                         style={styles.addStationHeaderPillBtn}
                         onPress={handleOpenAddStation}
@@ -949,175 +1090,207 @@ export const StoreOperatingStatusModal: React.FC<StoreOperatingStatusModalProps>
                     )}
                   </View>
                   <Text style={styles.sectionDesc}>
-                    Create stations, toggle Active/Deactivate lines, and trigger rush pauses. Accessible by Owner, Manager & Cashier.
+                    {isKdsAllowed
+                      ? 'Create stations, toggle Active/Deactivate lines, and trigger rush pauses. Accessible by Owner, Manager & Cashier.'
+                      : 'Multi-station preparation line routing is locked in current plan. Orders route to standard central kitchen.'}
                   </Text>
 
-                  {stations.length === 0 ? (
-                    <View style={styles.modalStationEmptyBox}>
-                      <ChefHat size={26} color="#D97706" />
-                      <Text style={styles.modalStationEmptyTitle}>No Kitchen Stations Configured</Text>
-                      <Text style={styles.modalStationEmptyDesc}>
-                        Create custom preparation lines (Grill, Bar, Chinese, Curries) for automated order routing and split KOT printing.
-                      </Text>
-                      {canManageStations && (
-                        <View style={styles.modalStationEmptyBtnsRow}>
-                          <TouchableOpacity
-                            style={styles.modalStationEmptyAddBtn}
-                            onPress={handleOpenAddStation}
-                            activeOpacity={0.8}
-                          >
-                            <Plus size={13} color="#FFFFFF" strokeWidth={2.4} />
-                            <Text style={styles.modalStationEmptyAddBtnText}>Add Station</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={styles.modalStationEmptyDefaultsBtn}
-                            onPress={handleInitializeDefaults}
-                            activeOpacity={0.8}
-                            disabled={stationActionLoading === 'init_defaults'}
-                          >
-                            {stationActionLoading === 'init_defaults' ? (
-                              <ActivityIndicator size="small" color="#DE8626" />
-                            ) : (
-                              <>
-                                <Sparkles size={13} color="#DE8626" />
-                                <Text style={styles.modalStationEmptyDefaultsBtnText}>Standard 7 Stations</Text>
-                              </>
-                            )}
-                          </TouchableOpacity>
-                        </View>
-                      )}
-                    </View>
-                  ) : (
-                    <View style={styles.modalStationList}>
-                      {stations.map((st) => {
-                        const stPaused = st.isPaused && st.remainingPauseMinutes > 0;
-                        const stStatusColor = !st.isActive ? '#DC2626' : stPaused ? '#D97706' : '#16A34A';
-                        const stStatusBg = !st.isActive ? '#FEE2E2' : stPaused ? '#FEF3C7' : '#DCFCE7';
-                        const stStatusText = !st.isActive ? 'DEACTIVATED' : stPaused ? `PAUSED (${st.remainingPauseMinutes}m)` : 'ACTIVE';
-                        const isToggleLoading = stationActionLoading === `active_${st.id}`;
+                  {isKdsAllowed ? (
+                    stations.length === 0 ? (
+                      <View style={styles.modalStationEmptyBox}>
+                        <ChefHat size={26} color="#D97706" />
+                        <Text style={styles.modalStationEmptyTitle}>No Kitchen Stations Configured</Text>
+                        <Text style={styles.modalStationEmptyDesc}>
+                          Create custom preparation lines (Grill, Bar, Chinese, Curries) for automated order routing and split KOT printing.
+                        </Text>
+                        {canManageStations && (
+                          <View style={styles.modalStationEmptyBtnsRow}>
+                            <TouchableOpacity
+                              style={styles.modalStationEmptyAddBtn}
+                              onPress={handleOpenAddStation}
+                              activeOpacity={0.8}
+                            >
+                              <Plus size={13} color="#FFFFFF" strokeWidth={2.4} />
+                              <Text style={styles.modalStationEmptyAddBtnText}>Add Station</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={styles.modalStationEmptyDefaultsBtn}
+                              onPress={handleInitializeDefaults}
+                              activeOpacity={0.8}
+                              disabled={stationActionLoading === 'init_defaults'}
+                            >
+                              {stationActionLoading === 'init_defaults' ? (
+                                <ActivityIndicator size="small" color="#DE8626" />
+                              ) : (
+                                <>
+                                  <Sparkles size={13} color="#DE8626" />
+                                  <Text style={styles.modalStationEmptyDefaultsBtnText}>Standard 7 Stations</Text>
+                                </>
+                              )}
+                            </TouchableOpacity>
+                          </View>
+                        )}
+                      </View>
+                    ) : (
+                      <View style={styles.modalStationList}>
+                        {stations.map((st) => {
+                          const stPaused = st.isPaused && st.remainingPauseMinutes > 0;
+                          const stStatusColor = !st.isActive ? '#DC2626' : stPaused ? '#D97706' : '#16A34A';
+                          const stStatusBg = !st.isActive ? '#FEE2E2' : stPaused ? '#FEF3C7' : '#DCFCE7';
+                          const stStatusText = !st.isActive ? 'DEACTIVATED' : stPaused ? `PAUSED (${st.remainingPauseMinutes}m)` : 'ACTIVE';
+                          const isToggleLoading = stationActionLoading === `active_${st.id}`;
 
-                        return (
-                          <View key={st.id} style={styles.modalStationCard}>
-                            <View style={[styles.modalStationColorBar, { backgroundColor: st.badgeColor || '#DE8626' }]} />
-                            <View style={styles.modalStationCardBody}>
-                              <View style={styles.modalStationHeader}>
-                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
-                                  <Text style={styles.modalStationName} numberOfLines={1}>{st.stationName}</Text>
-                                  <View style={[styles.modalStationCodeBadge, { borderColor: st.badgeColor || '#DE8626' }]}>
-                                    <Text style={[styles.modalStationCodeText, { color: st.badgeColor || '#DE8626' }]}>{st.stationCode}</Text>
+                          return (
+                            <View key={st.id} style={styles.modalStationCard}>
+                              <View style={[styles.modalStationColorBar, { backgroundColor: st.badgeColor || '#DE8626' }]} />
+                              <View style={styles.modalStationCardBody}>
+                                <View style={styles.modalStationHeader}>
+                                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+                                    <Text style={styles.modalStationName} numberOfLines={1}>{st.stationName}</Text>
+                                    <View style={[styles.modalStationCodeBadge, { borderColor: st.badgeColor || '#DE8626' }]}>
+                                      <Text style={[styles.modalStationCodeText, { color: st.badgeColor || '#DE8626' }]}>{st.stationCode}</Text>
+                                    </View>
+                                  </View>
+                                  <View style={[styles.modalStationStatusBadge, { backgroundColor: stStatusBg }]}>
+                                    <Text style={[styles.modalStationStatusText, { color: stStatusColor }]}>{stStatusText}</Text>
                                   </View>
                                 </View>
-                                <View style={[styles.modalStationStatusBadge, { backgroundColor: stStatusBg }]}>
-                                  <Text style={[styles.modalStationStatusText, { color: stStatusColor }]}>{stStatusText}</Text>
-                                </View>
-                              </View>
 
-                              {/* Station Control Action Buttons */}
-                              <View style={styles.modalStationActionsRow}>
-                                {/* Active / Deactivate Toggle Button */}
-                                <TouchableOpacity
-                                  style={[
-                                    styles.stationPillBtn,
-                                    st.isActive ? styles.stationPillBtnActive : styles.stationPillBtnInactive,
-                                  ]}
-                                  onPress={() => handleToggleStationActive(st)}
-                                  disabled={stationActionLoading !== null}
-                                  activeOpacity={0.8}
-                                >
-                                  {isToggleLoading ? (
-                                    <ActivityIndicator size="small" color={st.isActive ? '#16A34A' : '#DC2626'} />
-                                  ) : (
-                                    <>
-                                      <Power size={11} color={st.isActive ? '#16A34A' : '#DC2626'} strokeWidth={2.4} />
-                                      <Text style={[styles.stationPillBtnText, { color: st.isActive ? '#16A34A' : '#DC2626' }]}>
-                                        {st.isActive ? 'Deactivate' : 'Activate'}
-                                      </Text>
-                                    </>
+                                {/* Station Control Action Buttons */}
+                                <View style={styles.modalStationActionsRow}>
+                                  {/* Active / Deactivate Toggle Button */}
+                                  <TouchableOpacity
+                                    style={[
+                                      styles.stationPillBtn,
+                                      st.isActive ? styles.stationPillBtnActive : styles.stationPillBtnInactive,
+                                    ]}
+                                    onPress={() => handleToggleStationActive(st)}
+                                    disabled={stationActionLoading !== null}
+                                    activeOpacity={0.8}
+                                  >
+                                    {isToggleLoading ? (
+                                      <ActivityIndicator size="small" color={st.isActive ? '#16A34A' : '#DC2626'} />
+                                    ) : (
+                                      <>
+                                        <Power size={11} color={st.isActive ? '#16A34A' : '#DC2626'} strokeWidth={2.4} />
+                                        <Text style={[styles.stationPillBtnText, { color: st.isActive ? '#16A34A' : '#DC2626' }]}>
+                                          {st.isActive ? 'Deactivate' : 'Activate'}
+                                        </Text>
+                                      </>
+                                    )}
+                                  </TouchableOpacity>
+
+                                  {/* 15m Pause */}
+                                  {st.isActive && (
+                                    <TouchableOpacity
+                                      style={[styles.stationPillBtn, stPaused && st.remainingPauseMinutes <= 15 && styles.stationPillBtnPaused]}
+                                      onPress={() => handlePauseStation(st, 15)}
+                                      disabled={stationActionLoading !== null}
+                                      activeOpacity={0.8}
+                                    >
+                                      <Text style={styles.stationPillBtnText}>+15m</Text>
+                                    </TouchableOpacity>
                                   )}
-                                </TouchableOpacity>
 
-                                {/* 15m Pause */}
-                                {st.isActive && (
-                                  <TouchableOpacity
-                                    style={[styles.stationPillBtn, stPaused && st.remainingPauseMinutes <= 15 && styles.stationPillBtnPaused]}
-                                    onPress={() => handlePauseStation(st, 15)}
-                                    disabled={stationActionLoading !== null}
-                                    activeOpacity={0.8}
-                                  >
-                                    <Text style={styles.stationPillBtnText}>+15m</Text>
-                                  </TouchableOpacity>
-                                )}
-
-                                {/* 30m Pause */}
-                                {st.isActive && (
-                                  <TouchableOpacity
-                                    style={[styles.stationPillBtn, stPaused && st.remainingPauseMinutes > 15 && styles.stationPillBtnPaused]}
-                                    onPress={() => handlePauseStation(st, 30)}
-                                    disabled={stationActionLoading !== null}
-                                    activeOpacity={0.8}
-                                  >
-                                    <Text style={styles.stationPillBtnText}>+30m</Text>
-                                  </TouchableOpacity>
-                                )}
-
-                                {/* Resume Button (if paused) */}
-                                {stPaused && (
-                                  <TouchableOpacity
-                                    style={[styles.stationPillBtn, { backgroundColor: '#E4F5EC', borderColor: '#17845A' }]}
-                                    onPress={() => handleResumeStation(st)}
-                                    disabled={stationActionLoading !== null}
-                                    activeOpacity={0.8}
-                                  >
-                                    <PlayCircle size={11} color="#17845A" />
-                                    <Text style={[styles.stationPillBtnText, { color: '#17845A', fontWeight: '800' }]}>Resume</Text>
-                                  </TouchableOpacity>
-                                )}
-
-                                {canManageStations && (
-                                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginLeft: 'auto' }}>
+                                  {/* 30m Pause */}
+                                  {st.isActive && (
                                     <TouchableOpacity
-                                      style={styles.stationIconBtn}
-                                      onPress={() => handleOpenEditStation(st)}
-                                      activeOpacity={0.7}
+                                      style={[styles.stationPillBtn, stPaused && st.remainingPauseMinutes > 15 && styles.stationPillBtnPaused]}
+                                      onPress={() => handlePauseStation(st, 30)}
+                                      disabled={stationActionLoading !== null}
+                                      activeOpacity={0.8}
                                     >
-                                      <Edit3 size={12} color="#4B5563" />
+                                      <Text style={styles.stationPillBtnText}>+30m</Text>
                                     </TouchableOpacity>
+                                  )}
+
+                                  {/* Resume Button (if paused) */}
+                                  {stPaused && (
                                     <TouchableOpacity
-                                      style={[styles.stationIconBtn, { backgroundColor: '#FEE2E2' }]}
-                                      onPress={() => handleDeleteStation(st)}
-                                      activeOpacity={0.7}
-                                      disabled={stationActionLoading === `delete_${st.id}`}
+                                      style={[styles.stationPillBtn, { backgroundColor: '#E4F5EC', borderColor: '#17845A' }]}
+                                      onPress={() => handleResumeStation(st)}
+                                      disabled={stationActionLoading !== null}
+                                      activeOpacity={0.8}
                                     >
-                                      <Trash2 size={12} color="#DC2626" />
+                                      <PlayCircle size={11} color="#17845A" />
+                                      <Text style={[styles.stationPillBtnText, { color: '#17845A', fontWeight: '800' }]}>Resume</Text>
                                     </TouchableOpacity>
-                                  </View>
-                                )}
+                                  )}
+
+                                  {canManageStations && (
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginLeft: 'auto' }}>
+                                      <TouchableOpacity
+                                        style={styles.stationIconBtn}
+                                        onPress={() => handleOpenEditStation(st)}
+                                        activeOpacity={0.7}
+                                      >
+                                        <Edit3 size={12} color="#4B5563" />
+                                      </TouchableOpacity>
+                                      <TouchableOpacity
+                                        style={[styles.stationIconBtn, { backgroundColor: '#FEE2E2' }]}
+                                        onPress={() => handleDeleteStation(st)}
+                                        activeOpacity={0.7}
+                                        disabled={stationActionLoading === `delete_${st.id}`}
+                                      >
+                                        <Trash2 size={12} color="#DC2626" />
+                                      </TouchableOpacity>
+                                    </View>
+                                  )}
+                                </View>
                               </View>
                             </View>
-                          </View>
-                        );
-                      })}
+                          );
+                        })}
 
-                      {canManageStations && (
-                        <View style={styles.stationBottomBarRow}>
-                          <TouchableOpacity
-                            style={styles.stationBottomAddBtn}
-                            onPress={handleOpenAddStation}
-                            activeOpacity={0.8}
-                          >
-                            <Plus size={12} color="#DE8626" strokeWidth={2.4} />
-                            <Text style={styles.stationBottomAddBtnText}>Add Station</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={styles.stationBottomResetBtn}
-                            onPress={handleInitializeDefaults}
-                            activeOpacity={0.8}
-                            disabled={stationActionLoading === 'init_defaults'}
-                          >
-                            <Sparkles size={12} color="#78716C" />
-                            <Text style={styles.stationBottomResetBtnText}>Reset 7 Defaults</Text>
-                          </TouchableOpacity>
+                        {canManageStations && (
+                          <View style={styles.stationBottomBarRow}>
+                            <TouchableOpacity
+                              style={styles.stationBottomAddBtn}
+                              onPress={handleOpenAddStation}
+                              activeOpacity={0.8}
+                            >
+                              <Plus size={12} color="#DE8626" strokeWidth={2.4} />
+                              <Text style={styles.stationBottomAddBtnText}>Add Station</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={styles.stationBottomResetBtn}
+                              onPress={handleInitializeDefaults}
+                              activeOpacity={0.8}
+                              disabled={stationActionLoading === 'init_defaults'}
+                            >
+                              <Sparkles size={12} color="#78716C" />
+                              <Text style={styles.stationBottomResetBtnText}>Reset 7 Defaults</Text>
+                            </TouchableOpacity>
+                          </View>
+                        )}
+                      </View>
+                    )
+                  ) : (
+                    <View style={styles.stationsLockedCard}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                        <View style={styles.centralKitchenBadge}>
+                          <ChefHat size={14} color="#DE8626" />
+                          <Text style={styles.centralKitchenBadgeText}>Standard Central Kitchen Active</Text>
                         </View>
+                        <View style={styles.proLockedBadge}>
+                          <Lock size={8} color="#D97706" />
+                          <Text style={styles.proLockedBadgeText}>KDS REQUIRED</Text>
+                        </View>
+                      </View>
+                      <Text style={styles.stationsLockedDesc}>
+                        All dishes route directly to your central kitchen printer and order queue. Multi-station preparation lines (Grill, Bar, Chinese, Curries) and station display screens require Kitchen Routing in your subscription plan.
+                      </Text>
+                      {isOwnerOrAdmin && (
+                        <TouchableOpacity
+                          style={styles.stationsLockedUpgradeBtn}
+                          onPress={() => {
+                            if (onUpgradePlan) onUpgradePlan();
+                            else useSubscriptionStore.getState().openRenewalModal();
+                          }}
+                          activeOpacity={0.8}
+                        >
+                          <Text style={styles.stationsLockedUpgradeText}>View Plans with Multi-Station Routing →</Text>
+                        </TouchableOpacity>
                       )}
                     </View>
                   )}
@@ -1924,6 +2097,289 @@ const styles = StyleSheet.create({
     fontSize: 10.5,
     color: '#78716C',
     lineHeight: 14,
+  },
+  profileOptionCardLocked: {
+    backgroundColor: '#FBF9F6',
+    borderColor: '#E8E1D7',
+    borderWidth: 1,
+    borderStyle: 'dashed',
+  },
+  profileIconBoxLocked: {
+    backgroundColor: '#EFEBE4',
+    position: 'relative',
+  },
+  profileIconLockBadge: {
+    position: 'absolute',
+    bottom: -3,
+    right: -3,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#B45309',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#FBF9F6',
+  },
+  profileTitleLocked: {
+    color: '#4B4237',
+  },
+  profileBadgeLocked: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3.5,
+    paddingHorizontal: 7,
+    paddingVertical: 2.5,
+    borderRadius: 6,
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  profileBadgeTextLocked: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#B45309',
+    letterSpacing: 0.3,
+  },
+  profileDescLocked: {
+    color: '#8C7A6B',
+  },
+  profileLockedFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 10,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#EBE4DA',
+  },
+  profileLockedFooterLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    flex: 1,
+  },
+  profileLockedFooterText: {
+    fontSize: 10.5,
+    color: '#78716C',
+    fontWeight: '600',
+  },
+  profileLockedFooterHighlight: {
+    fontWeight: '800',
+    color: '#92400E',
+  },
+  profileUnlockBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    backgroundColor: '#FFF7ED',
+    paddingHorizontal: 8,
+    paddingVertical: 3.5,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#FFEDD5',
+  },
+  profileUnlockBtnText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#DE8626',
+    letterSpacing: 0.2,
+  },
+
+  /* ACTIVE OPERATING PROFILE SUMMARY */
+  profileSummaryCard: {
+    backgroundColor: '#FAF7F2',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#EFEAE2',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  profileSummaryLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  profileSummaryIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#FEF3E2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  profileSummaryTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexWrap: 'wrap',
+    marginBottom: 2,
+  },
+  profileSummaryLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#8C7A6B',
+    letterSpacing: 0.5,
+  },
+  profileSummaryBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: 5,
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  profileSummaryBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#B45309',
+  },
+  profileSummaryDesc: {
+    fontSize: 10.5,
+    color: '#6B7280',
+    lineHeight: 14,
+  },
+  profileSummaryConfigureBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: '#FFF0DE',
+    borderWidth: 1,
+    borderColor: 'rgba(222, 134, 38, 0.3)',
+  },
+  profileSummaryConfigureText: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: '#DE8626',
+  },
+
+  /* PRO & KDS LOCKED CARDS */
+  proLockedBadge: {
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  proLockedBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#B45309',
+  },
+  kdsLockedCard: {
+    backgroundColor: '#FBF9F5',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#EFE7DC',
+    gap: 10,
+  },
+  kdsLockedHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  kdsLockedIconBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: '#FEF3C7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    marginTop: 2,
+  },
+  kdsLockedTitle: {
+    fontSize: 12.5,
+    fontWeight: '800',
+    color: '#2B231D',
+  },
+  kdsLockedDesc: {
+    fontSize: 11,
+    color: '#78716C',
+    lineHeight: 15,
+    marginTop: 3,
+  },
+  kdsLockedUpgradeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#DE8626',
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+  },
+  kdsLockedUpgradeBtnText: {
+    fontSize: 11.5,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  kdsLockedStaffNotice: {
+    backgroundColor: '#F5EFE8',
+    padding: 8,
+    borderRadius: 8,
+  },
+  kdsLockedStaffNoticeText: {
+    fontSize: 10.5,
+    color: '#78716C',
+    fontStyle: 'italic',
+  },
+
+  /* STATIONS LOCKED CARD */
+  stationsLockedCard: {
+    backgroundColor: '#FBF9F5',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#EFE7DC',
+    gap: 8,
+  },
+  centralKitchenBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#FFF0DE',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(222, 134, 38, 0.3)',
+  },
+  centralKitchenBadgeText: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: '#C66910',
+  },
+  stationsLockedDesc: {
+    fontSize: 11,
+    color: '#78716C',
+    lineHeight: 15,
+  },
+  stationsLockedUpgradeBtn: {
+    alignSelf: 'flex-start',
+    paddingVertical: 4,
+    paddingHorizontal: 2,
+    marginTop: 2,
+  },
+  stationsLockedUpgradeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#DE8626',
   },
 
   /* SHORTCUT */

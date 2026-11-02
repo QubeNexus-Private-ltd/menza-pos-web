@@ -1,5 +1,13 @@
 import { apiClient } from '../../core/network/apiClient';
-import { TableMaster, TableReservation, RestaurantReservationConfig, FloorSection, TableHistoryItem } from '../../domain/models/Table';
+import { APP_CONSTANTS } from '../../core/constants/appConstants';
+import {
+  TableMaster,
+  TableReservation,
+  RestaurantReservationConfig,
+  FloorSection,
+  TableHistoryItem,
+  TableQrResponseDTO,
+} from '../../domain/models/Table';
 
 export class TableRemoteDataSource {
   async getSections(restaurantId?: number): Promise<FloorSection[]> {
@@ -355,6 +363,93 @@ export class TableRemoteDataSource {
     } catch (err) {
       console.warn('TableRemoteDataSource: Failed to check in reservation', err);
       return false;
+    }
+  }
+
+  async getTableQr(
+    tableId: number,
+    restaurantId?: number,
+    baseUrl?: string
+  ): Promise<TableQrResponseDTO | null> {
+    try {
+      const effectiveBaseUrl = baseUrl || APP_CONSTANTS.CUSTOMER_ORDERING_BASE_URL;
+      const response = await apiClient.get(`/TableMaster/${tableId}/qr-download`, {
+        params: {
+          restaurantId: restaurantId || undefined,
+          baseUrl: effectiveBaseUrl || undefined,
+        },
+      });
+      const data = response.data;
+      if (!data) return null;
+      return {
+        tableId: data.tableId ?? tableId,
+        tableNumber: data.tableName || String(tableId),
+        tableName: data.tableName || String(tableId),
+        restaurantId: data.restaurantId ?? (restaurantId || 0),
+        restaurantName: data.restaurantName || '',
+        sectionName: data.sectionName,
+        qrCodeBase64: data.qrCodeBase64Png || data.qrCodeBase64 || '',
+        qrUrl: data.dineInUrl || data.DineInUrl || data.qrUrl || '',
+        generatedAt: new Date().toISOString(),
+        isTimeBound: false,
+        encryptedRestaurantId: data.encryptedRestaurantId,
+        encryptedTableId: data.encryptedTableId,
+      };
+    } catch (err: any) {
+      console.warn(`TableRemoteDataSource: Failed to fetch QR for table #${tableId}:`, err?.message);
+      return null;
+    }
+  }
+
+  async getRollingTableQr(
+    tableId: number,
+    ttlMinutes: number = 15,
+    baseUrl?: string
+  ): Promise<TableQrResponseDTO | null> {
+    try {
+      const effectiveBaseUrl = baseUrl || APP_CONSTANTS.CUSTOMER_ORDERING_BASE_URL;
+      const response = await apiClient.get(`/TableMaster/${tableId}/rolling-qr`, {
+        params: {
+          ttlMinutes,
+          baseUrl: effectiveBaseUrl || undefined,
+        },
+      });
+      const data = response.data;
+      if (!data) return null;
+      return {
+        tableId: data.tableId ?? tableId,
+        tableNumber: data.tableName || String(tableId),
+        tableName: data.tableName || String(tableId),
+        restaurantId: data.restaurantId ?? 0,
+        restaurantName: data.restaurantName || '',
+        sectionName: data.sectionName,
+        qrCodeBase64: data.qrCodeBase64Png || data.qrCodeBase64 || '',
+        qrUrl: data.dineInUrl || data.DineInUrl || data.qrUrl || '',
+        generatedAt: new Date().toISOString(),
+        isTimeBound: true,
+        ttlSeconds: data.ttlSeconds ?? ttlMinutes * 60,
+        expiresAtUtc: data.expiresAtUtc,
+        encryptedRestaurantId: data.encryptedRestaurantId,
+        encryptedTableId: data.encryptedTableId,
+      };
+    } catch (err: any) {
+      console.warn(`TableRemoteDataSource: Failed to fetch rolling QR for table #${tableId}:`, err?.message);
+      return null;
+    }
+  }
+
+  async getStorefrontQr(restaurantId: number, baseUrl?: string): Promise<any | null> {
+    try {
+      const effectiveBaseUrl = baseUrl || APP_CONSTANTS.CUSTOMER_ORDERING_BASE_URL;
+      const response = await apiClient.get(`/TableMaster/store-qr/${restaurantId}`, {
+        params: {
+          baseUrl: effectiveBaseUrl || undefined,
+        },
+      });
+      return response.data;
+    } catch (err: any) {
+      console.warn(`TableRemoteDataSource: Failed to fetch storefront QR for restaurant #${restaurantId}:`, err?.message);
+      return null;
     }
   }
 }

@@ -12,7 +12,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Crown, CheckCircle2, Zap, CreditCard, X, Shield, ArrowRight, Sparkles, Gift, Wallet, History } from 'lucide-react-native';
+import { Crown, CheckCircle2, Zap, CreditCard, X, Shield, ArrowRight, Sparkles, Gift, Wallet, History, AlertCircle, Lock } from 'lucide-react-native';
+import { getSubscriptionFeatureList, getPlanFeatureList, formatEntitlementTitle } from '../../../core/utils/entitlementCatalog';
 import { Colors } from '../../../core/theme/colors';
 import { Typography } from '../../../core/theme/typography';
 import { Spacing } from '../../../core/theme/spacing';
@@ -24,6 +25,8 @@ import { PaymentGatewayManager } from '../../../data/datasources/PaymentGatewayM
 import { PaymentProcessingScreen } from './PaymentProcessingScreen';
 import { WalletBalanceWidget } from '../../components/WalletBalanceWidget';
 import { WalletEvents } from '../../../core/utils/walletEvents';
+import { SubscriptionEvents } from '../../../core/utils/subscriptionEvents';
+import { apiCacheManager } from '../../../core/network/apiClient';
 import { useAuthStore } from '../../state/useAuthStore';
 import { useSubscriptionStore, PlanChangeCalculation } from '../../state/useSubscriptionStore';
 import { SubscriptionGraceBanner } from '../../components/subscription/SubscriptionGraceBanner';
@@ -36,7 +39,7 @@ interface SubscriptionBillingScreenProps {
 }
 
 export const SubscriptionBillingScreen: React.FC<SubscriptionBillingScreenProps> = ({ onClose }) => {
-  const { activeRestaurant } = useAuthStore();
+  const { activeRestaurant, user } = useAuthStore();
   const currentRestId = activeRestaurant?.restaurantId || (globalThis as any).__MENZA_ACTIVE_REST_ID__ || 0;
 
   const {
@@ -77,7 +80,7 @@ export const SubscriptionBillingScreen: React.FC<SubscriptionBillingScreenProps>
       setLoading(true);
       await Promise.all([
         fetchPlans(),
-        fetchSubscriptionStatus(currentRestId),
+        fetchSubscriptionStatus(currentRestId, true),
         fetchSubscriptionHistory(currentRestId),
       ]);
     } catch (err) {
@@ -97,6 +100,39 @@ export const SubscriptionBillingScreen: React.FC<SubscriptionBillingScreenProps>
       return;
     }
     const amount = plan.finalPrice ?? plan.price;
+
+    const isSuperAdmin = Boolean(
+      user?.roles?.some((r) =>
+        ['SUPERADMIN', 'SUPER_ADMIN', 'SUPERADMINONLY'].includes(r.toUpperCase().replace(/[^A-Z]/g, ''))
+      ) || ((user as any)?.roleName && String((user as any).roleName).toLowerCase().includes('superadmin'))
+    );
+
+    if (isSuperAdmin || amount <= 0) {
+      try {
+        setPayingPlanId(plan.id);
+        const assignRes = await subscriptionRepository.assignSubscription(
+          activeRestId,
+          plan.id,
+          plan.durationInDays || plan.durationDays || 30,
+          0
+        );
+        if (assignRes.success) {
+          apiCacheManager.invalidate('/Subscription');
+          SubscriptionEvents.emitUpdated();
+          await loadSubscriptionData();
+          setSelectedPlanForRenewal(null);
+          Alert.alert('Plan Activated 🎉', `Your plan "${plan.planName || plan.subscriptionName}" is now active.`);
+        } else {
+          Alert.alert('Activation Error', assignRes.message || 'Failed to activate plan.');
+        }
+      } catch (err: any) {
+        Alert.alert('Activation Error', err?.message || 'Failed to activate plan.');
+      } finally {
+        setPayingPlanId(null);
+        isRenewingRef.current = false;
+      }
+      return;
+    }
 
     isRenewingRef.current = true;
     try {
@@ -140,19 +176,42 @@ export const SubscriptionBillingScreen: React.FC<SubscriptionBillingScreenProps>
       }
 
       // Immediately verify and activate subscription (aligned with Wallet Recharge flow)
-      if (paymentResult?.razorpayPaymentId || paymentResult?.razorpaySignature) {
+      if (paymentResult?.success || paymentResult?.razorpayPaymentId || paymentResult?.razorpaySignature) {
         try {
-          await subscriptionRepository.verifyCashFreePayment(
+          const vRes = await subscriptionRepository.verifyCashFreePayment(
             res.orderId,
             activeRestId,
             plan.id,
             amount,
-            paymentResult.razorpayPaymentId,
-            paymentResult.razorpaySignature
+            paymentResult?.razorpayPaymentId,
+            paymentResult?.razorpaySignature
           );
+          if (vRes.success) {
+            setProcessingOrder(null);
+            setSelectedPlanForRenewal(null);
+            apiCacheManager.invalidate('/Subscription');
+            SubscriptionEvents.emitUpdated();
+            await loadSubscriptionData();
+            Alert.alert('Plan Activated 🎉', `Your plan "${plan.planName || plan.subscriptionName}" is now active.`);
+          } else {
+            // Check status via polling before giving up, avoid manual duplicate subscription row creation
+            const pollRes = await subscriptionRepository.checkCashFreePaymentStatus(res.orderId);
+            if (pollRes?.paymentStatus === 'SUCCESS' || pollRes?.gatewayOrderStatus === 'paid') {
+              setProcessingOrder(null);
+              setSelectedPlanForRenewal(null);
+              apiCacheManager.invalidate('/Subscription');
+              SubscriptionEvents.emitUpdated();
+              await loadSubscriptionData();
+              Alert.alert('Plan Activated 🎉', `Your plan "${plan.planName || plan.subscriptionName}" is now active.`);
+            } else {
+              Alert.alert('Payment Processing', 'Your payment is being verified with the bank. Your subscription will be updated shortly.');
+            }
+          }
         } catch (vErr) {
           console.warn('Subscription auto-verify note:', vErr);
         }
+      } else if (paymentResult && paymentResult.success === false) {
+        setProcessingOrder(null);
       }
     } catch (err: any) {
       Alert.alert('Payment Exception', err?.message || 'Payment checkout failed.');
@@ -218,7 +277,7 @@ export const SubscriptionBillingScreen: React.FC<SubscriptionBillingScreenProps>
               <View
                 style={[
                   styles.activePlanCard,
-                  subscription.isExpired && { borderColor: '#EF4444', backgroundColor: '#FEF2F2' },
+                  (subscription.isExpired || subscription.lifecycleState === 'INACTIVE' || subscription.status?.toUpperCase() === 'INACTIVE') && { borderColor: '#EF4444', backgroundColor: '#FEF2F2' },
                   subscription.isInGracePeriod && { borderColor: '#F59E0B', backgroundColor: '#FFFBEB' },
                 ]}
               >
@@ -229,7 +288,9 @@ export const SubscriptionBillingScreen: React.FC<SubscriptionBillingScreenProps>
                   </View>
                   <StatusBadge
                     label={
-                      subscription.isExpired
+                      subscription.lifecycleState === 'INACTIVE' || subscription.status?.toUpperCase() === 'INACTIVE'
+                        ? 'INACTIVE'
+                        : subscription.isExpired
                         ? 'EXPIRED'
                         : subscription.isInGracePeriod
                         ? `GRACE PERIOD (${subscription.graceDaysRemaining}d)`
@@ -240,7 +301,9 @@ export const SubscriptionBillingScreen: React.FC<SubscriptionBillingScreenProps>
                         : 'ACTIVE TIER'
                     }
                     variant={
-                      subscription.isExpired
+                      subscription.lifecycleState === 'INACTIVE' || subscription.status?.toUpperCase() === 'INACTIVE'
+                        ? 'danger'
+                        : subscription.isExpired
                         ? 'danger'
                         : subscription.isInGracePeriod
                         ? 'warning'
@@ -255,20 +318,22 @@ export const SubscriptionBillingScreen: React.FC<SubscriptionBillingScreenProps>
                   <Text
                     style={[
                       styles.countdownDays,
-                      subscription.isExpired && { color: '#DC2626' },
+                      (subscription.isExpired || subscription.lifecycleState === 'INACTIVE' || subscription.status?.toUpperCase() === 'INACTIVE') && { color: '#DC2626' },
                       subscription.isInGracePeriod && { color: '#D97706' },
                       subscription.hasQueuedRenewal && { color: '#059669' },
                     ]}
                   >
                     {subscription.isInGracePeriod
                       ? subscription.graceDaysRemaining
-                      : subscription.isExpired
+                      : (subscription.isExpired || subscription.lifecycleState === 'INACTIVE' || subscription.status?.toUpperCase() === 'INACTIVE')
                       ? 0
                       : subscription.totalDaysRemaining ?? subscription.daysRemaining}
                   </Text>
                   <View style={{ marginLeft: 8, flex: 1 }}>
                     <Text style={styles.countdownText}>
-                      {subscription.isInGracePeriod
+                      {subscription.lifecycleState === 'INACTIVE' || subscription.status?.toUpperCase() === 'INACTIVE'
+                        ? 'Subscription is Inactive'
+                        : subscription.isInGracePeriod
                         ? 'Grace Period Days Remaining'
                         : subscription.isExpired
                         ? 'Subscription Expired'
@@ -325,18 +390,42 @@ export const SubscriptionBillingScreen: React.FC<SubscriptionBillingScreenProps>
 
             {/* Included Entitlement Features */}
             <View style={styles.featuresCard}>
-              <Text style={styles.featuresTitle}>Included Entitlement Features</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: Spacing.sm }}>
+                <View style={{ flex: 1, paddingRight: 8 }}>
+                  <Text style={styles.featuresTitle}>Your Store Feature Entitlements</Text>
+                  <Text style={styles.featuresSubtitle}>
+                    Active operational capabilities for this outlet terminal
+                  </Text>
+                </View>
+                <View style={styles.featuresActiveCountBadge}>
+                  <Text style={styles.featuresActiveCountText}>
+                    {getSubscriptionFeatureList(subscription).filter((f) => f.enabled).length} Enabled
+                  </Text>
+                </View>
+              </View>
               <View style={styles.featureList}>
-                {[
-                  'Counter POS Terminal & Cashier Billing',
-                  'Kitchen Display System (KDS) & Printers',
-                  'Live Floor Layout & Table Management',
-                  'Staff Accounts, Shifts & Access PINs',
-                  'Instant Online Payment Gateway Integration',
-                ].map((feat, idx) => (
-                  <View key={`feat-item-${idx}`} style={styles.featureItem}>
-                    <CheckCircle2 size={16} color="#17845A" />
-                    <Text style={styles.featureText}>{feat}</Text>
+                {getSubscriptionFeatureList(subscription).map((feat) => (
+                  <View key={`active-feat-${feat.key}`} style={styles.featureItem}>
+                    <View style={{ width: 22, alignItems: 'center' }}>
+                      {feat.enabled ? (
+                        <CheckCircle2 size={16} color="#17845A" />
+                      ) : (
+                        <Lock size={14} color="#9CA3AF" />
+                      )}
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.featureText, !feat.enabled && styles.featureTextDisabled]}>
+                        {feat.label}
+                      </Text>
+                      <Text style={styles.featureSubtext} numberOfLines={1}>
+                        {feat.description}
+                      </Text>
+                    </View>
+                    {!feat.enabled && (
+                      <View style={styles.upgradeRequiredPill}>
+                        <Text style={styles.upgradeRequiredText}>UPGRADE</Text>
+                      </View>
+                    )}
                   </View>
                 ))}
               </View>
@@ -344,9 +433,15 @@ export const SubscriptionBillingScreen: React.FC<SubscriptionBillingScreenProps>
 
             {/* Upgrade / Renewal Plans */}
             <Text style={styles.plansTitle}>Available Plans & Renewals</Text>
-            {plans.map((plan) => {
+            {plans
+              .filter((p) => p.isActive !== false)
+              .map((plan) => {
               const finalPrice = plan.finalPrice ?? Math.max(0, plan.price - (plan.discountAmount || 0));
               const bonusCredit = plan.includedWalletCredit || 0;
+              const isSubActive =
+                !subscription?.isExpired &&
+                subscription?.lifecycleState !== 'INACTIVE' &&
+                subscription?.status?.toUpperCase() !== 'INACTIVE';
               const isCurrentPlan = subscription?.subscriptionConfigurationId === plan.id;
 
               return (
@@ -354,15 +449,26 @@ export const SubscriptionBillingScreen: React.FC<SubscriptionBillingScreenProps>
                   key={`sub-plan-${plan.id}`}
                   style={[
                     styles.planCard,
-                    isCurrentPlan && { borderColor: '#10B981', borderWidth: 1.5, backgroundColor: '#F0FDF4' },
+                    isCurrentPlan && isSubActive && { borderColor: '#10B981', borderWidth: 1.5, backgroundColor: '#F0FDF4' },
+                    isCurrentPlan && !isSubActive && { borderColor: '#FCA5A5', borderWidth: 1.5, backgroundColor: '#FEF2F2' },
                   ]}
                 >
                   <View style={styles.planCardHeader}>
                     <View style={{ flex: 1 }}>
-                      {isCurrentPlan && (
+                      {isCurrentPlan && isSubActive && (
                         <View style={styles.currentActiveBadge}>
                           <CheckCircle2 size={12} color="#15803D" />
                           <Text style={styles.currentActiveBadgeText}>CURRENT ACTIVE PLAN</Text>
+                        </View>
+                      )}
+                      {isCurrentPlan && !isSubActive && (
+                        <View style={[styles.currentActiveBadge, { backgroundColor: '#FEE2E2', borderColor: '#FCA5A5' }]}>
+                          <AlertCircle size={12} color="#DC2626" />
+                          <Text style={[styles.currentActiveBadgeText, { color: '#B91C1C' }]}>
+                            {subscription?.lifecycleState === 'INACTIVE' || subscription?.status?.toUpperCase() === 'INACTIVE'
+                              ? 'PREVIOUS PLAN (INACTIVE)'
+                              : 'PREVIOUS PLAN (EXPIRED)'}
+                          </Text>
                         </View>
                       )}
                       <Text style={styles.planName}>{plan.subscriptionName || plan.planName}</Text>
@@ -399,6 +505,39 @@ export const SubscriptionBillingScreen: React.FC<SubscriptionBillingScreenProps>
                     <Text style={styles.planPrice}>₹{finalPrice.toLocaleString()}</Text>
                   </View>
 
+                  {/* Consolidate Plan Feature Entitlement Highlights */}
+                  <View style={styles.planFeaturesContainer}>
+                    <Text style={styles.planFeaturesHeader}>PLAN ENTITLEMENT HIGHLIGHTS</Text>
+                    <View style={styles.planFeaturesGrid}>
+                      {getPlanFeatureList(plan).map((feat) => (
+                        <View
+                          key={`plan-${plan.id}-feat-${feat.key}`}
+                          style={[
+                            styles.planFeaturePill,
+                            !feat.enabled && styles.planFeaturePillDisabled,
+                          ]}
+                        >
+                          {feat.enabled ? (
+                            <CheckCircle2 size={11} color="#15803D" />
+                          ) : (
+                            <Lock size={10} color="#9CA3AF" />
+                          )}
+                          <Text
+                            style={[
+                              styles.planFeatureText,
+                              !feat.enabled && styles.planFeatureTextDisabled,
+                            ]}
+                          >
+                            {feat.shortLabel}
+                          </Text>
+                          {feat.enabled && feat.commissionBadge ? (
+                            <Text style={styles.planFeatureBadgeText}>{feat.commissionBadge}</Text>
+                          ) : null}
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+
                   <TouchableOpacity
                     activeOpacity={0.88}
                     style={styles.renewBtn}
@@ -407,7 +546,7 @@ export const SubscriptionBillingScreen: React.FC<SubscriptionBillingScreenProps>
                   >
                     <LinearGradient
                       colors={
-                        isCurrentPlan
+                        isCurrentPlan && isSubActive
                           ? ['#059669', '#10B981']
                           : ['#F59E0B', '#E58B24', '#DE8626', '#CB741B']
                       }
@@ -417,7 +556,7 @@ export const SubscriptionBillingScreen: React.FC<SubscriptionBillingScreenProps>
                     >
                       {payingPlanId === plan.id ? (
                         <ActivityIndicator size="small" color="#FFFFFF" />
-                      ) : isCurrentPlan ? (
+                      ) : isCurrentPlan && isSubActive ? (
                         <>
                           <CheckCircle2 size={16} color="#FFFFFF" />
                           <Text style={styles.renewBtnText}>
@@ -426,11 +565,18 @@ export const SubscriptionBillingScreen: React.FC<SubscriptionBillingScreenProps>
                               : `Renew Current Plan (₹${finalPrice.toLocaleString()})`}
                           </Text>
                         </>
+                      ) : isCurrentPlan && !isSubActive ? (
+                        <>
+                          <Sparkles size={16} color="#FFFFFF" />
+                          <Text style={styles.renewBtnText}>
+                            Reactivate {plan.subscriptionName || plan.planName} (₹{finalPrice.toLocaleString()})
+                          </Text>
+                        </>
                       ) : (
                         <>
                           <Sparkles size={16} color="#FFFFFF" />
                           <Text style={styles.renewBtnText}>
-                            Upgrade to {plan.subscriptionName || plan.planName} (₹{finalPrice.toLocaleString()})
+                            {isSubActive ? `Upgrade to ${plan.subscriptionName || plan.planName}` : `Activate ${plan.subscriptionName || plan.planName}`} (₹{finalPrice.toLocaleString()})
                           </Text>
                         </>
                       )}
@@ -581,12 +727,16 @@ export const SubscriptionBillingScreen: React.FC<SubscriptionBillingScreenProps>
             gateway={processingOrder.gateway}
             keyId={processingOrder.keyId}
             onSuccess={() => {
+              setProcessingOrder(null);
+              apiCacheManager.invalidate('/Subscription');
               WalletEvents.emit();
+              SubscriptionEvents.emitUpdated();
               loadSubscriptionData();
             }}
             onClose={() => {
               setProcessingOrder(null);
               WalletEvents.emit();
+              SubscriptionEvents.emitUpdated();
               loadSubscriptionData();
             }}
           />
@@ -1015,6 +1165,96 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: '#6B7280',
     fontWeight: '500',
+  },
+  featuresSubtitle: {
+    color: '#78716C',
+    fontSize: 11,
+    marginTop: 1,
+  },
+  featuresActiveCountBadge: {
+    backgroundColor: '#DCFCE7',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+  },
+  featuresActiveCountText: {
+    color: '#15803D',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  featureSubtext: {
+    color: '#A89F91',
+    fontSize: 10,
+    marginTop: 1,
+  },
+  featureTextDisabled: {
+    color: '#9CA3AF',
+  },
+  upgradeRequiredPill: {
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  upgradeRequiredText: {
+    color: '#D97706',
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
+  planFeaturesContainer: {
+    marginTop: 6,
+    marginBottom: 14,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#F0EAE1',
+  },
+  planFeaturesHeader: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#8C7A6B',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+    textTransform: 'uppercase',
+  },
+  planFeaturesGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  planFeaturePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#F0FDF4',
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  planFeaturePillDisabled: {
+    backgroundColor: '#F9FAFB',
+    borderColor: '#E5E7EB',
+  },
+  planFeatureText: {
+    fontSize: 10.5,
+    fontWeight: '700',
+    color: '#15803D',
+  },
+  planFeatureTextDisabled: {
+    color: '#9CA3AF',
+    fontWeight: '500',
+  },
+  planFeatureBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#D97706',
+    marginLeft: 2,
   },
 });
 

@@ -1,6 +1,6 @@
 import { ITableRepository } from '../../domain/repositories/ITableRepository';
 import { TableRemoteDataSource } from '../datasources/TableRemoteDataSource';
-import { TableMaster, TableReservation, RestaurantReservationConfig, FloorSection } from '../../domain/models/Table';
+import { TableMaster, TableReservation, RestaurantReservationConfig, FloorSection, TableQrResponseDTO } from '../../domain/models/Table';
 
 export class TableRepositoryImpl implements ITableRepository {
   constructor(private remoteDataSource: TableRemoteDataSource) {}
@@ -48,6 +48,14 @@ export class TableRepositoryImpl implements ITableRepository {
 
   async deleteTable(tableId: number): Promise<boolean> {
     return await this.remoteDataSource.deleteTable(tableId);
+  }
+
+  async getTableQr(tableId: number, restaurantId?: number, baseUrl?: string): Promise<TableQrResponseDTO | null> {
+    return await this.remoteDataSource.getTableQr(tableId, restaurantId, baseUrl);
+  }
+
+  async getRollingTableQr(tableId: number, ttlMinutes: number = 15, baseUrl?: string): Promise<TableQrResponseDTO | null> {
+    return await this.remoteDataSource.getRollingTableQr(tableId, ttlMinutes, baseUrl);
   }
 
   async getReservations(restaurantId?: number, date?: string, status?: string): Promise<TableReservation[]> {

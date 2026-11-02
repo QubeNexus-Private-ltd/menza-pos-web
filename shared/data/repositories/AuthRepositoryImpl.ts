@@ -33,4 +33,18 @@ export class AuthRepositoryImpl implements IAuthRepository {
   async logout(token?: string, refreshToken?: string): Promise<boolean> {
     return await this.remoteDataSource.logout(token, refreshToken);
   }
+  async loginWithStaffPin(
+    paramsOrRestId: { pin: string; mobile?: string; restaurantId?: number; deviceId?: string } | number,
+    pin?: string,
+    deviceId?: string
+  ): Promise<AuthResponse> {
+    return await this.remoteDataSource.loginWithStaffPin(paramsOrRestId as any, pin, deviceId);
+  }
+
+  async setStaffPin(targetUserId: number, pin: string): Promise<boolean> {
+    return await this.remoteDataSource.setStaffPin(targetUserId, pin);
+  }
+  async resetPinWithOtp(mobile: string, otpCode: string, newPin: string, deviceId?: string): Promise<AuthResponse> {
+    return await this.remoteDataSource.resetPinWithOtp(mobile, otpCode, newPin, deviceId);
+  }
 }

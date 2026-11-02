@@ -30,12 +30,14 @@ import {
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
+import { FeatureGate } from '@/components/subscription/FeatureGate';
 import { TableQrModal } from '@/components/tables/TableQrModal';
 import { StorefrontQrModal } from '@/components/tables/StorefrontQrModal';
 import { OrderSettleModal } from '@/components/orders/OrderSettleModal';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { usePrinterStore } from '@shared/presentation/state/usePrinterStore';
 import { TableRemoteDataSource } from '@shared/data/datasources/TableRemoteDataSource';
+import { TablesFloorSkeleton } from '@/components/common/Skeleton';
 import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
 import { RestaurantConfigRemoteDataSource } from '@shared/data/datasources/RestaurantConfigRemoteDataSource';
 import { TableMaster } from '@shared/domain/models/Table';
@@ -65,6 +67,7 @@ export default function TablesPage() {
   const { activeRestaurant, restaurants } = useAuthStore();
   const { paperWidth, customFooter } = usePrinterStore();
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
+
 
   const cachedCatalog = usePosCatalogStore.getState();
   const hasCachedTables = Boolean(
@@ -120,6 +123,18 @@ export default function TablesPage() {
     message?: string;
   }
   const [serviceRequests, setServiceRequests] = useState<TableServiceRequestItem[]>([]);
+
+  // Clean slate and show skeleton immediately upon restaurant switch
+  useEffect(() => {
+    setTables([]);
+    setActiveOrders([]);
+    setActionTable(null);
+    setQrTable(null);
+    setSettlingOrder(null);
+    setServiceRequests([]);
+    setLoading(true);
+  }, [currentRestId]);
+
 
   const handleResolveService = (tableId: number, requestId?: any) => {
     setServiceRequests((prev) =>
@@ -526,6 +541,7 @@ export default function TablesPage() {
   return (
     <AuthGuard>
       <AppShell>
+        <FeatureGate feature="tableConfiguration" title="Table & Floor Layout Designer" planSuggestion="Dine-In Pro">
         <div className="p-4 sm:p-6 lg:p-8 space-y-6 max-w-7xl mx-auto">
           {/* Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -590,14 +606,7 @@ export default function TablesPage() {
 
           {/* Tables Grid */}
           {loading ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2.5 sm:gap-3.5 md:gap-4">
-              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((n) => (
-                <div
-                  key={n}
-                  className="h-36 sm:h-40 rounded-2xl sm:rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] animate-pulse"
-                />
-              ))}
-            </div>
+            <TablesFloorSkeleton count={12} />
           ) : filteredTables.length === 0 ? (
             <div className="rounded-2xl sm:rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-12 sm:p-16 text-center text-xs text-[#667085]">
               No tables configured in this section. Click "Add Table" to set up your floor plan.
@@ -1503,6 +1512,7 @@ export default function TablesPage() {
             </div>
           </div>
         )}
+        </FeatureGate>
       </AppShell>
     </AuthGuard>
   );

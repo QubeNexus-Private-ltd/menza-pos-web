@@ -26,4 +26,5 @@ export interface IOrderRepository {
   settleTable(tableId: number): Promise<boolean>;
   getActiveOrderByTable(tableId: number, restaurantId?: number): Promise<OrderMaster | null>;
   cancelOrder(orderId: number, reason?: string): Promise<boolean>;
+  batchSyncOrders(restaurantId: number, orders: PlaceOrderRequest[]): Promise<any>;
 }

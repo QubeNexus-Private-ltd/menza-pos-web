@@ -23,10 +23,18 @@ import {
   Layers,
   FileText,
   Download,
+  ArrowRight,
+  AlertCircle,
+  Info,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
+import {
+  getPlanFeatureList,
+  getSubscriptionFeatureList,
+  CANONICAL_FEATURES,
+} from '@shared/core/utils/entitlementCatalog';
 import { SubscriptionService } from '@/services/subscriptionService';
 import {
   SubscriptionPlan,
@@ -38,17 +46,31 @@ import { TaxInvoiceModal, TaxInvoiceItem } from '@/components/invoice/TaxInvoice
 
 export default function SubscriptionBillingPage() {
   const router = useRouter();
-  const { activeRestaurant, restaurants } = useAuthStore();
+  const { activeRestaurant, restaurants, user } = useAuthStore();
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
+
+  const isOwner =
+    user?.roles?.some((r) => ['OWNER', 'ADMIN', 'SUPERADMIN', 'SUPER_ADMIN'].includes(r.toUpperCase().replace(/[^A-Z]/g, ''))) ||
+    !user?.roles ||
+    user.roles.length === 0;
 
   const [loading, setLoading] = useState(true);
   const [activeSub, setActiveSub] = useState<UserSubscriptionStatus | null>(null);
   const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
   const [history, setHistory] = useState<RestaurantSubscriptionHistory[]>([]);
+  const [selectedPlanId, setSelectedPlanId] = useState<number | null>(null);
 
   // Tax Invoice Modal State
   const [selectedInvoice, setSelectedInvoice] = useState<TaxInvoiceItem | null>(null);
   const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
+
+  // Clean slate upon restaurant switch
+  useEffect(() => {
+    setActiveSub(null);
+    setHistory([]);
+    setLoading(true);
+  }, [currentRestId]);
+
 
   const handleOpenActiveSubInvoice = () => {
     if (!activeSub) return;
@@ -219,6 +241,17 @@ export default function SubscriptionBillingPage() {
       return Boolean(planLabel && subLabel && planLabel === subLabel);
     }) || null;
 
+  const selectedPlan =
+    plans.find((p) => p.id === selectedPlanId) ||
+    matchedPlan ||
+    (plans.length > 0 ? plans[0] : null);
+
+  useEffect(() => {
+    if (selectedPlanId === null && (matchedPlan || plans.length > 0)) {
+      setSelectedPlanId(matchedPlan?.id ?? plans[0]?.id ?? null);
+    }
+  }, [plans, matchedPlan, selectedPlanId]);
+
   const startFormatted = formatDate(activeSub?.startDate);
   const expiryFormatted = formatDate(activeSub?.endDate || activeSub?.expiryDate);
   const effectiveEndFormatted = formatDate(
@@ -240,12 +273,17 @@ export default function SubscriptionBillingPage() {
 
   // Helper to resolve an entitlement by its configKey
   const resolveEntitlement = (configKey: string, fallbackPlanProp?: keyof SubscriptionPlan) => {
-    const activeEnt = (activeSub?.entitlements || []).find(
-      (e: any) => String(e.configKey || e.ConfigKey || '').toLowerCase() === configKey.toLowerCase()
-    );
-    const planEnt = (matchedPlan?.entitlements || []).find(
-      (e: any) => String(e.configKey || e.ConfigKey || '').toLowerCase() === configKey.toLowerCase()
-    );
+    const kLower = configKey.toLowerCase();
+    const isKds = kLower === 'iskdsenabled' || kLower === 'iskdsappenabled' || kLower === 'iscaptainmenzaappenabled';
+
+    const activeEnt = (activeSub?.entitlements || []).find((e: any) => {
+      const ek = String(e.configKey || e.ConfigKey || '').toLowerCase();
+      return isKds ? (ek === 'iskdsenabled' || ek === 'iskdsappenabled' || ek === 'iscaptainmenzaappenabled') : ek === kLower;
+    });
+    const planEnt = (matchedPlan?.entitlements || []).find((e: any) => {
+      const ek = String(e.configKey || e.ConfigKey || '').toLowerCase();
+      return isKds ? (ek === 'iskdsenabled' || ek === 'iskdsappenabled' || ek === 'iscaptainmenzaappenabled') : ek === kLower;
+    });
 
     let enabled = true;
     if (activeEnt !== undefined) {
@@ -372,8 +410,8 @@ export default function SubscriptionBillingPage() {
       commissionDesc = 'Disabled in active subscription';
     } else if (featureCommissionPct > 0 && featureFlatFee > 0) {
       const flatStr = featureFlatFee.toFixed(2).replace(/\.00$/, '');
-      commissionBadge = `+${featureCommissionPct}% + ₹${flatStr}/order`;
-      commissionDesc = `+${featureCommissionPct}% + ₹${flatStr}/order feature surcharge`;
+      commissionBadge = `+${featureCommissionPct}% + ?${flatStr}/order`;
+      commissionDesc = `+${featureCommissionPct}% + ?${flatStr}/order feature surcharge`;
       isSurcharge = true;
     } else if (featureCommissionPct > 0) {
       commissionBadge = `+${featureCommissionPct}% Take-Rate`;
@@ -381,23 +419,23 @@ export default function SubscriptionBillingPage() {
       isSurcharge = true;
     } else if (featureFlatFee > 0) {
       const flatStr = featureFlatFee.toFixed(2).replace(/\.00$/, '');
-      commissionBadge = `+₹${flatStr} / order`;
-      commissionDesc = `+₹${flatStr} flat fee per order surcharge`;
+      commissionBadge = `+?${flatStr} / order`;
+      commissionDesc = `+?${flatStr} flat fee per order surcharge`;
       isSurcharge = true;
     } else if (commissionType === 'FEATURE_DRIVEN') {
       commissionBadge = '0% Surcharge';
       commissionDesc = 'Included in plan (0% extra surcharge)';
     } else if (baseCommissionPct > 0 && baseFlatFee > 0) {
       const flatStr = baseFlatFee.toFixed(2).replace(/\.00$/, '');
-      commissionBadge = `${baseCommissionPct}% + ₹${flatStr} Base`;
-      commissionDesc = `Covered under ${baseCommissionPct}% + ₹${flatStr}/order base platform fee`;
+      commissionBadge = `${baseCommissionPct}% + ?${flatStr} Base`;
+      commissionDesc = `Covered under ${baseCommissionPct}% + ?${flatStr}/order base platform fee`;
     } else if (baseCommissionPct > 0) {
       commissionBadge = `${baseCommissionPct}% Base Rate`;
       commissionDesc = `Covered under ${baseCommissionPct}% base platform fee`;
     } else if (baseFlatFee > 0) {
       const flatStr = baseFlatFee.toFixed(2).replace(/\.00$/, '');
-      commissionBadge = `₹${flatStr} Base / order`;
-      commissionDesc = `Covered under ₹${flatStr}/order base platform fee`;
+      commissionBadge = `?${flatStr} Base / order`;
+      commissionDesc = `Covered under ?${flatStr}/order base platform fee`;
     } else {
       commissionBadge = '0% Commission';
       commissionDesc = 'Included in plan (0% commission)';
@@ -435,11 +473,11 @@ export default function SubscriptionBillingPage() {
 
   const effectiveFeeDisplay =
     effectiveTotalPct > 0 && effectiveTotalFlat > 0
-      ? `${effectiveTotalPct.toFixed(2).replace(/\.00$/, '')}% + ₹${effectiveTotalFlat.toFixed(2).replace(/\.00$/, '')} / order`
+      ? `${effectiveTotalPct.toFixed(2).replace(/\.00$/, '')}% + ?${effectiveTotalFlat.toFixed(2).replace(/\.00$/, '')} / order`
       : effectiveTotalPct > 0
       ? `${effectiveTotalPct.toFixed(2).replace(/\.00$/, '')}% per order`
       : effectiveTotalFlat > 0
-      ? `₹${effectiveTotalFlat.toFixed(2).replace(/\.00$/, '')} flat / order`
+      ? `?${effectiveTotalFlat.toFixed(2).replace(/\.00$/, '')} flat / order`
       : '0% Commission Plan';
 
   return (
@@ -522,7 +560,7 @@ export default function SubscriptionBillingPage() {
                         : activeSub?.isInGracePeriod
                         ? 'Grace Period'
                         : hasQueuedRenewal
-                        ? 'Active • Renewed'
+                        ? 'Active � Renewed'
                         : activeSub?.status || 'Active'}
                     </span>
                     {matchedPlan?.subscriptionCode && (
@@ -532,14 +570,14 @@ export default function SubscriptionBillingPage() {
                     )}
                   </div>
                   <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-1">
-                    Outlet: <strong>{activeRestaurant?.restaurantName || 'Active Store'}</strong> •{' '}
+                    Outlet: <strong>{activeRestaurant?.restaurantName || 'Active Store'}</strong> �{' '}
                     {matchedPlan?.description || 'Seamless POS billing, kitchen KOT routing, and analytics'}
                   </p>
                   <div className="flex items-center gap-2 flex-wrap text-[11px] text-[#667085] dark:text-[#94A3B8] mt-1.5">
                     <span>Menza Supplier: <strong className="font-mono text-[#DE8626]">{activeSub?.platformGst?.platformGstin || '27AABCM8821F1ZX'}</strong> ({activeSub?.platformGst?.platformLegalName || 'Menza Technologies Pvt Ltd'})</span>
                     {(activeSub?.restaurantGstNumber || (activeRestaurant as any)?.gstNumber || (activeRestaurant as any)?.gstin) ? (
                       <>
-                        <span>•</span>
+                        <span>�</span>
                         <span>Billed Store GSTIN: <strong className="font-mono text-emerald-600 dark:text-emerald-400">{activeSub?.restaurantGstNumber || (activeRestaurant as any)?.gstNumber || (activeRestaurant as any)?.gstin}</strong></span>
                       </>
                     ) : null}
@@ -569,7 +607,7 @@ export default function SubscriptionBillingPage() {
                       : `${currentCycleDaysLeft} days remaining in current cycle`}
                   </span>
                   <span className="text-[11px] font-semibold text-[#667085] dark:text-[#94A3B8]">
-                    {startFormatted} → {expiryFormatted}
+                    {startFormatted} ? {expiryFormatted}
                   </span>
                 </div>
                 <div className="h-2.5 w-full overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
@@ -638,7 +676,7 @@ export default function SubscriptionBillingPage() {
                     )}
                   </div>
                   <p className="mt-1.5 text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
-                    ₹{Number(activeSub?.amountPaid ?? matchedPlan?.finalPrice ?? matchedPlan?.price ?? 0).toLocaleString('en-IN')}
+                    ?{Number(activeSub?.amountPaid ?? matchedPlan?.finalPrice ?? matchedPlan?.price ?? 0).toLocaleString('en-IN')}
                   </p>
                 </div>
                 <div className="pt-1 flex items-center justify-between text-[11px] text-[#667085] dark:text-[#94A3B8]">
@@ -660,7 +698,7 @@ export default function SubscriptionBillingPage() {
                   {activeSub?.paymentReferenceNo || 'Direct / Admin Assigned'}
                 </p>
                 <span className="text-[11px] text-[#667085]">
-                  Subscription ID: #{activeSub?.subscriptionId || activeSub?.subscriptionConfigurationId || '—'}
+                  Subscription ID: #{activeSub?.subscriptionId || activeSub?.subscriptionConfigurationId || '�'}
                 </span>
               </div>
 
@@ -676,14 +714,14 @@ export default function SubscriptionBillingPage() {
                   className="text-[11px] text-[#667085] truncate block"
                   title={
                     matchedPlan?.maxCommissionCapPerOrder
-                      ? `Max cap: ₹${matchedPlan.maxCommissionCapPerOrder}/order • ${commissionType}`
+                      ? `Max cap: ?${matchedPlan.maxCommissionCapPerOrder}/order � ${commissionType}`
                       : activeSurcharges.length > 0
-                      ? `Base: ${baseCommissionPct}% + ₹${baseFlatFee}/order • Active Surcharges: +${totalFeaturePct}% + ₹${totalFeatureFlat}`
+                      ? `Base: ${baseCommissionPct}% + ?${baseFlatFee}/order � Active Surcharges: +${totalFeaturePct}% + ?${totalFeatureFlat}`
                       : matchedPlan?.commissionType || 'Standard SaaS License'
                   }
                 >
                   {matchedPlan?.maxCommissionCapPerOrder
-                    ? `Max cap: ₹${matchedPlan.maxCommissionCapPerOrder}/order • ${commissionType}`
+                    ? `Max cap: ?${matchedPlan.maxCommissionCapPerOrder}/order � ${commissionType}`
                     : activeSurcharges.length > 0
                     ? `Includes ${activeSurcharges.length} active feature surcharge${activeSurcharges.length > 1 ? 's' : ''}`
                     : matchedPlan?.commissionType || 'Standard SaaS License'}
@@ -696,7 +734,7 @@ export default function SubscriptionBillingPage() {
                   <span>Included Wallet Credit</span>
                 </div>
                 <p className="mt-1.5 text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
-                  ₹{Number(matchedPlan?.includedWalletCredit || 0).toLocaleString('en-IN')}
+                  ?{Number(matchedPlan?.includedWalletCredit || 0).toLocaleString('en-IN')}
                 </p>
                 <span className="text-[11px] text-[#667085]">
                   Credited on plan activation/renewal
@@ -815,32 +853,53 @@ export default function SubscriptionBillingPage() {
           </div>
 
           {/* Available Subscription Tiers */}
-          <div>
-            <h2 className="text-sm font-bold text-[#667085] uppercase tracking-wider mb-4">
-              Available Store Plans ({plans.length})
-            </h2>
+          <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h2 className="text-sm font-bold text-[#667085] uppercase tracking-wider">
+                  Available Store Plans ({plans.length})
+                </h2>
+                <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-0.5">
+                  Select any plan tier below to inspect its full commercial terms and consolidated feature checklist
+                </p>
+              </div>
+            </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
               {plans.map((plan) => {
                 const isCurrent = matchedPlan?.id === plan.id;
+                const isSelected = selectedPlan?.id === plan.id;
                 const price = Number(plan.finalPrice ?? plan.price ?? 0);
+                const originalPrice = Number(plan.price ?? price);
                 const duration = plan.durationInDays || plan.durationDays || 30;
+                const planFeatures = getPlanFeatureList(plan as any);
+                const enabledCount = planFeatures.filter((f) => f.enabled).length;
+
                 return (
                   <div
                     key={plan.id}
-                    className={`relative flex flex-col justify-between rounded-3xl border bg-white dark:bg-[#1B2127] p-6 shadow-sm transition-all ${
-                      isCurrent
-                        ? 'border-2 border-[#DE8626] ring-2 ring-[#DE8626]/20'
-                        : 'border-[#E7E1DA] dark:border-[#2B3540] hover:border-[#DE8626] hover:shadow-md'
+                    onClick={() => setSelectedPlanId(plan.id)}
+                    className={`relative flex flex-col justify-between rounded-3xl border p-6 cursor-pointer transition-all ${
+                      isSelected
+                        ? 'border-2 border-[#DE8626] bg-amber-500/5 shadow-md shadow-amber-500/10 ring-2 ring-[#DE8626]'
+                        : isCurrent
+                        ? 'border-2 border-[#DE8626]/60 bg-white dark:bg-[#1B2127] ring-1 ring-[#DE8626]/20'
+                        : 'border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] hover:border-[#DE8626]/60 hover:shadow-md'
                     }`}
                   >
-                    {isCurrent && (
+                    {isCurrent ? (
                       <span className="absolute top-4 right-4 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2.5 py-0.5 text-[10px] font-extrabold text-emerald-600 uppercase">
                         Current Plan
                       </span>
-                    )}
+                    ) : isSelected ? (
+                      <span className="absolute top-4 right-4 rounded-full bg-amber-500/15 border border-amber-500/30 px-2.5 py-0.5 text-[10px] font-extrabold text-[#DE8626] uppercase">
+                        Selected Tier
+                      </span>
+                    ) : null}
+
                     <div>
-                      <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-1.5 mb-2">
+                        <Crown className="h-4 w-4 text-[#DE8626]" />
                         <span className="text-xs font-bold text-[#DE8626] uppercase tracking-wider">
                           {plan.billingCycle || 'Monthly'}
                         </span>
@@ -853,63 +912,263 @@ export default function SubscriptionBillingPage() {
                         {plan.description || 'Full POS, KOT ticketing, digital catalog, and reports.'}
                       </p>
 
-                      <div className="my-5 flex items-baseline gap-1">
+                      <div className="my-4 flex items-baseline gap-1.5">
                         <span className="text-3xl font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
                           ₹{price.toLocaleString('en-IN')}
                         </span>
+                        {originalPrice > price && (
+                          <span className="text-xs text-[#667085] line-through">
+                            ₹{originalPrice.toLocaleString('en-IN')}
+                          </span>
+                        )}
                         <span className="text-xs text-[#667085]">
                           / {duration} days
                         </span>
                       </div>
 
-                      <div className="space-y-2 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60 pt-4 text-xs text-[#667085] dark:text-[#94A3B8]">
-                        <div className="flex items-center gap-2">
-                          <Check className="h-4 w-4 text-emerald-500 shrink-0" />
-                          <span>High-Speed Counter POS Terminal</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Check className="h-4 w-4 text-emerald-500 shrink-0" />
-                          <span>Instant Kitchen KOT Sync & Printing</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Check className="h-4 w-4 text-emerald-500 shrink-0" />
-                          <span>Live Floor Table Management</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Check className="h-4 w-4 text-emerald-500 shrink-0" />
-                          <span>
-                            {plan.baseCommissionPercentage !== undefined && plan.baseCommissionPercentage > 0
-                              ? `${plan.baseCommissionPercentage}% Platform Fee per Order`
-                              : 'Executive Revenue & GST Reports'}
+                      <p className="text-[10px] text-[#667085] dark:text-[#94A3B8] -mt-2 mb-3">
+                        Includes GST • Menza Supplier GSTIN: <span className="font-mono font-semibold text-[#DE8626]">{activeSub?.platformGst?.platformGstin || '27AABCM8821F1ZX'}</span>
+                      </p>
+
+                      {/* Commercial & Benefit Badges */}
+                      <div className="flex flex-wrap gap-1.5 mb-3.5">
+                        <span className="rounded-md bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[10px] font-extrabold text-[#92400E] dark:text-amber-300">
+                          {plan.baseCommissionPercentage !== undefined && plan.baseCommissionPercentage > 0
+                            ? `${plan.baseCommissionPercentage}% QR Platform Fee`
+                            : '0% Platform Fee'}
+                          {plan.minCommissionFloorPerOrder && plan.minCommissionFloorPerOrder > 0
+                            ? ` (Min ₹${plan.minCommissionFloorPerOrder})`
+                            : ''}
+                        </span>
+                        <span className="rounded-md bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-extrabold text-emerald-700 dark:text-emerald-300">
+                          🛡️ Menza Absorbs PG Fee
+                        </span>
+                        {plan.includedWalletCredit ? (
+                          <span className="rounded-md bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold text-emerald-600">
+                            +₹{plan.includedWalletCredit} Wallet Bonus
+                          </span>
+                        ) : null}
+                      </div>
+
+                      {/* Consolidated Feature Entitlement Highlights Grid (Pills) */}
+                      <div className="border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60 pt-3">
+                        <div className="flex items-center justify-between text-[10px] font-extrabold uppercase tracking-wider text-[#667085] dark:text-[#94A3B8] mb-2">
+                          <span>Plan Entitlements</span>
+                          <span className="text-emerald-600 dark:text-emerald-400 font-bold">
+                            {enabledCount} / {planFeatures.length} Included
                           </span>
                         </div>
-                        {plan.includedWalletCredit ? (
-                          <div className="flex items-center gap-2 text-emerald-600 font-semibold">
-                            <Check className="h-4 w-4 text-emerald-500 shrink-0" />
-                            <span>Includes ₹{plan.includedWalletCredit} Wallet Bonus</span>
-                          </div>
-                        ) : null}
+                        <div className="grid grid-cols-2 gap-1.5">
+                          {planFeatures.map((feat) => (
+                            <div
+                              key={`plan-${plan.id}-feat-${feat.key}`}
+                              className={`flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-semibold border transition-all ${
+                                feat.enabled
+                                  ? 'border-emerald-500/20 bg-emerald-500/5 text-[#1E2930] dark:text-[#F3F4F6]'
+                                  : 'border-stone-200 dark:border-stone-800 bg-stone-100/40 dark:bg-stone-900/40 text-[#8C7A6B] dark:text-[#64748B] opacity-50'
+                              }`}
+                            >
+                              {feat.enabled ? (
+                                <CheckCircle2 className="h-3 w-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                              ) : (
+                                <Lock className="h-2.5 w-2.5 text-stone-400 shrink-0" />
+                              )}
+                              <span className="truncate">{feat.shortLabel}</span>
+                              {feat.enabled && feat.commissionBadge ? (
+                                <span className="ml-auto text-[9px] font-extrabold text-[#DE8626] shrink-0">
+                                  {feat.commissionBadge}
+                                </span>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     </div>
 
-                    <button
-                      onClick={() =>
-                        useSubscriptionStore
-                          .getState()
-                          .openRenewalModal(plan, isCurrent ? 'renew' : 'explore')
-                      }
-                      className={`mt-6 w-full rounded-2xl border py-3 text-xs font-bold transition-all shadow-sm ${
-                        isCurrent
-                          ? 'border-[#DE8626] bg-[#DE8626] text-white hover:bg-[#C4721C]'
-                          : 'border-[#DE8626] bg-amber-500/10 text-[#DE8626] hover:bg-[#DE8626] hover:text-white'
-                      }`}
-                    >
-                      {isCurrent ? 'Renew Current Plan' : 'Select & Activate'}
-                    </button>
+                    <div className="mt-5 pt-3 border-t border-[#E7E1DA]/40 dark:border-[#2B3540]/40">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          useSubscriptionStore
+                            .getState()
+                            .openRenewalModal(plan, isCurrent ? 'renew' : 'explore');
+                        }}
+                        className={`w-full rounded-2xl border py-3 text-xs font-bold transition-all shadow-sm ${
+                          isCurrent
+                            ? 'border-[#DE8626] bg-[#DE8626] text-white hover:bg-[#C4721C]'
+                            : isSelected
+                            ? 'border-[#DE8626] bg-[#DE8626] text-white hover:bg-[#C4721C]'
+                            : 'border-[#DE8626] bg-amber-500/10 text-[#DE8626] hover:bg-[#DE8626] hover:text-white'
+                        }`}
+                      >
+                        {isCurrent ? 'Renew Current Plan' : isSelected ? 'Activate Selected Tier' : 'Select & Activate'}
+                      </button>
+                    </div>
                   </div>
                 );
               })}
             </div>
+
+            {/* Detailed Consolidated Entitlement Breakdown for Selected Plan */}
+            {selectedPlan && (
+              <div className="rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-6 space-y-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#E7E1DA]/80 dark:border-[#2B3540]/80 pb-4">
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Crown className="h-5 w-5 text-[#DE8626]" />
+                      <h3 className="text-base font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                        Detailed Entitlements for {selectedPlan.subscriptionName || selectedPlan.planName}
+                      </h3>
+                      <span className="rounded-md bg-stone-100 dark:bg-[#252C34] px-2.5 py-0.5 text-[10px] font-bold text-[#DE8626]">
+                        {selectedPlan.baseCommissionPercentage !== undefined && selectedPlan.baseCommissionPercentage > 0
+                          ? `${selectedPlan.baseCommissionPercentage}% QR Platform Fee`
+                          : '0% Platform Fee'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-1">
+                      Consolidated 5-category feature entitlement checklist for store owner and cashier clarity
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/25 px-3 py-1.5 text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                      <CheckCircle2 className="h-4 w-4" />
+                      <span>
+                        {getPlanFeatureList(selectedPlan as any).filter((f) => f.enabled).length} / {getPlanFeatureList(selectedPlan as any).length} Included
+                      </span>
+                    </span>
+                  </div>
+                </div>
+
+                {/* 5-Category Breakdown Grid */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                  {getPlanFeatureList(selectedPlan as any).map((item) => (
+                    <div
+                      key={`selected-plan-ent-${item.key}`}
+                      className={`flex flex-col justify-between rounded-2xl p-4 border transition-all ${
+                        item.enabled
+                          ? 'border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] shadow-xs'
+                          : 'border-[#E7E1DA]/50 dark:border-[#2B3540]/50 bg-black/[0.02] dark:bg-white/[0.02] opacity-60'
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-center justify-between gap-1.5 mb-2">
+                          <span className="rounded-md bg-stone-100 dark:bg-[#252C34] px-2 py-0.5 text-[9px] font-bold text-[#667085] dark:text-[#94A3B8] uppercase tracking-wider">
+                            {item.category}
+                          </span>
+                          {item.enabled ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
+                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                              Included
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-stone-200/80 dark:bg-stone-800 px-2 py-0.5 text-[10px] font-bold text-[#667085] dark:text-[#94A3B8]">
+                              <Lock className="h-2.5 w-2.5" />
+                              Locked
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-start gap-2.5">
+                          <div
+                            className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-xl ${
+                              item.enabled
+                                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                                : 'bg-stone-100 dark:bg-stone-800 text-[#667085]'
+                            }`}
+                          >
+                            {item.enabled ? (
+                              <CheckCircle2 className="h-4 w-4" />
+                            ) : (
+                              <Lock className="h-3.5 w-3.5" />
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <h4
+                              className={`text-xs font-bold leading-tight ${
+                                item.enabled
+                                  ? 'text-[#1E2930] dark:text-[#F3F4F6]'
+                                  : 'text-[#667085] dark:text-[#94A3B8] line-through'
+                              }`}
+                            >
+                              {item.label}
+                            </h4>
+                            <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] mt-1 line-clamp-2 leading-relaxed">
+                              {item.description}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mt-3.5 pt-2.5 border-t border-[#E7E1DA]/70 dark:border-[#2B3540]/70 flex items-center justify-between text-[11px]">
+                        <span className="text-[#667085] dark:text-[#94A3B8]">Fee Structure:</span>
+                        <span
+                          className={`font-bold ${
+                            item.enabled ? 'text-emerald-600 dark:text-emerald-400' : 'text-[#667085]'
+                          }`}
+                        >
+                          {item.enabled
+                            ? item.commissionBadge || 'Included in Plan (0% extra)'
+                            : 'Upgrade Required'}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Selected Plan Action Bar with Cashier vs Owner Differentiator */}
+                <div className="pt-2 border-t border-[#E7E1DA]/80 dark:border-[#2B3540]/80">
+                  {isOwner ? (
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-[#667085] dark:text-[#94A3B8]">Selected Plan Total:</span>
+                          <span className="text-xl font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                            ₹{Number(selectedPlan.finalPrice ?? selectedPlan.price ?? 0).toLocaleString('en-IN')}
+                          </span>
+                          <span className="text-xs text-[#667085]">
+                            / {selectedPlan.durationInDays || selectedPlan.durationDays || 30} days
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-[#667085] dark:text-[#94A3B8] mt-0.5">
+                          Activates immediately with Razorpay instant settlement & automatic GST invoice generation
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          useSubscriptionStore
+                            .getState()
+                            .openRenewalModal(selectedPlan, selectedPlan.id === matchedPlan?.id ? 'renew' : 'explore')
+                        }
+                        className="inline-flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-[#DE8626] to-[#CB741B] py-3.5 px-6 text-xs font-extrabold text-white shadow-lg shadow-[#DE8626]/20 hover:from-[#C4721C] hover:to-[#B66415] transition-all hover:scale-[1.01] active:scale-[0.99]"
+                      >
+                        <CreditCard className="h-4 w-4" />
+                        <span>
+                          {selectedPlan.id === matchedPlan?.id
+                            ? `Renew ${selectedPlan.subscriptionName || selectedPlan.planName}`
+                            : `Activate ${selectedPlan.subscriptionName || selectedPlan.planName}`}
+                        </span>
+                        <ArrowRight className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-amber-500/25 bg-amber-500/10 p-3.5 text-xs text-amber-900 dark:text-amber-200 flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2.5">
+                        <AlertCircle className="h-4 w-4 text-[#DE8626] shrink-0" />
+                        <span>
+                          <strong>Staff Notice:</strong> You are viewing plan entitlements as a staff member. Only the <strong>Restaurant Owner</strong> can authorize billing or switch subscription tiers.
+                        </span>
+                      </div>
+                      <span className="rounded-full bg-amber-500/20 px-2.5 py-1 text-[10px] font-extrabold uppercase shrink-0 text-[#DE8626]">
+                        View Only
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Subscription & Billing History Ledger */}
@@ -968,16 +1227,16 @@ export default function SubscriptionBillingPage() {
                             {item.subscriptionName || item.subscriptionCode || activeSub?.planName || 'Subscription Plan'}
                           </h4>
                           <span className="text-[11px] text-[#667085]">
-                            • {formatDate(item.createdDateUtc, true)}
+                            � {formatDate(item.createdDateUtc, true)}
                           </span>
                         </div>
                         <p className="text-xs text-[#667085] dark:text-[#94A3B8]">
-                          Coverage: <strong>{formatDate(item.startDate)}</strong> → <strong>{formatDate(item.endDate)}</strong>
-                          {item.paymentReferenceNo ? ` • Payment Ref: ${item.paymentReferenceNo}` : ''}
+                          Coverage: <strong>{formatDate(item.startDate)}</strong> ? <strong>{formatDate(item.endDate)}</strong>
+                          {item.paymentReferenceNo ? ` � Payment Ref: ${item.paymentReferenceNo}` : ''}
                         </p>
                         {item.baseAmount && item.taxAmount ? (
                           <p className="text-[10px] text-[#667085] dark:text-[#94A3B8]">
-                            Taxable Value: ₹{Number(item.baseAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })} + GST ({item.taxPercentage || 18}%): ₹{Number(item.taxAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                            Taxable Value: ?{Number(item.baseAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })} + GST ({item.taxPercentage || 18}%): ?{Number(item.taxAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                           </p>
                         ) : null}
                         {item.remarks && (
@@ -990,7 +1249,7 @@ export default function SubscriptionBillingPage() {
                           Amount Paid
                         </span>
                         <span className="text-base font-black text-[#1E2930] dark:text-[#F3F4F6] block">
-                          ₹{Number(item.amountPaid || 0).toLocaleString('en-IN')}
+                          ?{Number(item.amountPaid || 0).toLocaleString('en-IN')}
                         </span>
                         <div className="flex items-center gap-2 sm:justify-end">
                           <span className="text-[10px] text-emerald-600 font-bold uppercase">

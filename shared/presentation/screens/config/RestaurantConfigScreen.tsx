@@ -23,7 +23,7 @@ import {
   MapPin,
   Phone,
   Mail,
-  Receipt,
+  ReceiptText,
   Camera,
   Image as ImageIcon,
   Save,
@@ -49,6 +49,7 @@ import {
   Table as TableIcon,
   Users,
   Utensils,
+  UtensilsCrossed,
   Flame,
   Coffee,
   Plus,
@@ -71,6 +72,11 @@ import { TableRepositoryImpl } from '../../../data/repositories/TableRepositoryI
 import { isCashierOnly, canEditStoreConfig, canConfigureKitchenStations } from '../../../core/auth/rolePermissions';
 import { useAuthStore } from '../../state/useAuthStore';
 import { useKitchenStationStore } from '../../state/useKitchenStationStore';
+import {
+  useSubscriptionStore,
+  isTableOrderSubscriptionAllowed,
+  extractTableOrderFlag,
+} from '../../state/useSubscriptionStore';
 import { GildedAlertModal, GildedAlertConfig } from '../../components/GildedAlertModal';
 import { TermsAndConditionsModal } from '../legal/TermsAndConditionsModal';
 import { PrivacyPolicyModal } from '../legal/PrivacyPolicyModal';
@@ -90,7 +96,17 @@ interface RestaurantConfigScreenProps {
 }
 
 export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ onClose }) => {
-  const { activeRestaurant, setActiveRestaurant, user } = useAuthStore();
+  const {
+    activeRestaurant,
+    setActiveRestaurant,
+    user,
+    isPinLockEnabled,
+    staffPin,
+    activeStaffName,
+    setStaffPin,
+    togglePinLockEnabled,
+    setActiveStaffName,
+  } = useAuthStore();
   const currentRestId =
     activeRestaurant?.restaurantId ||
     (globalThis as any).__MENZA_ACTIVE_REST_ID__ ||
@@ -98,6 +114,85 @@ export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ 
 
   const cashierRestricted = isCashierOnly(user, activeRestaurant) || !canEditStoreConfig(user, activeRestaurant);
   const canManageStations = canConfigureKitchenStations(user, activeRestaurant);
+  const isSuperAdmin = Boolean(
+    user?.roles?.some((r) =>
+      ['SUPERADMIN', 'SUPER_ADMIN', 'SUPERADMINONLY'].includes(r.toUpperCase().replace(/[^A-Z]/g, ''))
+    ) || ((user as any)?.roleName && String((user as any).roleName).toLowerCase().includes('superadmin'))
+  );
+  const isKdsAllowed =
+    isSuperAdmin ||
+    useSubscriptionStore.getState().isFeatureAllowed('kitchenRouting') ||
+    useSubscriptionStore.getState().hasEntitlement('IsKdsEnabled');
+
+  const promptKdsUpgrade = (featureName = 'Multi-Station Kitchen Architecture') => {
+    setAlertConfig({
+      visible: true,
+      title: `${featureName} Locked 🔒`,
+      message: 'Configuring custom preparation stations, multi-station order routing, and live kitchen progress require a subscription plan with Kitchen Routing enabled.\n\nUpgrade your plan to unlock.',
+      type: 'warning',
+      confirmText: 'Upgrade Plan',
+      onConfirm: () => {
+        setAlertConfig((prev) => ({ ...prev, visible: false }));
+        useSubscriptionStore.getState().openRenewalModal();
+      },
+    });
+  };
+
+  const { subscription: storeSub, plans } = useSubscriptionStore();
+  const isTableOrderAllowed = React.useMemo(() => {
+    if (isSuperAdmin) return true;
+    if (storeSub) {
+      return isTableOrderSubscriptionAllowed(storeSub, plans);
+    }
+    if (activeRestaurant) {
+      const restFlag = extractTableOrderFlag(activeRestaurant);
+      if (restFlag !== undefined) return restFlag;
+    }
+    return false;
+  }, [isSuperAdmin, storeSub, plans, activeRestaurant]);
+
+  const promptTableOrderUpgrade = (profileName = 'Dine-In Restaurant') => {
+    setAlertConfig({
+      visible: true,
+      title: `${profileName} Mode Locked 🔒`,
+      message: `${profileName} mode requires Table Ordering (isTableOrder) in your active subscription plan.\n\nUpgrade your plan to unlock interactive QR tables, running tabs, and live floor management.`,
+      type: 'warning',
+      confirmText: 'Upgrade Plan',
+      onConfirm: () => {
+        setAlertConfig((prev) => ({ ...prev, visible: false }));
+        useSubscriptionStore.getState().openRenewalModal();
+      },
+    });
+  };
+
+  const [businessProfile, setBusinessProfile] = useState<'QSR_CAFE' | 'DINE_IN' | 'HYBRID'>('HYBRID');
+  const [savingProfile, setSavingProfile] = useState(false);
+
+  const handleSaveBusinessProfile = async (profile: 'QSR_CAFE' | 'DINE_IN' | 'HYBRID') => {
+    if (cashierRestricted) return;
+    if ((profile === 'DINE_IN' || profile === 'HYBRID') && !isTableOrderAllowed) {
+      promptTableOrderUpgrade(profile === 'DINE_IN' ? 'Dine-In Restaurant' : 'Hybrid Store');
+      return;
+    }
+    try {
+      setSavingProfile(true);
+      setBusinessProfile(profile);
+      await configDataSource.toggleOrdering(currentRestId, { businessProfile: profile });
+      showAlert(
+        'Store Business Profile Updated 🏬',
+        profile === 'QSR_CAFE'
+          ? 'Store switched to Quick Cafe / QSR Mode. Table ordering & floor plan are disabled. Token pickup active.'
+          : profile === 'DINE_IN'
+          ? 'Store switched to Dine-In Restaurant Mode. Table QR ordering & interactive floor plan active.'
+          : 'Store switched to Hybrid Mode. Both Table Dine-In and Counter Takeaway tokens are active.',
+        'success'
+      );
+    } catch (e: any) {
+      showAlert('Error Updating Profile', e?.message || 'Failed to update business profile.', 'danger');
+    } finally {
+      setSavingProfile(false);
+    }
+  };
 
   // Form Fields mapped to RestConfigModel & RestaurantConfig
   const [restaurantName, setRestaurantName] = useState('');
@@ -164,15 +259,60 @@ export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ 
   const [uploadingImage, setUploadingImage] = useState(false);
   const [uploadingLogo, setUploadingLogo] = useState(false);
 
+  // Terminal Quick PIN State
+  const [terminalPinInput, setTerminalPinInput] = useState(staffPin || '1234');
+  const [terminalPinLockEnabled, setTerminalPinLockEnabled] = useState(isPinLockEnabled);
+  const [terminalStaffNameInput, setTerminalStaffNameInput] = useState(activeStaffName || '');
+  const [savingPin, setSavingPin] = useState(false);
+
+  useEffect(() => {
+    if (staffPin) setTerminalPinInput(staffPin);
+    setTerminalPinLockEnabled(isPinLockEnabled);
+    if (activeStaffName) setTerminalStaffNameInput(activeStaffName);
+  }, [staffPin, isPinLockEnabled, activeStaffName]);
+
+  const handleSaveTerminalPinConfig = async () => {
+    if (!/^\d{4}$/.test(terminalPinInput)) {
+      setAlertConfig({
+        visible: true,
+        title: 'Invalid PIN',
+        message: 'Terminal Quick PIN must be exactly 4 numeric digits (e.g. 1234).',
+      });
+      return;
+    }
+
+    try {
+      setSavingPin(true);
+      await setStaffPin(terminalPinInput);
+      await togglePinLockEnabled(terminalPinLockEnabled);
+      setActiveStaffName(terminalStaffNameInput.trim());
+      setAlertConfig({
+        visible: true,
+        title: 'Terminal PIN Saved',
+        message: 'Terminal lock and staff PIN configuration updated successfully on this device.',
+      });
+    } catch (e: any) {
+      setAlertConfig({
+        visible: true,
+        title: 'Error Saving PIN',
+        message: e?.message || 'Failed to update PIN settings.',
+      });
+    } finally {
+      setSavingPin(false);
+    }
+  };
+
   // Accordion Section States
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     basic: true,
+    profile: false,
     branding: false,
     taxes: false,
     contact: false,
     hours: false,
     kitchen: false,
     reservations: false,
+    terminal: false,
     history: false,
   });
 
@@ -189,7 +329,12 @@ export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ 
         configDataSource.getOperatingStatus(currentRestId),
       ]);
       setOperatingHistory(hist);
-      if (stat) setOperatingStatus(stat);
+      if (stat) {
+        setOperatingStatus(stat);
+        if (stat.businessProfile) {
+          setBusinessProfile(stat.businessProfile as any);
+        }
+      }
     } catch {
       // non-blocking
     } finally {
@@ -213,12 +358,14 @@ export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ 
   const handleExpandAll = () => {
     setExpandedSections({
       basic: true,
+      profile: true,
       branding: true,
       taxes: true,
       contact: true,
       hours: true,
       kitchen: true,
       reservations: true,
+      terminal: true,
       history: true,
     });
   };
@@ -226,12 +373,14 @@ export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ 
   const handleCollapseAll = () => {
     setExpandedSections({
       basic: false,
+      profile: false,
       branding: false,
       taxes: false,
       contact: false,
       hours: false,
       kitchen: false,
       reservations: false,
+      terminal: false,
       history: false,
     });
   };
@@ -334,6 +483,11 @@ export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ 
         setGstNumber(fetchedGst);
         setSgstPercentage(data.sgstPercentage !== undefined ? data.sgstPercentage.toString() : '2.50');
         setCgstPercentage(data.cgstPercentage !== undefined ? data.cgstPercentage.toString() : '2.50');
+
+        // Business Profile & Seating
+        if (data.businessProfile) {
+          setBusinessProfile(data.businessProfile as any);
+        }
 
         // Operating Hours & Kitchen Timings
         setOrderingMode(data.orderingMode === 'MANUAL' ? 'MANUAL' : 'SCHEDULE');
@@ -769,6 +923,10 @@ export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ 
   };
 
   const handleOpenAddStation = () => {
+    if (!isKdsAllowed) {
+      promptKdsUpgrade('Adding Kitchen Stations');
+      return;
+    }
     setEditingStationId(null);
     setStationCode('');
     setStationName('');
@@ -875,6 +1033,10 @@ export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ 
   };
 
   const handleInitializeDefaultStations = async () => {
+    if (!isKdsAllowed) {
+      promptKdsUpgrade('Standard 7 Stations Setup');
+      return;
+    }
     try {
       await initializeDefaults(currentRestId);
       showAlert('Stations Initialized', 'Standard 7 Kitchen Stations have been configured for your restaurant.', 'success');
@@ -1224,6 +1386,178 @@ export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ 
             )}
           </View>
 
+          {/* 1B. STORE BUSINESS PROFILE & SEATING MODEL ACCORDION */}
+          <View style={styles.accordionCard}>
+            <TouchableOpacity
+              style={[styles.accordionHeader, expandedSections.profile && styles.accordionHeaderOpen]}
+              onPress={() => toggleSection('profile')}
+              activeOpacity={0.8}
+            >
+              <View style={styles.accordionHeaderLeft}>
+                <View style={[styles.accordionIconCircle, expandedSections.profile && styles.accordionIconCircleOpen]}>
+                  <Store size={16} color={expandedSections.profile ? '#DE8626' : '#78716C'} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.accordionTitle}>STORE BUSINESS PROFILE & SEATING</Text>
+                  <Text style={styles.accordionSubtitle} numberOfLines={1}>
+                    {businessProfile === 'QSR_CAFE'
+                      ? '🎟️ Quick Cafe / Token Pickup'
+                      : businessProfile === 'DINE_IN'
+                      ? '🪑 Dine-In Restaurant (Tables)'
+                      : '🪑 Tables + 🎟️ Token Hybrid'}
+                  </Text>
+                </View>
+              </View>
+              <View style={[styles.accordionChevronBadge, expandedSections.profile && styles.accordionChevronBadgeOpen]}>
+                {expandedSections.profile ? (
+                  <ChevronUp size={16} color="#D96B14" strokeWidth={2.4} />
+                ) : (
+                  <ChevronDown size={16} color="#78716C" strokeWidth={2.4} />
+                )}
+              </View>
+            </TouchableOpacity>
+
+            {expandedSections.profile && (
+              <View style={styles.accordionBody}>
+                <Text style={styles.fieldLabel}>CHOOSE OPERATING MODEL</Text>
+                <Text style={styles.timingHintText}>
+                  Define how customer ordering and seating operate for this restaurant outlet.
+                </Text>
+
+                <View style={{ gap: 10, marginTop: 8 }}>
+                  {/* Option 1: Quick Cafe / QSR */}
+                  <TouchableOpacity
+                    style={[
+                      styles.timingModeCard,
+                      businessProfile === 'QSR_CAFE' && styles.timingModeCardActive,
+                      cashierRestricted && styles.inputDisabled,
+                    ]}
+                    onPress={() => !cashierRestricted && handleSaveBusinessProfile('QSR_CAFE')}
+                    disabled={cashierRestricted || savingProfile}
+                    activeOpacity={0.8}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Coffee size={15} color={businessProfile === 'QSR_CAFE' ? '#DE8626' : '#78716C'} />
+                        <Text style={[styles.timingModeTitle, businessProfile === 'QSR_CAFE' && styles.timingModeTitleActive]}>
+                          Quick Cafe / QSR
+                        </Text>
+                      </View>
+                      <View style={{ backgroundColor: '#FEF3C7', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                        <Text style={{ fontSize: 9, fontWeight: '800', color: '#B45309' }}>🎟️ TOKEN SYSTEM</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.timingModeDesc}>
+                      Counter takeout and token number pickup. Table seating & interactive floor map are hidden.
+                    </Text>
+                  </TouchableOpacity>
+
+                  {/* Option 2: Dine-In Restaurant */}
+                  <TouchableOpacity
+                    style={[
+                      styles.timingModeCard,
+                      businessProfile === 'DINE_IN' && isTableOrderAllowed && styles.timingModeCardActive,
+                      !isTableOrderAllowed && { borderColor: '#FED7AA', opacity: 0.8 },
+                      cashierRestricted && styles.inputDisabled,
+                    ]}
+                    onPress={() => {
+                      if (cashierRestricted) return;
+                      if (!isTableOrderAllowed) {
+                        promptTableOrderUpgrade('Dine-In Restaurant');
+                        return;
+                      }
+                      handleSaveBusinessProfile('DINE_IN');
+                    }}
+                    disabled={cashierRestricted || savingProfile}
+                    activeOpacity={0.8}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <UtensilsCrossed size={15} color={businessProfile === 'DINE_IN' && isTableOrderAllowed ? '#DE8626' : '#78716C'} />
+                        <Text style={[styles.timingModeTitle, businessProfile === 'DINE_IN' && isTableOrderAllowed && styles.timingModeTitleActive]}>
+                          Dine-In Restaurant
+                        </Text>
+                      </View>
+                      {isTableOrderAllowed ? (
+                        <View style={{ backgroundColor: '#EFF6FF', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                          <Text style={{ fontSize: 9, fontWeight: '800', color: '#1D4ED8' }}>🪑 TABLE DINE-IN</Text>
+                        </View>
+                      ) : (
+                        <View style={{ backgroundColor: '#FEF3C7', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                          <Lock size={9} color="#B45309" />
+                          <Text style={{ fontSize: 9, fontWeight: '800', color: '#B45309' }}>PRO FEATURE</Text>
+                        </View>
+                      )}
+                    </View>
+                    <Text style={styles.timingModeDesc}>
+                      QR code per table, interactive floor map, running table tabs, and waiter service.
+                    </Text>
+                    {!isTableOrderAllowed && (
+                      <Text style={{ fontSize: 10, color: '#B45309', fontWeight: '700', marginTop: 4 }}>
+                        🔒 Requires Table Ordering (isTableOrder) in subscription plan.
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+
+                  {/* Option 3: Hybrid Store */}
+                  <TouchableOpacity
+                    style={[
+                      styles.timingModeCard,
+                      businessProfile === 'HYBRID' && isTableOrderAllowed && styles.timingModeCardActive,
+                      !isTableOrderAllowed && { borderColor: '#FED7AA', opacity: 0.8 },
+                      cashierRestricted && styles.inputDisabled,
+                    ]}
+                    onPress={() => {
+                      if (cashierRestricted) return;
+                      if (!isTableOrderAllowed) {
+                        promptTableOrderUpgrade('Hybrid Store');
+                        return;
+                      }
+                      handleSaveBusinessProfile('HYBRID');
+                    }}
+                    disabled={cashierRestricted || savingProfile}
+                    activeOpacity={0.8}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Layers size={15} color={businessProfile === 'HYBRID' && isTableOrderAllowed ? '#DE8626' : '#78716C'} />
+                        <Text style={[styles.timingModeTitle, businessProfile === 'HYBRID' && isTableOrderAllowed && styles.timingModeTitleActive]}>
+                          Hybrid Store
+                        </Text>
+                      </View>
+                      {isTableOrderAllowed ? (
+                        <View style={{ backgroundColor: '#F0FDF4', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                          <Text style={{ fontSize: 9, fontWeight: '800', color: '#15803D' }}>🪑 TABLES + 🎟️ TOKEN</Text>
+                        </View>
+                      ) : (
+                        <View style={{ backgroundColor: '#FEF3C7', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                          <Lock size={9} color="#B45309" />
+                          <Text style={{ fontSize: 9, fontWeight: '800', color: '#B45309' }}>PRO FEATURE</Text>
+                        </View>
+                      )}
+                    </View>
+                    <Text style={styles.timingModeDesc}>
+                      Both table seating with running tabs and quick counter takeaway token ordering.
+                    </Text>
+                    {!isTableOrderAllowed && (
+                      <Text style={{ fontSize: 10, color: '#B45309', fontWeight: '700', marginTop: 4 }}>
+                        🔒 Requires Table Ordering (isTableOrder) in subscription plan.
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+
+                {cashierRestricted && (
+                  <View style={{ marginTop: 8, padding: 8, backgroundColor: '#FAF7F2', borderRadius: 8 }}>
+                    <Text style={{ fontSize: 11, color: '#78716C' }}>
+                      Staff View: Store profile can only be changed by Store Owners and Admins.
+                    </Text>
+                  </View>
+                )}
+              </View>
+            )}
+          </View>
+
           {/* 2. STORE BRANDING & VISUALS ACCORDION */}
           <View style={styles.accordionCard}>
             <TouchableOpacity
@@ -1345,7 +1679,7 @@ export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ 
             >
               <View style={styles.accordionHeaderLeft}>
                 <View style={[styles.accordionIconCircle, expandedSections.taxes && styles.accordionIconCircleOpen]}>
-                  <Receipt size={16} color={expandedSections.taxes ? '#DE8626' : '#78716C'} />
+                  <ReceiptText size={16} color={expandedSections.taxes ? '#DE8626' : '#78716C'} />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.accordionTitle}>GST NUMBER & TAX RATES</Text>
@@ -1747,9 +2081,16 @@ export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ 
                     style={[
                       styles.timingModeCard,
                       kitchenMode === 'MULTI_STATION' && styles.timingModeCardActive,
+                      !isKdsAllowed && { borderColor: '#FED7AA' },
                     ]}
-                    onPress={() => canManageStations && setKitchenMode('MULTI_STATION')}
-                    disabled={!canManageStations}
+                    onPress={() => {
+                      if (!canManageStations) return;
+                      if (!isKdsAllowed) {
+                        promptKdsUpgrade('Multi-Station Kitchen Architecture');
+                        return;
+                      }
+                      setKitchenMode('MULTI_STATION');
+                    }}
                     activeOpacity={0.8}
                   >
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
@@ -1757,6 +2098,12 @@ export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ 
                       <Text style={[styles.timingModeTitle, kitchenMode === 'MULTI_STATION' && styles.timingModeTitleActive]}>
                         Multi-Station
                       </Text>
+                      {!isKdsAllowed && (
+                        <View style={{ backgroundColor: '#FEF3C7', paddingHorizontal: 5, paddingVertical: 1.5, borderRadius: 5, borderWidth: 1, borderColor: '#FDE68A', flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+                          <Lock size={8} color="#D97706" />
+                          <Text style={{ fontSize: 9, fontWeight: '800', color: '#D97706' }}>PRO</Text>
+                        </View>
+                      )}
                     </View>
                     <Text style={styles.timingModeDesc}>
                       Routes orders to specialized stations (Bar, Grill, Chinese, Bakery, etc.).
@@ -1944,7 +2291,12 @@ export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ 
                   <Switch
                     value={isKitchenActive}
                     onValueChange={(val: boolean) => {
-                      if (canManageStations) setIsKitchenActive(val);
+                      if (!canManageStations) return;
+                      if (!isKdsAllowed && val) {
+                        promptKdsUpgrade('Live Kitchen Progress & SLA Countdown');
+                        return;
+                      }
+                      setIsKitchenActive(val);
                     }}
                     disabled={!canManageStations}
                     trackColor={{ false: '#E5E7EB', true: '#FED7AA' }}
@@ -2118,6 +2470,112 @@ export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ 
                     </LinearGradient>
                   </TouchableOpacity>
                 )}
+              </View>
+            )}
+          </View>
+
+          {/* TERMINAL LOCK & STAFF PIN ACCORDION */}
+          <View style={styles.accordionCard}>
+            <TouchableOpacity
+              style={[styles.accordionHeader, expandedSections.terminal && styles.accordionHeaderOpen]}
+              onPress={() => toggleSection('terminal')}
+              activeOpacity={0.8}
+            >
+              <View style={styles.accordionHeaderLeft}>
+                <View style={[styles.accordionIconCircle, expandedSections.terminal && styles.accordionIconCircleOpen]}>
+                  <Lock size={16} color={expandedSections.terminal ? '#DE8626' : '#78716C'} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.accordionTitle}>TERMINAL LOCK & STAFF PIN</Text>
+                  <Text style={styles.accordionSubtitle} numberOfLines={1}>
+                    {terminalPinLockEnabled
+                      ? `Enabled (PIN: ••••) • ${terminalStaffNameInput || 'Default Staff'}`
+                      : 'Disabled (Instant access without PIN)'}
+                  </Text>
+                </View>
+              </View>
+              <View style={[styles.accordionChevronBadge, expandedSections.terminal && styles.accordionChevronBadgeOpen]}>
+                {expandedSections.terminal ? (
+                  <ChevronUp size={16} color="#D96B14" strokeWidth={2.4} />
+                ) : (
+                  <ChevronDown size={16} color="#78716C" strokeWidth={2.4} />
+                )}
+              </View>
+            </TouchableOpacity>
+
+            {expandedSections.terminal && (
+              <View style={styles.accordionBody}>
+                {/* Enable PIN Lock Toggle */}
+                <View style={styles.switchRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.switchTitle}>Enable Terminal Quick PIN Lock</Text>
+                    <Text style={styles.switchDesc}>
+                      Requires a 4-digit PIN on app launch and allows locking the screen during shift handovers
+                    </Text>
+                  </View>
+                  <Switch
+                    value={terminalPinLockEnabled}
+                    onValueChange={(val: boolean) => setTerminalPinLockEnabled(val)}
+                    trackColor={{ false: '#E5E7EB', true: '#FED7AA' }}
+                    thumbColor={terminalPinLockEnabled ? '#DE8626' : '#9CA3AF'}
+                  />
+                </View>
+
+                {terminalPinLockEnabled && (
+                  <>
+                    <View style={styles.fieldGroup}>
+                      <Text style={styles.fieldLabel}>TERMINAL 4-DIGIT PIN</Text>
+                      <TextInput
+                        style={styles.textInput}
+                        value={terminalPinInput}
+                        onChangeText={(t) => setTerminalPinInput(t.replace(/[^0-9]/g, '').slice(0, 4))}
+                        placeholder="1234"
+                        placeholderTextColor="#9CA3AF"
+                        keyboardType="number-pad"
+                        maxLength={4}
+                        secureTextEntry
+                      />
+                      <Text style={{ fontSize: 11, color: '#78716C', marginTop: 4 }}>
+                        Default is 1234. Staff can enter this PIN to unlock the POS in under 1 second.
+                      </Text>
+                    </View>
+
+                    <View style={styles.fieldGroup}>
+                      <Text style={styles.fieldLabel}>ACTIVE COUNTER / STAFF LABEL</Text>
+                      <TextInput
+                        style={styles.textInput}
+                        value={terminalStaffNameInput}
+                        onChangeText={setTerminalStaffNameInput}
+                        placeholder="e.g. Counter 1 / Captain Ravi"
+                        placeholderTextColor="#9CA3AF"
+                        maxLength={40}
+                      />
+                    </View>
+                  </>
+                )}
+
+                <TouchableOpacity
+                  style={[styles.sectionSaveBtn, savingPin && { opacity: 0.6 }]}
+                  onPress={handleSaveTerminalPinConfig}
+                  disabled={savingPin}
+                  activeOpacity={0.85}
+                >
+                  <LinearGradient
+                    colors={['#F59E0B', '#E58B24', '#DE8626', '#CB741B']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.sectionSaveGradient}
+                  >
+                    {savingPin ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <>
+                        <Save size={13} color="#FFFFFF" strokeWidth={2.2} />
+                        <Text style={styles.sectionSaveText}>Save Terminal PIN Settings</Text>
+                      </>
+                    )}
+                  </LinearGradient>
+                </TouchableOpacity>
               </View>
             )}
           </View>

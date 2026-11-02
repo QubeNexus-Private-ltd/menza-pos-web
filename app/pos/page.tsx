@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
+import clsx from 'clsx';
 import {
   Search,
   Plus,
@@ -39,10 +40,14 @@ import {
   Truck,
   CheckCircle2,
   Smartphone,
+  RefreshCw,
+  WifiOff,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
+import { FeatureGate } from '@/components/subscription/FeatureGate';
 import { DishImage } from '@/components/common/DishImage';
+import { PosGridSkeleton } from '@/components/common/Skeleton';
 import dynamic from 'next/dynamic';
 import type { CustomizationResult } from '@/components/pos/DishCustomizationModal';
 import type { ParkedCart } from '@/components/pos/ParkedCartsModal';
@@ -79,6 +84,10 @@ const WebPrinterModal = dynamic(
   () => import('@/components/pos/WebPrinterModal').then((mod) => mod.WebPrinterModal),
   { ssr: false }
 );
+const OfflineShiftRegisterModal = dynamic(
+  () => import('@/components/pos/OfflineShiftRegisterModal').then((mod) => mod.OfflineShiftRegisterModal),
+  { ssr: false }
+);
 const WalletRechargeModal = dynamic(
   () => import('@/components/common/WalletRechargeModal').then((mod) => mod.WalletRechargeModal),
   { ssr: false }
@@ -103,6 +112,13 @@ import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataS
 import { OrderRepositoryImpl } from '@shared/data/repositories/OrderRepositoryImpl';
 import { TableRemoteDataSource } from '@shared/data/datasources/TableRemoteDataSource';
 import { RestaurantConfigRemoteDataSource } from '@shared/data/datasources/RestaurantConfigRemoteDataSource';
+import {
+  initPosDatabase,
+  getNextOfflineInvoiceNumber,
+  enqueueOfflineOrder,
+} from '@/lib/offline/webPosDatabase';
+import { useWebNetworkStore, setupWebNetworkListeners } from '@/lib/offline/useWebNetworkStore';
+import { startWebOfflineSyncWorker, syncPendingOfflineOrders } from '@/services/webOfflineSyncWorker';
 import { MenuItem } from '@shared/domain/models/Item';
 import { Category } from '@shared/domain/models/Category';
 import { TableMaster } from '@shared/domain/models/Table';
@@ -114,6 +130,11 @@ import {
   OrderMaster,
   ActiveOrderType,
 } from '@shared/domain/models/Order';
+import {
+  normalizeOrderStatus,
+  OrderStatuses,
+  getOrderStatusBadge,
+} from '@/lib/utils/orderStatusEngine';
 import { ReceiptData } from '@shared/core/printer/EscPosBuilder';
 import { WalletEvents } from '@shared/core/utils/walletEvents';
 import {
@@ -168,9 +189,14 @@ export default function PosPage() {
   const fetchSubscriptionStatus = useSubscriptionStore((s) => s.fetchSubscriptionStatus);
   const stations = useKitchenStationStore((s) => s.stations);
   const fetchStations = useKitchenStationStore((s) => s.fetchStations);
+  const isOnline = useWebNetworkStore((s) => s.isOnline);
+  const pendingOfflineCount = useWebNetworkStore((s) => s.pendingOfflineCount);
+  const isSyncing = useWebNetworkStore((s) => s.isSyncing);
+  const [offlineRegisterOpen, setOfflineRegisterOpen] = useState(false);
 
   const currentRestId =
     activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
+
 
   // Core Data with in-memory catalog cache initialization (prevents flickering)
   const cachedCatalog = usePosCatalogStore.getState();
@@ -302,6 +328,22 @@ export default function PosPage() {
   const [isKotLoading, setIsKotLoading] = useState(false);
   const [isSettling, setIsSettling] = useState(false);
 
+  // Clean slate and reset order cart immediately upon restaurant switch
+  useEffect(() => {
+    setCart([]);
+    setSelectedTable(null);
+    setActiveTableOrder(null);
+    setCustomerName('');
+    setCustomerPhone('');
+    setDiscountAmount(0);
+    setCategories([]);
+    setItems([]);
+    setTables([]);
+    setSelectedCategory(null);
+    setLoading(true);
+  }, [currentRestId]);
+
+
   // Gilded Alert Modal State
   const [alertConfig, setAlertConfig] = useState<GildedAlertConfig>({
     visible: false,
@@ -377,6 +419,21 @@ export default function PosPage() {
     if (!currentRestId) return;
     let isMounted = true;
 
+    // Initialize offline IndexedDB & network listeners
+    initPosDatabase().then(() => {
+      useWebNetworkStore.getState().refreshPendingCount(currentRestId);
+    }).catch(() => {});
+    const cleanupNetworkListeners = setupWebNetworkListeners(() => {
+      useWebNetworkStore.getState().refreshPendingCount(currentRestId);
+      syncPendingOfflineOrders(currentRestId).catch(() => {});
+    });
+    const stopWorker = startWebOfflineSyncWorker(() => currentRestId);
+
+    // Auto-reconnect saved Bluetooth thermal printer in background across reloads
+    if (WebPrinterService.hasSavedBluetoothDevice() && !WebPrinterService.isBluetoothConnected()) {
+      WebPrinterService.autoReconnectBluetooth(true).catch(() => {});
+    }
+
     const loadAll = async () => {
       const s = usePosCatalogStore.getState();
       const isAlreadyCached = Boolean(
@@ -387,7 +444,19 @@ export default function PosPage() {
 
       try {
         if (!isAlreadyCached) {
-          setLoading(true);
+          const didHydrate = await usePosCatalogStore.getState().hydrateFromOfflineDb(currentRestId);
+          if (didHydrate && isMounted) {
+            const h = usePosCatalogStore.getState();
+            if (h.categories.length > 0) setCategories(h.categories);
+            if (h.items.length > 0) setItems(h.items);
+            if (h.tables.length > 0) setTables(h.tables);
+            if (h.restaurantConfig) setRestaurantConfig(h.restaurantConfig);
+            if (h.operatingStatus) setOperatingStatus(h.operatingStatus);
+            if (h.orderTypes.length > 0) setOrderTypes(h.orderTypes);
+            setLoading(false);
+          } else {
+            setLoading(true);
+          }
         }
         const [catsRes, itemsRes, tablesRes, cfgRes, opRes] = await Promise.allSettled([
           catalogDataSource.getCategories(currentRestId),
@@ -512,6 +581,8 @@ export default function PosPage() {
       unsubTable();
       unsubReconnect();
       unsubWalletEvents();
+      cleanupNetworkListeners();
+      stopWorker();
     };
   }, [currentRestId]);
 
@@ -605,6 +676,89 @@ export default function PosPage() {
     },
     [loadActiveTableOrder]
   );
+
+  const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
+
+  // Manual status update for table order (e.g. Confirmed, Preparing, Ready, Served)
+  const handleUpdateOrderStatus = async (orderId: number, nextStatus: string) => {
+    if (!orderId || !nextStatus || isUpdatingStatus) return;
+    try {
+      setIsUpdatingStatus(true);
+      const success = await orderRemoteDataSource.updateOrderStatus(orderId, nextStatus);
+      if (success) {
+        if (activeTableOrder?.id === orderId) {
+          const updated = { ...activeTableOrder, status: nextStatus as any };
+          setActiveTableOrder(updated);
+          if (selectedTable?.id) {
+            usePosCatalogStore.getState().setActiveTableOrder(selectedTable.id, updated);
+          }
+        }
+      } else {
+        alert(`Could not update Order #${orderId} to ${nextStatus}.`);
+      }
+    } catch (err: any) {
+      alert(`Failed to update order status: ${err?.message || 'Server error'}`);
+    } finally {
+      setIsUpdatingStatus(false);
+    }
+  };
+
+  // Confirm incoming Placed order & optionally print KOT
+  const handleConfirmActiveOrder = async (orderId?: number) => {
+    const targetOrder =
+      activeTableOrder && (!orderId || activeTableOrder.id === orderId)
+        ? activeTableOrder
+        : null;
+    const targetId = orderId || targetOrder?.id;
+    if (!targetId || isUpdatingStatus) return;
+
+    try {
+      setIsUpdatingStatus(true);
+      const success = await orderRemoteDataSource.updateOrderStatus(targetId, OrderStatuses.Confirmed);
+      if (success) {
+        if (targetOrder) {
+          try {
+            const kotData: ReceiptData = {
+              restaurantName: storeDisplayName || 'Menza Restaurant',
+              orderId: targetOrder.id,
+              orderNumber: targetOrder.orderNumber,
+              pickupToken: targetOrder.pickupToken || targetOrder.orderNumber || String(targetOrder.id),
+              tableName: selectedTable?.tableName || targetOrder.tableName,
+              orderType: 'DINE_IN',
+              date: new Date().toLocaleDateString('en-IN'),
+              customerName: targetOrder.customerName,
+              customerPhone: targetOrder.mobileNumber,
+              items: (targetOrder.items || []).map((i: any) => ({
+                itemName: i.itemName,
+                quantity: i.quantity,
+                unitPrice: Number(i.unitPrice || 0),
+                totalPrice: Number(i.totalPrice || (i.quantity * (i.unitPrice || 0))),
+              })),
+              grandTotal: Number(targetOrder.totalAmount || 0),
+              isKot: true,
+            };
+            await WebPrinterService.printKot(kotData, paperWidth);
+          } catch (kotErr) {
+            console.warn('Auto KOT print warning:', kotErr);
+          }
+
+          const updated = { ...targetOrder, status: OrderStatuses.Confirmed as any };
+          setActiveTableOrder(updated);
+          if (selectedTable?.id) {
+            usePosCatalogStore.getState().setActiveTableOrder(selectedTable.id, updated);
+          }
+        } else if (selectedTable?.id) {
+          await loadActiveTableOrder(selectedTable.id, true);
+        }
+      } else {
+        alert(`Could not confirm Order #${targetId}.`);
+      }
+    } catch (err: any) {
+      alert(`Failed to confirm order: ${err?.message || 'Server error'}`);
+    } finally {
+      setIsUpdatingStatus(false);
+    }
+  };
 
   // 3. Customer Mobile Lookup (10 Digits)
   const handlePhoneChange = (val: string) => {
@@ -913,6 +1067,181 @@ export default function PosPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [cart, activeTableOrder, payableGrandTotal]);
 
+  // 9.5 Offline Checkout Execution Engine
+  const processOfflineCheckout = async (
+    mode: (typeof PosCheckoutModes)[keyof typeof PosCheckoutModes],
+    cleanPhone: string,
+    effectiveCustomerName: string
+  ) => {
+    if (!currentRestId) return;
+    const isPostPaid = mode === PosCheckoutModes.KOT_PAY_LATER;
+    const orderTendered =
+      !isPostPaid && selectedPaymentMode === 'CASH' && posNumericTendered > 0 ? posNumericTendered : undefined;
+    const orderChange =
+      !isPostPaid && selectedPaymentMode === 'CASH' && posChangeToReturn > 0 ? posChangeToReturn : undefined;
+
+    // 1. Generate local atomic sequential invoice number and idempotency key
+    const { orderNumber, offlineReferenceId } = await getNextOfflineInvoiceNumber(currentRestId);
+
+    const itemsPayload = cart.map((item) => ({
+      itemId: item.itemId,
+      itemName: item.itemName,
+      quantity: item.quantity,
+      unitId: 1,
+      amount: item.price,
+      totalAmount: item.price * item.quantity,
+      cookingInstruction: item.notes,
+    }));
+
+    const effectivePaymentMode = selectedPaymentMode;
+
+    // 2. Build full backend-compatible PlaceOrderModel payload
+    const orderPayload: any = {
+      restaurantId: currentRestId,
+      name: effectiveCustomerName,
+      mobileNumber: cleanPhone || undefined,
+      tableId: selectedTable?.id,
+      tableNumber: selectedTable?.tableNumber,
+      sectionName: selectedTable?.sectionName,
+      orderTypeId: selectedTable ? 1 : selectedOrderType,
+      orderStatus: 'Confirmed',
+      paymentStatus: isPostPaid ? 'Pending' : 'Paid',
+      billingMode: isPostPaid ? BillingModes.POST_PAID : BillingModes.PRE_PAID,
+      paymentMode: isPostPaid ? undefined : effectivePaymentMode,
+      tenderedAmount: orderTendered,
+      changeAmount: orderChange,
+      source: selectedTable ? `Table ${selectedTable.tableNumber}` : PosOrderSources.POS_ADMIN,
+      cgst: cgstAmount,
+      sgst: sgstAmount,
+      totalAmount: grandTotal,
+      items: itemsPayload,
+      offlineReferenceId,
+      originalCreatedAtUtc: new Date().toISOString(),
+      isOfflineSync: true,
+    };
+
+    const selectedTypeObj = orderTypes.find((t) => t.id === selectedOrderType);
+    const effectiveOrderType = selectedTable
+      ? 'Dine-in'
+      : selectedTypeObj?.typeName || 'Counter';
+
+    // 3. Assemble standard ReceiptData for immediate thermal printing & reprint
+    const receiptData: ReceiptData = {
+      orderId: 0,
+      orderNumber,
+      pickupToken: orderNumber,
+      restaurantName: restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant',
+      logoUrl: restaurantConfig?.logoUrl || activeRestaurant?.logoUrl || undefined,
+      address: restaurantConfig?.address || activeRestaurant?.address || '',
+      city: restaurantConfig?.city || activeRestaurant?.city || '',
+      state: restaurantConfig?.state || activeRestaurant?.state || '',
+      contactPhone: restaurantConfig?.contactNumber || (activeRestaurant as any)?.contactNumber || activeRestaurant?.ownerMobile || '',
+      gstNumber: hasGstNumber ? (restaurantConfig?.gstNumber || '') : undefined,
+      customerName: effectiveCustomerName,
+      customerPhone: cleanPhone || undefined,
+      orderType: effectiveOrderType,
+      tableName: selectedTable ? `Table ${selectedTable.tableNumber}` : undefined,
+      sectionName: selectedTable?.sectionName || undefined,
+      items: cart.map((c) => ({
+        itemName: c.itemName,
+        quantity: c.quantity,
+        unitPrice: c.price,
+        totalPrice: c.price * c.quantity,
+        cookingInstruction: c.notes,
+        stationName: c.stationName,
+        stationCode: c.stationCode,
+      })),
+      subtotal,
+      discountAmount,
+      cgstPercentage: hasGstNumber ? cgstRate : undefined,
+      cgstAmount: hasGstNumber ? cgstAmount : undefined,
+      sgstPercentage: hasGstNumber ? sgstRate : undefined,
+      sgstAmount: hasGstNumber ? sgstAmount : undefined,
+      taxAmount: totalTaxAmount,
+      grandTotal,
+      paymentMode: isPostPaid ? 'KOT (Pay Later)' : effectivePaymentMode,
+      tenderedAmount: orderTendered,
+      changeAmount: orderChange,
+      date: new Date().toLocaleString('en-IN'),
+      upiId: (restaurantConfig?.bankerUpiId || (restaurantConfig as any)?.upiId || (activeRestaurant as any)?.bankerUpiId || '').trim(),
+      upiPayeeName: restaurantConfig?.bankerAccountHolderName || restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant',
+      showUpiQr: restaurantConfig?.printUpiQrOnReceipts !== false && (activeRestaurant as any)?.printUpiQrOnReceipts !== false,
+      footerMessage: customFooter || 'Thank you! Please visit again. [OFFLINE BILL]',
+    };
+
+    // 4. Enqueue into IndexedDB (Outbox + 24hr Shift Register)
+    await enqueueOfflineOrder({
+      restaurantId: currentRestId,
+      orderNumber,
+      offlineReferenceId,
+      orderPayload,
+      receiptPayload: receiptData,
+      customerName: effectiveCustomerName,
+      tableNumber: selectedTable?.tableNumber,
+      totalAmount: grandTotal,
+      paymentMode: isPostPaid ? 'KOT' : effectivePaymentMode,
+      paymentStatus: isPostPaid ? 'Pending' : 'Paid',
+      billingMode: isPostPaid ? 'POST_PAID' : 'PRE_PAID',
+    });
+
+    // 5. Update Web Network Store pending count
+    await useWebNetworkStore.getState().refreshPendingCount(currentRestId);
+
+    // 6. Automatic Thermal Printing
+    if (!isPostPaid) {
+      if (autoPrintReceipt && autoPrintKot) {
+        WebPrinterService.printBifurcatedOrder(receiptData, paperWidth, true, true).catch(() => {});
+      } else if (autoPrintReceipt) {
+        WebPrinterService.printReceipt(receiptData, paperWidth).catch(() => {});
+      } else if (autoPrintKot) {
+        WebPrinterService.printStationKots(receiptData, paperWidth).catch(() => {});
+      }
+    } else {
+      if (autoPrintKot || isPostPaid) {
+        WebPrinterService.printStationKots(receiptData, paperWidth).catch(() => {});
+      }
+    }
+
+    // 7. Update UI State & Cart
+    if (isPostPaid) {
+      clearCart();
+      showAlert(
+        'Offline KOT Sent to Kitchen 🍳',
+        `Offline Order ${orderNumber} placed for ${effectiveCustomerName}.\nStatus: Recorded locally in queue. Will sync automatically once online.`,
+        'success'
+      );
+    } else {
+      setOrderSuccessData({
+        orderId: 0,
+        orderType: effectiveOrderType,
+        table: selectedTable?.tableNumber,
+        customerName: effectiveCustomerName,
+        customerPhone: cleanPhone,
+        items: cart,
+        subtotal,
+        totalTax: totalTaxAmount,
+        grandTotal,
+        paymentMode: effectivePaymentMode,
+        tendered: orderTendered,
+        change: orderChange,
+        date: new Date().toLocaleTimeString(),
+        receiptData,
+      });
+
+      if (selectedTable?.id) {
+        usePosCatalogStore.getState().freeTableInCatalog(selectedTable.id);
+        setTables((prev) =>
+          prev.map((t) => (t.id === selectedTable.id ? { ...t, status: 'Available', activeOrderId: undefined } : t))
+        );
+        setSelectedTable(null);
+        setActiveTableOrder(null);
+      }
+
+      clearCart();
+      setCartDrawerOpen(false);
+    }
+  };
+
   // 10. Order Placement & Checkout Execution
   const handleCheckout = async (mode: (typeof PosCheckoutModes)[keyof typeof PosCheckoutModes]) => {
     if (cart.length === 0 && !activeTableOrder) {
@@ -999,6 +1328,13 @@ export default function PosPage() {
         setIsKotLoading(true);
       } else {
         setIsSettling(true);
+      }
+
+      // Check offline mode
+      const isCurrentlyOnline = typeof navigator !== 'undefined' ? navigator.onLine : useWebNetworkStore.getState().isOnline;
+      if (!isCurrentlyOnline) {
+        await processOfflineCheckout(mode, cleanPhone, effectiveCustomerName);
+        return;
       }
 
       // Check if settling existing table order directly with no new cart items
@@ -1280,7 +1616,25 @@ export default function PosPage() {
         }
       }
     } catch (err: any) {
-      showAlert('Checkout Error', err?.message || 'Failed to process order. Please try again.', 'danger');
+      const isNetError =
+        (typeof navigator !== 'undefined' && !navigator.onLine) ||
+        err?.code === 'ERR_NETWORK' ||
+        err?.code === 'ECONNABORTED' ||
+        err?.message?.toLowerCase().includes('network') ||
+        err?.message?.toLowerCase().includes('timeout') ||
+        err?.message?.toLowerCase().includes('failed to fetch');
+
+      if (isNetError) {
+        try {
+          useWebNetworkStore.getState().setOnline(false);
+          await processOfflineCheckout(mode, cleanPhone, effectiveCustomerName);
+          return;
+        } catch (offlineErr: any) {
+          showAlert('Offline Billing Error', offlineErr?.message || 'Failed to record offline order.', 'danger');
+        }
+      } else {
+        showAlert('Checkout Error', err?.message || 'Failed to process order. Please try again.', 'danger');
+      }
     } finally {
       setIsKotLoading(false);
       setIsSettling(false);
@@ -1412,63 +1766,100 @@ export default function PosPage() {
             </div>
           </div>
 
-          {/* Running Kitchen Tab (Items Already Sent to Kitchen) */}
-          {activeTableOrder && (
-            <div className="rounded-2xl border border-amber-500/40 bg-gradient-to-br from-amber-500/10 to-orange-500/5 p-3 space-y-2.5 shadow-2xs">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="flex h-7 w-7 items-center justify-center rounded-xl bg-amber-500/20 text-[#DE8626] shrink-0">
-                    <Utensils className="h-4 w-4" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="text-xs font-black text-[#1E2930] dark:text-[#F3F4F6]">
-                        Table T-{selectedTable?.tableNumber} • Running Tab
-                      </span>
-                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-extrabold text-[#DE8626]">
-                        <span className="h-1.5 w-1.5 rounded-full bg-[#DE8626] animate-pulse" />
-                        Kitchen Active
+          {/* Running Kitchen Tab (Items Placed / Sent to Kitchen) */}
+          {activeTableOrder && (() => {
+            const activeNorm = normalizeOrderStatus(activeTableOrder.status);
+            const isOrderPlaced = activeNorm === OrderStatuses.Placed || activeNorm === OrderStatuses.PendingPayment;
+            return (
+              <div className={`rounded-2xl border p-3 space-y-2.5 shadow-2xs transition-all ${
+                isOrderPlaced
+                  ? 'border-amber-500/50 bg-gradient-to-br from-amber-500/15 to-orange-500/5'
+                  : 'border-amber-500/40 bg-gradient-to-br from-amber-500/10 to-orange-500/5'
+              }`}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-xl bg-amber-500/20 text-[#DE8626] shrink-0">
+                      <Utensils className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-xs font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                          Table T-{selectedTable?.tableNumber} • Running Tab
+                        </span>
+                        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-extrabold ${
+                          isOrderPlaced
+                            ? 'bg-amber-500/25 text-[#DE8626] border border-amber-500/40 animate-pulse'
+                            : 'bg-emerald-500/20 text-emerald-600'
+                        }`}>
+                          <span className={`h-1.5 w-1.5 rounded-full ${isOrderPlaced ? 'bg-[#DE8626] animate-ping' : 'bg-emerald-600'}`} />
+                          {isOrderPlaced ? 'Pending Confirmation' : activeTableOrder.status || 'Kitchen Active'}
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-[#667085] dark:text-[#94A3B8]">
+                        Order #{activeTableOrder.orderNumber || activeTableOrder.id} • {activeTableOrder.items?.length || 0} dishes placed
                       </span>
                     </div>
-                    <span className="text-[10px] text-[#667085] dark:text-[#94A3B8]">
-                      Order #{activeTableOrder.orderNumber || activeTableOrder.id} • {activeTableOrder.items?.length || 0} dishes placed
-                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handlePrintGuestCheck}
+                    className="flex items-center gap-1 rounded-xl border border-[#DE8626] bg-white dark:bg-[#1B2127] px-2.5 py-1 text-[11px] font-bold text-[#DE8626] hover:bg-amber-500/10 transition-colors shadow-2xs shrink-0"
+                    title="Print Proforma / Guest Check Slip"
+                  >
+                    <Printer className="h-3 w-3" />
+                    <span>Bill Slip</span>
+                  </button>
+                </div>
+
+                {/* Quick Status Workflow Changer (matching F:\Menza) */}
+                <div className="flex items-center justify-between pt-1.5 border-t border-amber-500/20 text-xs">
+                  <span className="text-[10px] font-bold text-[#667085] dark:text-[#94A3B8]">Status:</span>
+                  <div className="flex flex-wrap gap-1">
+                    {['Confirmed', 'Preparing', 'Ready', 'Served'].map((st) => {
+                      const isCur = (activeTableOrder.status || '').toLowerCase() === st.toLowerCase();
+                      return (
+                        <button
+                          key={st}
+                          type="button"
+                          disabled={isCur || isUpdatingStatus}
+                          onClick={() => handleUpdateOrderStatus(activeTableOrder.id, st)}
+                          className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-all ${
+                            isCur
+                              ? 'bg-[#DE8626] text-white shadow-2xs'
+                              : 'bg-white/90 dark:bg-[#1B2127]/90 border border-[#E7E1DA] dark:border-[#2B3540] text-[#1E2930] dark:text-[#F3F4F6] hover:border-[#DE8626]'
+                          } disabled:opacity-50`}
+                        >
+                          {isCur ? `✓ ${st}` : st}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={handlePrintGuestCheck}
-                  className="flex items-center gap-1 rounded-xl border border-[#DE8626] bg-white dark:bg-[#1B2127] px-2.5 py-1 text-[11px] font-bold text-[#DE8626] hover:bg-amber-500/10 transition-colors shadow-2xs shrink-0"
-                  title="Print Proforma / Guest Check Slip"
-                >
-                  <Printer className="h-3 w-3" />
-                  <span>Bill Slip</span>
-                </button>
-              </div>
 
-              {/* Running Dishes List */}
-              <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
-                {(activeTableOrder.items || []).map((it: any, idx: number) => (
-                  <div
-                    key={idx}
-                    className="flex justify-between items-start gap-2 text-xs py-1 px-2.5 rounded-xl bg-white/70 dark:bg-[#1B2127]/70 border border-[#E7E1DA]/60 dark:border-[#2B3540]/60"
-                  >
-                    <span className="font-semibold text-[#1E2930] dark:text-[#F3F4F6] break-words flex-1 min-w-0">
-                      {it.quantity}x {it.itemName}
-                    </span>
-                    <span className="font-bold text-[#DE8626] shrink-0">
-                      ₹{((it.unitPrice || it.amount || 0) * (it.quantity || 1)).toFixed(2)}
-                    </span>
-                  </div>
-                ))}
-              </div>
+                {/* Running Dishes List */}
+                <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+                  {(activeTableOrder.items || []).map((it: any, idx: number) => (
+                    <div
+                      key={idx}
+                      className="flex justify-between items-start gap-2 text-xs py-1 px-2.5 rounded-xl bg-white/70 dark:bg-[#1B2127]/70 border border-[#E7E1DA]/60 dark:border-[#2B3540]/60"
+                    >
+                      <span className="font-semibold text-[#1E2930] dark:text-[#F3F4F6] break-words flex-1 min-w-0">
+                        {it.quantity}x {it.itemName}
+                      </span>
+                      <span className="font-bold text-[#DE8626] shrink-0">
+                        ₹{((it.unitPrice || it.amount || 0) * (it.quantity || 1)).toFixed(2)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
 
-              <div className="flex justify-between items-center font-bold text-xs pt-1.5 border-t border-amber-500/20 text-[#DE8626]">
-                <span>Running Order Total:</span>
-                <span className="text-sm font-black">₹{existingTableTotal.toFixed(2)}</span>
+                <div className="flex justify-between items-center font-bold text-xs pt-1.5 border-t border-amber-500/20 text-[#DE8626]">
+                  <span>Running Order Total:</span>
+                  <span className="text-sm font-black">₹{existingTableTotal.toFixed(2)}</span>
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
 
         {/* Cart Items List */}
@@ -1781,46 +2172,92 @@ export default function PosPage() {
           /* ==================================================== */
           /* DINE-IN TABLE ORDER ACTIONS                          */
           /* ==================================================== */
-          activeTableOrder && cart.length === 0 ? (
-            /* Scenario A: Table is running, no new cart items staged */
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-[11px] font-bold px-2.5 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[#DE8626]">
-                <span className="flex items-center gap-1.5">
-                  <Utensils className="h-3.5 w-3.5 shrink-0" />
-                  <span>Tap dishes on menu to send Add-on KOT</span>
-                </span>
-                <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md bg-[#DE8626] text-white">
-                  Multi-Round KOT
-                </span>
+          activeTableOrder && cart.length === 0 ? (() => {
+            const activeNorm = normalizeOrderStatus(activeTableOrder.status);
+            const isOrderPlaced = activeNorm === OrderStatuses.Placed || activeNorm === OrderStatuses.PendingPayment;
+
+            return (
+              <div className="space-y-2">
+                {isOrderPlaced ? (
+                  <>
+                    <button
+                      type="button"
+                      disabled={isUpdatingStatus}
+                      onClick={() => handleConfirmActiveOrder()}
+                      className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-600 via-emerald-700 to-emerald-800 py-3.5 text-xs font-bold text-white shadow-md shadow-emerald-600/20 hover:brightness-105 disabled:opacity-40 transition-all"
+                    >
+                      <Check className="h-4 w-4" />
+                      <span>{isUpdatingStatus ? 'Confirming...' : 'Confirm Order & Fire KOT'}</span>
+                    </button>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={handlePrintGuestCheck}
+                        className="flex items-center justify-center gap-1.5 rounded-2xl border border-[#DE8626] bg-amber-500/10 py-3 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-all shadow-xs"
+                        title="Print Guest Check / Proforma Slip"
+                      >
+                        <Printer className="h-4 w-4" />
+                        <span>Print Bill Slip</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isSettling}
+                        onClick={() => handleCheckout(PosCheckoutModes.PAY_AND_SETTLE)}
+                        className="flex items-center justify-center gap-1.5 rounded-2xl border border-emerald-600/30 bg-emerald-500/10 py-3 text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/20 disabled:opacity-40 transition-all"
+                      >
+                        {isSettling ? (
+                          <span>Settling...</span>
+                        ) : (
+                          <>
+                            <Receipt className="h-4 w-4" />
+                            <span>Settle Bill ₹{payableGrandTotal.toFixed(2)} [F2]</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between text-[11px] font-bold px-2.5 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[#DE8626]">
+                      <span className="flex items-center gap-1.5">
+                        <Utensils className="h-3.5 w-3.5 shrink-0" />
+                        <span>Tap dishes on menu to send Add-on KOT</span>
+                      </span>
+                      <span className="text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md bg-[#DE8626] text-white">
+                        Multi-Round KOT
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={handlePrintGuestCheck}
+                        className="flex items-center justify-center gap-1.5 rounded-2xl border border-[#DE8626] bg-amber-500/10 py-3.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-all shadow-xs"
+                        title="Print Guest Check / Proforma Slip"
+                      >
+                        <Printer className="h-4 w-4" />
+                        <span>Print Bill Slip</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isSettling}
+                        onClick={() => handleCheckout(PosCheckoutModes.PAY_AND_SETTLE)}
+                        className="flex items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-emerald-600 via-emerald-700 to-emerald-800 py-3.5 text-xs font-bold text-white shadow-md shadow-emerald-600/20 hover:brightness-105 disabled:opacity-40 transition-all"
+                      >
+                        {isSettling ? (
+                          <span>Settling...</span>
+                        ) : (
+                          <>
+                            <Receipt className="h-4 w-4" />
+                            <span>Settle Bill ₹{payableGrandTotal.toFixed(2)} [F2]</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={handlePrintGuestCheck}
-                  className="flex items-center justify-center gap-1.5 rounded-2xl border border-[#DE8626] bg-amber-500/10 py-3.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-all shadow-xs"
-                  title="Print Guest Check / Proforma Slip"
-                >
-                  <Printer className="h-4 w-4" />
-                  <span>Print Bill Slip</span>
-                </button>
-                <button
-                  type="button"
-                  disabled={isSettling}
-                  onClick={() => handleCheckout(PosCheckoutModes.PAY_AND_SETTLE)}
-                  className="flex items-center justify-center gap-1.5 rounded-2xl bg-gradient-to-r from-emerald-600 via-emerald-700 to-emerald-800 py-3.5 text-xs font-bold text-white shadow-md shadow-emerald-600/20 hover:brightness-105 disabled:opacity-40 transition-all"
-                >
-                  {isSettling ? (
-                    <span>Settling...</span>
-                  ) : (
-                    <>
-                      <Receipt className="h-4 w-4" />
-                      <span>Settle Bill ₹{payableGrandTotal.toFixed(2)} [F2]</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-          ) : activeTableOrder && cart.length > 0 ? (
+            );
+          })() : activeTableOrder && cart.length > 0 ? (
             /* Scenario B: Table is running AND cashier has staged new add-on dishes */
             <div className="grid grid-cols-2 gap-2">
               <button
@@ -1945,6 +2382,7 @@ export default function PosPage() {
   return (
     <AuthGuard>
       <AppShell>
+        <FeatureGate feature="posBilling" title="POS Billing Terminal" planSuggestion="Starter or Dine-In Pro">
         <div className="flex flex-1 h-full min-h-0 flex-col overflow-hidden bg-[#FAF7F2] dark:bg-[#111418]">
           {/* ======================================================== */}
           {/* 1. WARNING BANNERS (GRACE, EXHAUSTED WALLET, INACTIVE)   */}
@@ -1983,6 +2421,68 @@ export default function PosPage() {
                 >
                   Recharge
                 </button>
+              </div>
+            )}
+
+            {/* Offline Mode & Sync Status Capsule */}
+            {(!isOnline || pendingOfflineCount > 0) && (
+              <div className="flex items-center justify-between rounded-2xl border border-amber-500/40 bg-gradient-to-r from-amber-500/10 via-[#DE8626]/10 to-amber-500/5 px-3.5 py-2 text-xs shadow-xs transition-all">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span
+                    className={clsx(
+                      'h-2.5 w-2.5 rounded-full shrink-0',
+                      !isOnline ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'
+                    )}
+                  />
+                  <div className="min-w-0">
+                    <p className="font-extrabold text-amber-900 dark:text-amber-200 truncate flex items-center gap-1.5">
+                      {!isOnline ? 'OFFLINE BILLING MODE ACTIVE' : 'CLOUD CONNECTED'}
+                      {pendingOfflineCount > 0 && (
+                        <span className="rounded-full bg-[#DE8626] px-2 py-0.5 text-[10px] font-bold text-white shadow-xs">
+                          {pendingOfflineCount} queued {pendingOfflineCount === 1 ? 'order' : 'orders'}
+                        </span>
+                      )}
+                    </p>
+                    <p className="text-[10px] text-amber-800/80 dark:text-amber-300/80 truncate">
+                      {!isOnline
+                        ? 'Internet disconnected. Bills & KOTs print locally. Orders will sync automatically once reconnected.'
+                        : `Ready to sync ${pendingOfflineCount} offline order(s) to cloud.`}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => setOfflineRegisterOpen(true)}
+                    className="flex items-center gap-1 rounded-xl bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 px-2.5 py-1 text-xs font-bold text-amber-900 dark:text-amber-200 transition-colors cursor-pointer"
+                  >
+                    Shift Register 📋
+                  </button>
+
+                  {pendingOfflineCount > 0 && isOnline && (
+                    <button
+                      onClick={() => {
+                        if (currentRestId) {
+                          syncPendingOfflineOrders(currentRestId).catch(() => {});
+                        }
+                      }}
+                      disabled={isSyncing}
+                      className="flex items-center gap-1 rounded-xl bg-gradient-to-r from-[#DE8626] to-amber-600 px-3 py-1 text-xs font-bold text-white hover:opacity-90 disabled:opacity-50 transition-all shadow-xs cursor-pointer"
+                    >
+                      {isSyncing ? (
+                        <>
+                          <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                          Syncing...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="h-3.5 w-3.5" />
+                          Sync Now
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
               </div>
             )}
 
@@ -2294,14 +2794,7 @@ export default function PosPage() {
               {/* Product Menu Dishes Responsive Grid */}
               <div className="flex-1 overflow-y-auto p-3 sm:p-4 pb-28 lg:pb-4">
                 {loading ? (
-                  <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-3 2xl:grid-cols-4 gap-2.5 sm:gap-3">
-                    {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
-                      <div
-                        key={n}
-                        className="h-44 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] animate-pulse"
-                      />
-                    ))}
-                  </div>
+                  <PosGridSkeleton count={8} />
                 ) : filteredItems.length === 0 ? (
                   <div className="py-24 text-center text-xs text-[#667085] dark:text-[#94A3B8]">
                     No dishes found matching your search keywords or filters.
@@ -2803,6 +3296,13 @@ export default function PosPage() {
             onStatusUpdated={(updated) => setOperatingStatus(updated)}
           />
 
+          {/* Offline Shift Register Modal */}
+          <OfflineShiftRegisterModal
+            isOpen={offlineRegisterOpen}
+            onClose={() => setOfflineRegisterOpen(false)}
+            restaurantId={currentRestId}
+          />
+
           {/* Wallet Recharge Modal */}
           <WalletRechargeModal
             isOpen={walletModalOpen}
@@ -2834,6 +3334,13 @@ export default function PosPage() {
               }
               setNotificationDrawerOpen(false);
             }}
+            onConfirmOrder={handleConfirmActiveOrder}
+          />
+
+          {/* Real-time Order Alert Banner (Floating Toast) */}
+          <OrderAlertBanner
+            onPress={() => setNotificationDrawerOpen(true)}
+            onConfirmOrder={handleConfirmActiveOrder}
           />
 
           {/* Web Printer Settings Modal */}
@@ -2849,6 +3356,7 @@ export default function PosPage() {
             onClose={() => setAlertConfig((prev) => ({ ...prev, visible: false }))}
           />
         </div>
+        </FeatureGate>
       </AppShell>
     </AuthGuard>
   );

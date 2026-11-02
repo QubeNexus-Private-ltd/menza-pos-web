@@ -27,6 +27,7 @@ export interface SubscriptionPlan {
   commissionType?: 'PERCENTAGE' | 'FLAT_PER_ORDER' | 'HYBRID' | 'FEATURE_DRIVEN' | string;
   baseCommissionPercentage?: number;
   baseFlatCommissionPerOrder?: number;
+  minCommissionFloorPerOrder?: number;
   maxCommissionCapPerOrder?: number;
   includedWalletCredit?: number;
   allowTableOrdering?: boolean;
@@ -37,10 +38,22 @@ export interface SubscriptionPlan {
   allowOnlinePayment?: boolean;
   allowSmsNotifications?: boolean;
   isActive: boolean;
-  features?: string[];
   maxOutlets?: number;
   maxStaff?: number;
   entitlements?: SubscriptionPlanEntitlementItem[];
+  applications?: Record<string, boolean>;
+  features?: string[] | Record<string, boolean>;
+  isMobilePosEnabled?: boolean;
+  isPosWebEnabled?: boolean;
+  isWaiterAppEnabled?: boolean;
+  isKdsAppEnabled?: boolean;
+  isPosOrderWebEnabled?: boolean;
+  isPosTerminalEnabled?: boolean;
+  isTableConfigurationEnabled?: boolean;
+  isReservationEnabled?: boolean;
+  isMenuOrderingEnabled?: boolean;
+  isStaffPinLockEnabled?: boolean;
+  isReportsEnabled?: boolean;
 }
 
 export type SubscriptionLifecycleState =
@@ -87,6 +100,27 @@ export interface UserSubscriptionStatus {
   restaurantName?: string;
   restaurantGstNumber?: string;
   platformGst?: PlatformGstInfo;
+  allowTableOrdering?: boolean;
+  allowCounterOrdering?: boolean;
+  allowSelfPickup?: boolean;
+  allowDelivery?: boolean;
+  allowKds?: boolean;
+  isKdsEnabled?: boolean;
+  allowOnlinePayment?: boolean;
+  allowSmsNotifications?: boolean;
+  applications?: Record<string, boolean>;
+  features?: Record<string, boolean>;
+  isMobilePosEnabled?: boolean;
+  isPosWebEnabled?: boolean;
+  isWaiterAppEnabled?: boolean;
+  isKdsAppEnabled?: boolean;
+  isPosOrderWebEnabled?: boolean;
+  isPosTerminalEnabled?: boolean;
+  isTableConfigurationEnabled?: boolean;
+  isReservationEnabled?: boolean;
+  isMenuOrderingEnabled?: boolean;
+  isStaffPinLockEnabled?: boolean;
+  isReportsEnabled?: boolean;
 }
 
 export interface RestaurantSubscriptionHistory {

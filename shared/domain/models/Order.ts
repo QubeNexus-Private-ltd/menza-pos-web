@@ -125,6 +125,9 @@ export interface PlaceOrderRequest {
   paymentStatus?: string;
   billingMode?: string;
   items?: PlaceOrderItemRequest[];
+  offlineReferenceId?: string;
+  originalCreatedAtUtc?: string;
+  isOfflineSync?: boolean;
 }
 
 export interface RestaurantTodayRevenue {

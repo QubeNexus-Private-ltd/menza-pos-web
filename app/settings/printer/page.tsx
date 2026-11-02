@@ -66,6 +66,7 @@ export default function PrinterSettingsPage() {
   const [serialSupported, setSerialSupported] = useState(false);
   const [isBleSupported, setIsBleSupported] = useState(false);
   const [isBleConnected, setIsBleConnected] = useState(false);
+  const [hasSavedBle, setHasSavedBle] = useState(false);
   const [bleDeviceName, setBleDeviceName] = useState<string | null>(null);
   const [isConnectingBle, setIsConnectingBle] = useState(false);
   const [isAndroidDevice, setIsAndroidDevice] = useState(false);
@@ -112,11 +113,26 @@ export default function PrinterSettingsPage() {
     setSerialSupported(WebPrinterService.isWebSerialSupported());
     setIsSerialConnected(WebPrinterService.isSerialConnected());
     setIsBleSupported(WebPrinterService.isWebBluetoothSupported());
-    setIsBleConnected(WebPrinterService.isBluetoothConnected());
-    setBleDeviceName(WebPrinterService.getConnectedBluetoothDeviceName());
     setIsAndroidDevice(WebPrinterService.isAndroid());
     setIsMobileDevice(WebPrinterService.isMobile());
     setIsIOSDevice(WebPrinterService.isIOS());
+
+    // Subscribe to reactive Bluetooth connection updates
+    const unsubscribe = WebPrinterService.onBluetoothStatusChange((status) => {
+      setIsBleConnected(status.isConnected);
+      setIsConnectingBle(status.isConnecting);
+      setBleDeviceName(status.deviceName);
+      setHasSavedBle(status.hasSavedDevice);
+    });
+
+    // Auto-reconnect to saved printer if available (retains connection across page refresh)
+    if (WebPrinterService.hasSavedBluetoothDevice() && !WebPrinterService.isBluetoothConnected()) {
+      WebPrinterService.autoReconnectBluetooth(true).catch(() => {});
+    }
+
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   const handleConnectSerial = async () => {
@@ -147,6 +163,7 @@ export default function PrinterSettingsPage() {
       if (res.success) {
         setIsBleConnected(true);
         setBleDeviceName(res.deviceName || 'Thermal BLE Printer');
+        setHasSavedBle(true);
         setSuccessMsg(res.message);
         setTimeout(() => setSuccessMsg(null), 4000);
       } else {
@@ -161,11 +178,39 @@ export default function PrinterSettingsPage() {
     }
   };
 
+  const handleReconnectBle = async () => {
+    try {
+      setIsConnectingBle(true);
+      setErrorMsg(null);
+      const res = await WebPrinterService.reconnectBluetooth();
+      if (res.success) {
+        setSuccessMsg(res.message);
+        setTimeout(() => setSuccessMsg(null), 4000);
+      } else {
+        setErrorMsg(res.message);
+        setTimeout(() => setErrorMsg(null), 5000);
+      }
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Reconnection failed');
+      setTimeout(() => setErrorMsg(null), 4000);
+    } finally {
+      setIsConnectingBle(false);
+    }
+  };
+
   const handleDisconnectBle = async () => {
     await WebPrinterService.disconnectBluetoothDevice();
     setIsBleConnected(false);
+    setSuccessMsg('Disconnected from Bluetooth printer (printer saved for quick reconnect)');
+    setTimeout(() => setSuccessMsg(null), 3000);
+  };
+
+  const handleForgetBle = async () => {
+    await WebPrinterService.forgetBluetoothDevice();
+    setIsBleConnected(false);
     setBleDeviceName(null);
-    setSuccessMsg('Disconnected from Bluetooth printer');
+    setHasSavedBle(false);
+    setSuccessMsg('Bluetooth printer removed');
     setTimeout(() => setSuccessMsg(null), 3000);
   };
 
@@ -424,6 +469,15 @@ export default function PrinterSettingsPage() {
                           <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
                           Connected
                         </span>
+                      ) : isConnectingBle ? (
+                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-500/10 text-blue-600 dark:text-blue-400">
+                          <RefreshCw className="h-3 w-3 animate-spin" />
+                          Connecting...
+                        </span>
+                      ) : hasSavedBle ? (
+                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                          Saved (Offline)
+                        </span>
                       ) : (
                         <span className="text-[10px] text-[#667085] dark:text-[#94A3B8]">
                           Not Paired
@@ -435,21 +489,58 @@ export default function PrinterSettingsPage() {
                       Connect directly to your Bluetooth Low Energy thermal printer from Chrome on Android or Desktop.
                     </p>
 
-                    {isBleConnected && bleDeviceName && (
+                    {bleDeviceName && (
                       <div className="text-[11px] font-semibold text-blue-700 dark:text-blue-300">
-                        Active Paired Printer: <strong>{bleDeviceName}</strong>
+                        {isBleConnected ? 'Active Paired Printer: ' : 'Saved Printer: '}
+                        <strong>{bleDeviceName}</strong>
                       </div>
                     )}
 
                     <div className="flex flex-wrap items-center gap-2 pt-1">
                       {isBleConnected ? (
-                        <button
-                          type="button"
-                          onClick={handleDisconnectBle}
-                          className="px-3 py-1.5 rounded-xl border border-rose-300 bg-rose-50 dark:bg-rose-950/30 text-xs font-bold text-rose-600 hover:bg-rose-100 transition-colors"
-                        >
-                          Disconnect Bluetooth
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            onClick={handleDisconnectBle}
+                            className="px-3 py-1.5 rounded-xl border border-rose-300 bg-rose-50 dark:bg-rose-950/30 text-xs font-bold text-rose-600 hover:bg-rose-100 transition-colors"
+                          >
+                            Disconnect
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleForgetBle}
+                            className="px-2.5 py-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] text-xs font-medium text-[#667085] dark:text-[#94A3B8] hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                          >
+                            Forget Printer
+                          </button>
+                        </>
+                      ) : hasSavedBle ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={handleReconnectBle}
+                            disabled={isConnectingBle}
+                            className="px-3 py-1.5 rounded-xl border border-blue-600 bg-blue-600 text-xs font-bold text-white shadow-sm hover:bg-blue-700 transition-colors flex items-center gap-1.5"
+                          >
+                            <Bluetooth className="h-3.5 w-3.5" />
+                            <span>{isConnectingBle ? 'Reconnecting...' : `Reconnect (${bleDeviceName || 'Printer'})`}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleConnectBle}
+                            disabled={isConnectingBle}
+                            className="px-2.5 py-1.5 rounded-xl border border-blue-300 dark:border-blue-800 text-xs font-semibold text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40 transition-colors"
+                          >
+                            Pair Different Printer
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleForgetBle}
+                            className="px-2 py-1.5 rounded-xl text-xs font-medium text-[#667085] dark:text-[#94A3B8] hover:text-rose-500 transition-colors"
+                          >
+                            Forget
+                          </button>
+                        </>
                       ) : (
                         <button
                           type="button"

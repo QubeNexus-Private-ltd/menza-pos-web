@@ -23,6 +23,7 @@ export interface RestaurantConfig {
   walletBalance?: number;
   isActive?: boolean;
   businessProfile?: 'QSR_CAFE' | 'DINE_IN' | 'HYBRID';
+  dineInPaymentMode?: string;
   orderingMode?: 'SCHEDULE' | 'MANUAL';
   isAcceptingOrdersManual?: boolean;
   manualPauseUntilUtc?: string | null;
@@ -67,6 +68,8 @@ export interface StoreOperatingStatus {
   orderingMode: 'SCHEDULE' | 'MANUAL';
   businessProfile?: 'QSR_CAFE' | 'DINE_IN' | 'HYBRID';
   isTableOrderingActive?: boolean;
+  isTableOrder?: boolean;
+  allowTableOrdering?: boolean;
   status: 'OPEN' | 'PAUSED' | 'CLOSED' | 'WALLET_EXHAUSTED';
   statusMessage: string;
   openingTime: string;

@@ -8,6 +8,7 @@ import { TermsConditionRemoteDataSource } from '../../data/datasources/TermsCond
 import { TermsConditionRepositoryImpl } from '../../data/repositories/TermsConditionRepositoryImpl';
 import { isOwnerUser, isSuperAdminUser } from '../../core/auth/rolePermissions';
 import { isJwtExpired, getJwtExpirationDate } from '../../core/auth/jwtUtils';
+import { getPinAuthErrorMessage, extractApiErrorMessage } from '../../core/utils/errorSanitizer';
 
 const termsRepository = new TermsConditionRepositoryImpl(new TermsConditionRemoteDataSource());
 
@@ -90,6 +91,45 @@ interface AuthState {
   setActiveStaffName: (name: string) => void;
 }
 
+/**
+ * Safely check if the web browser session was already unlocked during this tab's lifetime
+ */
+function isWebSessionUnlockedInitially(): boolean {
+  if (typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined') {
+    try {
+      return window.sessionStorage.getItem('menza_pos_unlocked') === 'true';
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/**
+ * Mark terminal unlocked across web sessionStorage and persistent SessionStorage
+ */
+function markTerminalUnlocked(): void {
+  if (typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined') {
+    try {
+      window.sessionStorage.setItem('menza_pos_unlocked', 'true');
+    } catch {}
+  }
+  SessionStorage.savePinLocked(false).catch(() => {});
+  SessionStorage.saveLastUnlockedAt(Date.now()).catch(() => {});
+}
+
+/**
+ * Mark terminal locked across web sessionStorage and persistent SessionStorage
+ */
+function markTerminalLocked(): void {
+  if (typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined') {
+    try {
+      window.sessionStorage.removeItem('menza_pos_unlocked');
+    } catch {}
+  }
+  SessionStorage.savePinLocked(true).catch(() => {});
+}
+
 export const useAuthStore = create<AuthState>((set, get) => ({
   isHydrating: true,
   hasCompletedOnboarding: false,
@@ -101,8 +141,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   restaurants: [],
   activeRestaurant: null,
 
-  // Staff Quick PIN Initial State: PIN is DEFAULT
-  isPinLocked: true,
+  // Staff Quick PIN Initial State: if unlocked in this browser session, start unlocked
+  isPinLocked: !isWebSessionUnlockedInitially(),
   isPinLockEnabled: true,
   isPinConfigured: false,
   staffPin: '1234',
@@ -122,7 +162,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       logger.auth('APP_ONBOARDING_CHECK', 'Hydrating auth session from SessionStorage');
       const session = await SessionStorage.loadSession();
 
-      if (!session.hasCompletedOnboarding) {
+      const hasCompletedOnboarding = session.hasCompletedOnboarding || Boolean(session.token && session.user);
+      if (!hasCompletedOnboarding) {
         set({ 
           isHydrating: false, 
           hasCompletedOnboarding: false 
@@ -135,6 +176,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         if (isJwtExpired(session.token)) {
           logger.auth('AUTH_SESSION_EXPIRED', 'Access token found in storage is expired. Attempting renewal...');
           let refreshSuccessful = false;
+          let isExplicitAuthRejection = false;
           if (session.refreshToken) {
             try {
               const refreshed = await new AuthRemoteDataSource().refreshToken(session.token, session.refreshToken);
@@ -145,13 +187,19 @@ export const useAuthStore = create<AuthState>((set, get) => ({
                 await SessionStorage.saveTokens(session.token, session.refreshToken);
                 refreshSuccessful = true;
               }
-            } catch (refErr) {
+            } catch (refErr: any) {
               logger.auth('AUTH_SESSION_EXPIRED', 'Failed to refresh token on launch', { error: String(refErr) });
+              const status = refErr?.response?.status;
+              if (status === 401 || status === 403) {
+                isExplicitAuthRejection = true;
+              }
             }
           }
 
-          if (!refreshSuccessful) {
-            logger.auth('AUTH_SESSION_EXPIRED', 'Stored session credentials expired or invalid. Wiping stale session.');
+          // Strictly reserve clearSession for explicit authentication rejection from backend.
+          // Never wipe on transient network errors, timeouts, or backend cold starts so offline operations survive.
+          if (!refreshSuccessful && isExplicitAuthRejection) {
+            logger.auth('AUTH_SESSION_EXPIRED', 'Stored session credentials rejected by server. Wiping stale session.');
             (globalThis as any).__MENZA_AUTH_TOKEN__ = null;
             (globalThis as any).__MENZA_REFRESH_TOKEN__ = null;
             (globalThis as any).__MENZA_ACTIVE_REST_ID__ = null;
@@ -191,9 +239,40 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         // Terms & Conditions consent is strictly for the Owner role; non-owners and SuperAdmins automatically pass
         const hasAcceptedTerms = isSuperAdmin || !isOwner || Boolean(session.hasAcceptedTerms);
 
-        const isPinLockEnabled = true;
+        // Respect saved isPinLockEnabled; default to true if unconfigured
+        const isPinLockEnabled = session.isPinLockEnabled !== false;
         const staffPin = session.staffPin || '1234';
         const activeStaffName = session.activeStaffName || null;
+
+        // Determine whether the terminal should be locked:
+        const isWeb = typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined';
+        let isPinLocked = false;
+
+        if (!isPinLockEnabled) {
+          // PIN lock disabled by restaurant setting
+          isPinLocked = false;
+        } else if (isWeb) {
+          // Web POS: keep unlocked if already unlocked in this browser session (preserves active cashier on F5 refresh)
+          const isWebSessionUnlocked = window.sessionStorage.getItem('menza_pos_unlocked') === 'true';
+          isPinLocked = !isWebSessionUnlocked;
+        } else {
+          // Mobile POS (React Native):
+          if (session.isPinLocked === true) {
+            isPinLocked = true;
+          } else if (session.lastUnlockedAt) {
+            // Auto-lock after 30 minutes of inactivity
+            const elapsedMs = Date.now() - session.lastUnlockedAt;
+            const INACTIVITY_LOCK_TIMEOUT_MS = 30 * 60 * 1000;
+            isPinLocked = elapsedMs >= INACTIVITY_LOCK_TIMEOUT_MS;
+          } else {
+            // First cold launch
+            isPinLocked = true;
+          }
+        }
+
+        if (!isPinLocked) {
+          markTerminalUnlocked();
+        }
 
         set({
           isHydrating: false,
@@ -205,7 +284,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           user: session.user,
           restaurants: session.restaurants,
           activeRestaurant: session.activeRestaurant,
-          isPinLocked: true, // Default to PIN lock on app launch for all users!
+          isPinLocked,
           isPinLockEnabled,
           isPinConfigured: Boolean(session.staffPin && session.staffPin !== '1234'),
           staffPin,
@@ -298,6 +377,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       hasAcceptedTerms,
     });
 
+    markTerminalUnlocked();
+
     set({
       isAuthenticated: true,
       hasCompletedOnboarding: true,
@@ -307,6 +388,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       user,
       restaurants,
       activeRestaurant: activeRest,
+      isPinLocked: false,
       isPinConfigured: Boolean(isPinConfiguredExplicit),
       rememberedMobile: user?.mobile || null,
     });
@@ -448,6 +530,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     logger.setRestaurantId(undefined);
 
     SessionStorage.clearSession();
+    markTerminalLocked();
 
     set({
       isAuthenticated: false,
@@ -472,6 +555,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   lockToPinScreen: () => {
+    markTerminalLocked();
     set({ isPinLocked: true });
     logger.auth('POS_PIN_LOCKED', 'POS manually locked to Staff PIN Screen');
   },
@@ -480,6 +564,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const state = get();
     const cleanMobile = (mobileOverride || state.rememberedMobile || state.user?.mobile || '').replace(/[^0-9]/g, '').slice(-10);
     const currentRestId = state.activeRestaurant?.restaurantId || (globalThis as any).__MENZA_ACTIVE_REST_ID__;
+
+    let onlineAttemptFailedWithNetworkError = false;
 
     // 1. Online Database-Backed Staff PIN Login (Matches by Mobile + PIN, or RestaurantId + PIN)
     if (cleanMobile.length === 10 || currentRestId) {
@@ -532,6 +618,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             activeStaffName: authData.name,
           });
 
+          markTerminalUnlocked();
+
           set({
             isAuthenticated: true,
             isPinLocked: false,
@@ -551,14 +639,29 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           logger.auth('POS_PIN_UNLOCKED', `POS unlocked and logged in via PIN for ${authData.name} (${authData.roles.join(', ')})`);
           return { success: true };
         }
+
+        // If backend returned response without token (e.g. envelope with error message)
+        const apiMsg = extractApiErrorMessage(authData);
+        if (apiMsg) {
+          logger.auth('POS_PIN_UNLOCK_FAILED', `Staff PIN response without token: ${apiMsg}`);
+          return { success: false, message: apiMsg };
+        }
       } catch (apiErr: any) {
+        // High priority: if server returned an explicit error message, return it directly!
+        const serverMsg = extractApiErrorMessage(apiErr);
+        if (serverMsg) {
+          logger.auth('POS_PIN_UNLOCK_FAILED', `Staff PIN rejected with backend message: ${serverMsg}`);
+          return { success: false, message: serverMsg };
+        }
+
         const status = apiErr?.response?.status;
-        if (status === 400 || status === 401 || status === 403 || status === 404) {
-          const msg = apiErr?.response?.data?.message || 'Invalid Staff PIN or mobile number. Please try again.';
+        if (status === 400 || status === 401 || status === 403 || status === 404 || status === 422 || status === 429) {
+          const msg = getPinAuthErrorMessage(apiErr, cleanMobile, state.isPinConfigured);
           logger.auth('POS_PIN_UNLOCK_FAILED', `Staff PIN rejected: ${msg}`);
           return { success: false, message: msg };
         }
         // If server was unreachable / offline / timeout, gracefully fall through to offline local check
+        onlineAttemptFailedWithNetworkError = true;
         logger.auth('POS_PIN_OFFLINE_FALLBACK', 'PIN service unreachable, checking local credentials cache');
       }
     }
@@ -567,6 +670,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const configuredPin = state.staffPin || '1234';
     if (pin === configuredPin || pin === '1234') {
       if (state.isAuthenticated && state.token && state.user) {
+        markTerminalUnlocked();
         set({ isPinLocked: false, authMode: 'pin', hasAcceptedTerms: true });
         logger.auth('POS_PIN_UNLOCKED', 'POS unlocked offline with local PIN');
         return { success: true };
@@ -578,6 +682,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         (globalThis as any).__MENZA_AUTH_TOKEN__ = session.token;
         (globalThis as any).__MENZA_REFRESH_TOKEN__ = session.refreshToken;
         (globalThis as any).__MENZA_ACTIVE_REST_ID__ = session.activeRestaurant?.restaurantId || null;
+
+        markTerminalUnlocked();
 
         set({
           isAuthenticated: true,
@@ -607,7 +713,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
 
     logger.auth('POS_PIN_UNLOCK_FAILED', 'Incorrect PIN attempt');
-    return { success: false, message: 'Incorrect PIN. Try again (Default: 1234)' };
+    if (onlineAttemptFailedWithNetworkError) {
+      return {
+        success: false,
+        message: 'Server unreachable and offline PIN did not match. Please check internet connection or PIN.',
+      };
+    }
+    const defaultHint = !state.isPinConfigured && (!state.staffPin || state.staffPin === '1234')
+      ? ' (Default: 1234)'
+      : '';
+    return { success: false, message: `Incorrect PIN.${defaultHint} Please try again.` };
   },
 
   setStaffPin: async (pin: string, targetUserId?: number) => {
@@ -632,7 +747,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   togglePinLockEnabled: async (enabled: boolean) => {
     await SessionStorage.savePinLockEnabled(enabled);
-    set({ isPinLockEnabled: enabled });
+    if (!enabled) {
+      markTerminalUnlocked();
+      set({ isPinLockEnabled: false, isPinLocked: false });
+    } else {
+      set({ isPinLockEnabled: true });
+    }
   },
 
   setActiveStaffName: (name: string) => {
@@ -642,6 +762,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   completePinSetup: async (pin: string) => {
     const success = await get().setStaffPin(pin);
     if (success) {
+      markTerminalUnlocked();
       set({ isPinConfigured: true, isPinLocked: false, authMode: 'pin' });
       logger.auth('STAFF_PIN_CONFIGURED', 'Staff completed initial PIN setup');
     }
@@ -668,13 +789,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         );
         await SessionStorage.saveStaffPin(newPin);
         await SessionStorage.saveActiveStaffName(authData.name);
+        markTerminalUnlocked();
         set({ isPinConfigured: true, isPinLocked: false, staffPin: newPin, authMode: 'pin' });
         logger.auth('STAFF_PIN_CONFIGURED', `Staff PIN successfully reset with OTP for ${authData.name}`);
         return { success: true };
       }
       return { success: false, message: 'Failed to reset PIN. Invalid response from server.' };
     } catch (err: any) {
-      const msg = err?.response?.data?.message || err?.message || 'Failed to reset PIN. Please verify OTP and try again.';
+      const serverMsg = extractApiErrorMessage(err);
+      const msg = serverMsg || 'Failed to reset PIN. Invalid or expired OTP.';
       return { success: false, message: msg };
     }
   },

@@ -25,6 +25,7 @@ import {
   User,
 } from 'lucide-react';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
+import { extractApiErrorMessage } from '@shared/core/utils/errorSanitizer';
 
 interface RecentStaff {
   mobile: string;
@@ -114,22 +115,24 @@ export const PinLockView: React.FC<PinLockViewProps> = ({
   const [recentStaff, setRecentStaff] = useState<RecentStaff[]>([]);
 
   const mobileInputRef = useRef<HTMLInputElement>(null);
+  const hasInitializedRef = useRef<boolean>(resolvedInitialMobile.length === 10);
 
   // Load recent staff from terminal cache
   useEffect(() => {
     setRecentStaff(getStoredRecentStaff());
   }, []);
 
-  // Sync remembered mobile if updated externally
+  // Sync remembered mobile only during initial hydration without overriding user clearing input
   useEffect(() => {
-    if (rememberedMobile && !mobile) {
+    if (!hasInitializedRef.current && rememberedMobile) {
       const clean = rememberedMobile.replace(/[^0-9]/g, '').slice(-10);
       if (clean.length === 10) {
         setMobile(clean);
         setStep('pin');
+        hasInitializedRef.current = true;
       }
     }
-  }, [rememberedMobile, mobile]);
+  }, [rememberedMobile]);
 
   // Live clock & Date
   useEffect(() => {
@@ -156,6 +159,7 @@ export const PinLockView: React.FC<PinLockViewProps> = ({
 
   // --- STEP 1: MOBILE ENTRY HANDLERS ---
   const handleMobileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    hasInitializedRef.current = true;
     const cleaned = e.target.value.replace(/[^0-9]/g, '').slice(0, 10);
     setMobile(cleaned);
     if (errorMsg) setErrorMsg(null);
@@ -220,12 +224,13 @@ export const PinLockView: React.FC<PinLockViewProps> = ({
           }
         } else {
           triggerShake();
-          setErrorMsg(result.message || 'Incorrect PIN. Try again (Default: 1234)');
+          setErrorMsg(result.message || 'Incorrect PIN. Please try again.');
           setPin('');
         }
       } catch (err: any) {
         triggerShake();
-        setErrorMsg('Authentication failed. Please check connection and try again.');
+        const serverMsg = extractApiErrorMessage(err);
+        setErrorMsg(serverMsg || 'Authentication failed. Please verify credentials and try again.');
         setPin('');
       } finally {
         setIsVerifying(false);
@@ -276,6 +281,7 @@ export const PinLockView: React.FC<PinLockViewProps> = ({
       }
     } else {
       if (mobile.length > 0) {
+        hasInitializedRef.current = true;
         setMobile((prev) => prev.slice(0, -1));
         if (errorMsg) setErrorMsg(null);
       }
@@ -287,6 +293,7 @@ export const PinLockView: React.FC<PinLockViewProps> = ({
     if (step === 'pin') {
       setPin('');
     } else {
+      hasInitializedRef.current = true;
       setMobile('');
     }
     if (errorMsg) setErrorMsg(null);
@@ -516,7 +523,11 @@ export const PinLockView: React.FC<PinLockViewProps> = ({
                     {mobile.length > 0 && (
                       <button
                         type="button"
-                        onClick={() => setMobile('')}
+                        onClick={() => {
+                          hasInitializedRef.current = true;
+                          setMobile('');
+                          mobileInputRef.current?.focus();
+                        }}
                         className="text-xs font-bold text-[#8C7A6B] hover:text-red-600 px-1"
                       >
                         Clear
@@ -645,11 +656,14 @@ export const PinLockView: React.FC<PinLockViewProps> = ({
                 {[0, 1, 2, 3].map((idx) => {
                   const isFilled = pin.length > idx;
                   const isCurrent = pin.length === idx;
+                  const isErrorState = Boolean(errorMsg && !pin.length);
                   return (
                     <div
                       key={`pin-vault-${idx}`}
                       className={`flex h-13 w-12 sm:h-14 sm:w-13 items-center justify-center rounded-2xl border-2 transition-all duration-200 transform ${
-                        isFilled
+                        isErrorState
+                          ? 'border-rose-500 bg-rose-50/80 dark:bg-rose-950/40 ring-4 ring-rose-500/20'
+                          : isFilled
                           ? 'scale-105 border-[#DE8626] bg-gradient-to-br from-[#DE8626] to-[#CB741B] text-white shadow-lg shadow-[#DE8626]/40 ring-4 ring-[#DE8626]/20'
                           : isCurrent
                           ? 'border-[#DE8626] bg-[#FFFFFF] dark:bg-[#1B2127] ring-4 ring-[#DE8626]/15 shadow-sm'
@@ -661,7 +675,9 @@ export const PinLockView: React.FC<PinLockViewProps> = ({
                       ) : (
                         <div
                           className={`h-2 w-2 rounded-full ${
-                            isCurrent
+                            isErrorState
+                              ? 'bg-rose-500'
+                              : isCurrent
                               ? 'bg-[#DE8626] animate-pulse'
                               : 'bg-[#E7E1DA] dark:bg-[#2B3540]'
                           }`}
@@ -673,20 +689,20 @@ export const PinLockView: React.FC<PinLockViewProps> = ({
               </div>
 
               {/* Status Message / Error Alert */}
-              <div className="min-h-[22px] mb-2.5 text-center">
+              <div className="min-h-[28px] mb-2.5 text-center flex items-center justify-center">
                 {isVerifying ? (
                   <div className="flex items-center justify-center gap-1.5 text-xs font-bold text-[#DE8626]">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     <span>Authenticating credentials...</span>
                   </div>
                 ) : errorMsg ? (
-                  <div className="flex items-center justify-center gap-1.5 text-xs font-bold text-red-600 dark:text-red-400">
-                    <AlertCircle className="h-4 w-4 shrink-0 text-red-600" />
-                    <span>{errorMsg}</span>
+                  <div className="mx-auto max-w-sm rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50/90 dark:bg-rose-950/50 px-3 py-1.5 text-center text-xs font-bold text-rose-700 dark:text-rose-400 shadow-xs flex items-center justify-center gap-1.5 animate-in fade-in zoom-in-95 duration-150">
+                    <AlertCircle className="h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400" />
+                    <span className="leading-tight">{errorMsg}</span>
                   </div>
                 ) : (
                   <p className="text-[11px] font-medium text-[#8C7A6B] dark:text-[#94A3B8]">
-                    Enter 4-digit PIN • Default: <strong className="font-extrabold text-[#DE8626]">1234</strong>
+                    Enter 4-digit PIN for staff authentication
                   </p>
                 )}
               </div>

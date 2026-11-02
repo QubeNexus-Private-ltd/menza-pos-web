@@ -37,6 +37,7 @@ interface SubscriptionStoreState {
   error: string | null;
 
   // Computed Convenience Flags
+  hasLoaded: boolean;
   lifecycleState: SubscriptionLifecycleState;
   daysRemaining: number;
   isInGracePeriod: boolean;
@@ -110,6 +111,7 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
     isHistoryLoading: false,
     error: null,
 
+    hasLoaded: false,
     lifecycleState: 'NONE',
     daysRemaining: 0,
     isInGracePeriod: false,
@@ -132,6 +134,7 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
       if (!activeRestId || activeRestId <= 0) {
         set({
           subscription: null,
+          hasLoaded: false,
           lifecycleState: 'NONE',
           daysRemaining: 0,
           isInGracePeriod: false,
@@ -154,6 +157,7 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
         if (!sub) {
           set({
             subscription: null,
+            hasLoaded: true,
             lifecycleState: 'NONE',
             daysRemaining: 0,
             isInGracePeriod: false,
@@ -219,6 +223,7 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
         };
 
         set({
+          hasLoaded: true,
           subscription: updatedSub,
           lifecycleState: lifecycle,
           daysRemaining: isExplicitlyInactive ? 0 : daysRem,
@@ -230,7 +235,7 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
 
         return updatedSub;
       } catch (err: any) {
-        set({ error: err?.message || 'Failed to fetch subscription status', isLoading: false });
+        set({ error: err?.message || 'Failed to fetch subscription status', isLoading: false, hasLoaded: true });
         return null;
       }
     },
@@ -354,16 +359,24 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
     },
 
     hasEntitlement: (configKey: string): boolean => {
-      const { subscription, lifecycleState } = get();
-      // If expired or inactive, all entitlements blocked
-      if (lifecycleState === 'EXPIRED' || lifecycleState === 'INACTIVE') return false;
-      if (!subscription) return true; // Default permissive fallback if no sub loaded yet
+      const { subscription, lifecycleState, isExpired, isInGracePeriod, hasLoaded } = get();
+      if (!hasLoaded) return true;
+      if (!subscription || lifecycleState === 'EXPIRED' || lifecycleState === 'INACTIVE' || (isExpired && !isInGracePeriod)) return false;
 
       const entitlements = subscription.entitlements || [];
+      const k = configKey.toLowerCase();
+      if (k === 'iskdsenabled' || k === 'iskdsappenabled' || k === 'iscaptainmenzaappenabled') {
+        const match = entitlements.find((e: any) => {
+          const ek = (e.configKey || e.ConfigKey || '').toLowerCase();
+          return ek === 'iskdsenabled' || ek === 'iskdsappenabled' || ek === 'iscaptainmenzaappenabled';
+        });
+        if (match) return Boolean(match.isAllowed ?? (match as any).IsAllowed);
+        return Boolean((subscription as any).isKdsEnabled ?? (subscription as any).allowKds ?? subscription.isKdsAppEnabled);
+      }
       const item = entitlements.find(
-        (e) => e.configKey?.toLowerCase() === configKey.toLowerCase()
+        (e: any) => (e.configKey || e.ConfigKey || '').toLowerCase() === k
       );
-      return item ? item.isAllowed : true;
+      return item ? Boolean(item.isAllowed ?? (item as any).IsAllowed) : true;
     },
 
     isZeroCommission: (): boolean => {
@@ -375,8 +388,11 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
     },
 
     canTakeOrders: (): boolean => {
-      const { lifecycleState } = get();
-      return lifecycleState !== 'EXPIRED' && lifecycleState !== 'INACTIVE';
+      const { subscription, lifecycleState, isExpired, isInGracePeriod, hasLoaded } = get();
+      if (!hasLoaded) return true;
+      if (!subscription || lifecycleState === 'NONE' || lifecycleState === 'EXPIRED' || lifecycleState === 'INACTIVE') return false;
+      if (isExpired && !isInGracePeriod) return false;
+      return true;
     },
 
     isTableOrderAllowed: (): boolean => {
@@ -385,21 +401,26 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
     },
 
     isAppAllowed: (appKey: MenzaApplicationKey | string): boolean => {
-      const s = get().subscription;
-      if (!s) return false;
-      if (s.isExpired && !s.isInGracePeriod) return false;
-      return extractApplicationFlag(s, appKey);
+      const { subscription, lifecycleState, isExpired, isInGracePeriod, hasLoaded } = get();
+      if (!hasLoaded) return true;
+      if (!subscription || lifecycleState === 'NONE' || lifecycleState === 'EXPIRED' || lifecycleState === 'INACTIVE' || (isExpired && !isInGracePeriod)) {
+        return false;
+      }
+      return extractApplicationFlag(subscription, appKey);
     },
 
     isFeatureAllowed: (featureKey: MenzaFeatureKey | string): boolean => {
-      const s = get().subscription;
-      if (!s) return false;
-      if (s.isExpired && !s.isInGracePeriod) return false;
-      return extractFeatureFlag(s, featureKey);
+      const { subscription, lifecycleState, isExpired, isInGracePeriod, hasLoaded } = get();
+      if (!hasLoaded) return true;
+      if (!subscription || lifecycleState === 'NONE' || lifecycleState === 'EXPIRED' || lifecycleState === 'INACTIVE' || (isExpired && !isInGracePeriod)) {
+        return false;
+      }
+      return extractFeatureFlag(subscription, featureKey);
     },
 
     reset: () => {
       set({
+        hasLoaded: false,
         subscription: null,
         plans: [],
         history: [],

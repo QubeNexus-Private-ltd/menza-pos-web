@@ -27,6 +27,7 @@ export interface SubscriptionPlan {
   commissionType?: 'PERCENTAGE' | 'FLAT_PER_ORDER' | 'HYBRID' | 'FEATURE_DRIVEN' | string;
   baseCommissionPercentage?: number;
   baseFlatCommissionPerOrder?: number;
+  minCommissionFloorPerOrder?: number;
   maxCommissionCapPerOrder?: number;
   includedWalletCredit?: number;
   allowTableOrdering?: boolean;

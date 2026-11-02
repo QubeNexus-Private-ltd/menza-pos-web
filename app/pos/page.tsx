@@ -429,6 +429,11 @@ export default function PosPage() {
     });
     const stopWorker = startWebOfflineSyncWorker(() => currentRestId);
 
+    // Auto-reconnect saved Bluetooth thermal printer in background across reloads
+    if (WebPrinterService.hasSavedBluetoothDevice() && !WebPrinterService.isBluetoothConnected()) {
+      WebPrinterService.autoReconnectBluetooth(true).catch(() => {});
+    }
+
     const loadAll = async () => {
       const s = usePosCatalogStore.getState();
       const isAlreadyCached = Boolean(

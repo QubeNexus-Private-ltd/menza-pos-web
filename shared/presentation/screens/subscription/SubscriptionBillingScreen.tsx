@@ -12,7 +12,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Crown, CheckCircle2, Zap, CreditCard, X, Shield, ArrowRight, Sparkles, Gift, Wallet, History, AlertCircle } from 'lucide-react-native';
+import { Crown, CheckCircle2, Zap, CreditCard, X, Shield, ArrowRight, Sparkles, Gift, Wallet, History, AlertCircle, Lock } from 'lucide-react-native';
+import { getSubscriptionFeatureList, getPlanFeatureList, formatEntitlementTitle } from '../../../core/utils/entitlementCatalog';
 import { Colors } from '../../../core/theme/colors';
 import { Typography } from '../../../core/theme/typography';
 import { Spacing } from '../../../core/theme/spacing';
@@ -389,18 +390,42 @@ export const SubscriptionBillingScreen: React.FC<SubscriptionBillingScreenProps>
 
             {/* Included Entitlement Features */}
             <View style={styles.featuresCard}>
-              <Text style={styles.featuresTitle}>Included Entitlement Features</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: Spacing.sm }}>
+                <View style={{ flex: 1, paddingRight: 8 }}>
+                  <Text style={styles.featuresTitle}>Your Store Feature Entitlements</Text>
+                  <Text style={styles.featuresSubtitle}>
+                    Active operational capabilities for this outlet terminal
+                  </Text>
+                </View>
+                <View style={styles.featuresActiveCountBadge}>
+                  <Text style={styles.featuresActiveCountText}>
+                    {getSubscriptionFeatureList(subscription).filter((f) => f.enabled).length} Enabled
+                  </Text>
+                </View>
+              </View>
               <View style={styles.featureList}>
-                {[
-                  'Counter POS Terminal & Cashier Billing',
-                  'Kitchen Display System (KDS) & Printers',
-                  'Live Floor Layout & Table Management',
-                  'Staff Accounts, Shifts & Access PINs',
-                  'Instant Online Payment Gateway Integration',
-                ].map((feat, idx) => (
-                  <View key={`feat-item-${idx}`} style={styles.featureItem}>
-                    <CheckCircle2 size={16} color="#17845A" />
-                    <Text style={styles.featureText}>{feat}</Text>
+                {getSubscriptionFeatureList(subscription).map((feat) => (
+                  <View key={`active-feat-${feat.key}`} style={styles.featureItem}>
+                    <View style={{ width: 22, alignItems: 'center' }}>
+                      {feat.enabled ? (
+                        <CheckCircle2 size={16} color="#17845A" />
+                      ) : (
+                        <Lock size={14} color="#9CA3AF" />
+                      )}
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.featureText, !feat.enabled && styles.featureTextDisabled]}>
+                        {feat.label}
+                      </Text>
+                      <Text style={styles.featureSubtext} numberOfLines={1}>
+                        {feat.description}
+                      </Text>
+                    </View>
+                    {!feat.enabled && (
+                      <View style={styles.upgradeRequiredPill}>
+                        <Text style={styles.upgradeRequiredText}>UPGRADE</Text>
+                      </View>
+                    )}
                   </View>
                 ))}
               </View>
@@ -478,6 +503,39 @@ export const SubscriptionBillingScreen: React.FC<SubscriptionBillingScreenProps>
                       )}
                     </View>
                     <Text style={styles.planPrice}>₹{finalPrice.toLocaleString()}</Text>
+                  </View>
+
+                  {/* Consolidate Plan Feature Entitlement Highlights */}
+                  <View style={styles.planFeaturesContainer}>
+                    <Text style={styles.planFeaturesHeader}>PLAN ENTITLEMENT HIGHLIGHTS</Text>
+                    <View style={styles.planFeaturesGrid}>
+                      {getPlanFeatureList(plan).map((feat) => (
+                        <View
+                          key={`plan-${plan.id}-feat-${feat.key}`}
+                          style={[
+                            styles.planFeaturePill,
+                            !feat.enabled && styles.planFeaturePillDisabled,
+                          ]}
+                        >
+                          {feat.enabled ? (
+                            <CheckCircle2 size={11} color="#15803D" />
+                          ) : (
+                            <Lock size={10} color="#9CA3AF" />
+                          )}
+                          <Text
+                            style={[
+                              styles.planFeatureText,
+                              !feat.enabled && styles.planFeatureTextDisabled,
+                            ]}
+                          >
+                            {feat.shortLabel}
+                          </Text>
+                          {feat.enabled && feat.commissionBadge ? (
+                            <Text style={styles.planFeatureBadgeText}>{feat.commissionBadge}</Text>
+                          ) : null}
+                        </View>
+                      ))}
+                    </View>
                   </View>
 
                   <TouchableOpacity
@@ -1107,6 +1165,96 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: '#6B7280',
     fontWeight: '500',
+  },
+  featuresSubtitle: {
+    color: '#78716C',
+    fontSize: 11,
+    marginTop: 1,
+  },
+  featuresActiveCountBadge: {
+    backgroundColor: '#DCFCE7',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+  },
+  featuresActiveCountText: {
+    color: '#15803D',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  featureSubtext: {
+    color: '#A89F91',
+    fontSize: 10,
+    marginTop: 1,
+  },
+  featureTextDisabled: {
+    color: '#9CA3AF',
+  },
+  upgradeRequiredPill: {
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  upgradeRequiredText: {
+    color: '#D97706',
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
+  planFeaturesContainer: {
+    marginTop: 6,
+    marginBottom: 14,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#F0EAE1',
+  },
+  planFeaturesHeader: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#8C7A6B',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+    textTransform: 'uppercase',
+  },
+  planFeaturesGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  planFeaturePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#F0FDF4',
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  planFeaturePillDisabled: {
+    backgroundColor: '#F9FAFB',
+    borderColor: '#E5E7EB',
+  },
+  planFeatureText: {
+    fontSize: 10.5,
+    fontWeight: '700',
+    color: '#15803D',
+  },
+  planFeatureTextDisabled: {
+    color: '#9CA3AF',
+    fontWeight: '500',
+  },
+  planFeatureBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#D97706',
+    marginLeft: 2,
   },
 });
 

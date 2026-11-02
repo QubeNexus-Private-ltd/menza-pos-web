@@ -431,6 +431,9 @@ apiClient.interceptors.response.use(
     const isAuthRoute =
       url.includes('/Auth/Login') ||
       url.includes('/Auth/GenerateOtp') ||
+      url.includes('/Auth/StaffPinLogin') ||
+      url.includes('/Auth/ResetPinWithOtp') ||
+      url.includes('/Auth/SetStaffPin') ||
       url.includes('/Auth/Refresh');
 
     if (status === 429) {
@@ -500,6 +503,9 @@ apiClient.interceptors.response.use(
     const isAuthEndpoint =
       requestUrl.includes('/Auth/Login') ||
       requestUrl.includes('/Auth/GenerateOtp') ||
+      requestUrl.includes('/Auth/StaffPinLogin') ||
+      requestUrl.includes('/Auth/ResetPinWithOtp') ||
+      requestUrl.includes('/Auth/SetStaffPin') ||
       requestUrl.includes('/Auth/Refresh');
 
     if (status === 401 && !originalRequest._retry && !isAuthEndpoint) {

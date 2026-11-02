@@ -75,6 +75,7 @@ import { usePrinterStore } from '../../state/usePrinterStore';
 import { useNotificationStore } from '../../state/useNotificationStore';
 import { useAppVersionStore } from '../../state/useAppVersionStore';
 import { useSubscriptionStore, isTableOrderSubscriptionAllowed, extractTableOrderFlag } from '../../state/useSubscriptionStore';
+import { getPlanFeatureList, getSubscriptionFeatureList, formatEntitlementTitle } from '../../../core/utils/entitlementCatalog';
 import { SubscriptionGraceBanner } from '../../components/subscription/SubscriptionGraceBanner';
 import { APP_CONSTANTS } from '../../../core/constants/appConstants';
 import { isCashierOnly } from '../../../core/auth/rolePermissions';
@@ -822,19 +823,53 @@ export const AdminDashboardScreen: React.FC = () => {
   }, [isSuperAdmin, activeSubscription, storeSubscription, availablePlans]);
 
   const isTableOrderingAllowed = isTableOrderInSubscription;
-  const isTableOrderingActive = isTableOrderInSubscription && operatingStatus?.businessProfile !== 'QSR_CAFE';
+    const isTableOrderingActive = isTableOrderInSubscription && operatingStatus?.businessProfile !== 'QSR_CAFE';
   const isCounterOrderingAllowed = true;
   // Feature-gated by subscription plan
   const isKdsAllowed = checkEntitlement('IsKdsEnabled');
   const isSmsAllowed = checkEntitlement('IsSmsNotificationsEnabled');
-  const isPosAndCounterOrderingAllowed = true;
+  const isPosBillingAllowed = useMemo(() => {
+    if (isSuperAdmin) return true;
+    return useSubscriptionStore.getState().isFeatureAllowed('posBilling');
+  }, [isSuperAdmin, activeSubscription, storeSubscription]);
+  const isReportsAllowed = useMemo(() => {
+    if (isSuperAdmin) return true;
+    return useSubscriptionStore.getState().isFeatureAllowed('reports');
+  }, [isSuperAdmin, activeSubscription, storeSubscription]);
+  const isStaffRolesAllowed = useMemo(() => {
+    if (isSuperAdmin) return true;
+    return useSubscriptionStore.getState().isFeatureAllowed('staffPinLock');
+  }, [isSuperAdmin, activeSubscription, storeSubscription]);
+  const isPosAndCounterOrderingAllowed = isPosBillingAllowed;
 
-  // Auto-redirect if store is currently on tables tab but plan does not allow it
+  // Strictly locked when no active subscription or expired beyond grace period
+  const isStrictlyLocked = useMemo(() => {
+    if (isSuperAdmin) return false;
+    const currentSub = activeSubscription || storeSubscription;
+    const hasLoaded = useSubscriptionStore.getState().hasLoaded;
+    if (!hasLoaded) return false;
+    if (!currentSub || currentSub.lifecycleState === 'NONE' || currentSub.lifecycleState === 'INACTIVE') return true;
+    if (currentSub.isExpired && !currentSub.isInGracePeriod) return true;
+    return false;
+  }, [isSuperAdmin, activeSubscription, storeSubscription]);
+
+  // Auto-redirect if store is currently on tables or pos tab but plan does not allow it
   useEffect(() => {
     if (activeTab === 'tables' && !isTableOrderInSubscription && !isSuperAdmin) {
       setActiveTab('dashboard');
     }
-  }, [activeTab, isTableOrderInSubscription, isSuperAdmin]);
+    if (activeTab === 'pos' && !isPosBillingAllowed && !isSuperAdmin) {
+      setActiveTab('dashboard');
+    }
+  }, [activeTab, isTableOrderInSubscription, isPosBillingAllowed, isSuperAdmin]);
+
+  // Auto-open paywall blocker when strictly locked
+  useEffect(() => {
+    if (isStrictlyLocked && !isCashier) {
+      loadSubscriptionPlans();
+      setPlanSelectionModalVisible(true);
+    }
+  }, [isStrictlyLocked, isCashier]);
 
   const handleTabChange = (tab: NavTabKey) => {
     if (tab === 'tables' && !isTableOrderInSubscription) {
@@ -854,14 +889,82 @@ export const AdminDashboardScreen: React.FC = () => {
       );
       return;
     }
+    if (tab === 'pos' && !isPosBillingAllowed) {
+      Alert.alert(
+        'Subscription Required',
+        'POS Billing Terminal requires a plan with POS Terminal Billing enabled. Please upgrade your plan to unlock POS billing.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'View Plans',
+            onPress: () => {
+              loadSubscriptionPlans();
+              setPlanSelectionModalVisible(true);
+            },
+          },
+        ]
+      );
+      return;
+    }
     setActiveTab(tab);
   };
 
-  const handleModulePress = (moduleKey: 'catalog' | 'tables' | 'pos' | 'roles' | 'config' | 'reports', isFeatureAllowed: boolean = true) => {
+  const handleModulePress = (moduleKey: 'catalog' | 'tables' | 'pos' | 'roles' | 'config' | 'reports', _isFeatureAllowed: boolean = true) => {
     if (moduleKey === 'tables' && !isTableOrderInSubscription) {
       Alert.alert(
         'Subscription Required',
         'Floor Tables and Table Seating require a plan with Table Ordering enabled.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Upgrade Plan',
+            onPress: () => {
+              loadSubscriptionPlans();
+              setPlanSelectionModalVisible(true);
+            },
+          },
+        ]
+      );
+      return;
+    }
+    if (moduleKey === 'pos' && !isPosBillingAllowed) {
+      Alert.alert(
+        'Subscription Required',
+        'POS Billing Terminal requires a plan with POS Terminal Billing enabled. Please upgrade your plan to unlock POS billing.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Upgrade Plan',
+            onPress: () => {
+              loadSubscriptionPlans();
+              setPlanSelectionModalVisible(true);
+            },
+          },
+        ]
+      );
+      return;
+    }
+    if (moduleKey === 'reports' && !isReportsAllowed) {
+      Alert.alert(
+        'Subscription Required',
+        'Business Reports & BI require a plan with Business Analytics enabled. Please upgrade your plan to unlock sales metrics and reports.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Upgrade Plan',
+            onPress: () => {
+              loadSubscriptionPlans();
+              setPlanSelectionModalVisible(true);
+            },
+          },
+        ]
+      );
+      return;
+    }
+    if (moduleKey === 'roles' && !isStaffRolesAllowed) {
+      Alert.alert(
+        'Subscription Required',
+        'Staff Members, Roles & Permissions require a plan with Staff Security & PIN Lock enabled. Please upgrade your plan to unlock staff permissions.',
         [
           { text: 'Cancel', style: 'cancel' },
           {
@@ -1175,7 +1278,7 @@ export const AdminDashboardScreen: React.FC = () => {
                 <View
                   style={[
                     styles.saActionPill,
-                    operatingStatus?.isKitchenActive === false
+                    operatingStatus?.isKitchenActive === false || !isKdsAllowed
                       ? { backgroundColor: '#F3F4F6', borderColor: 'rgba(107, 114, 128, 0.3)' }
                       : { backgroundColor: '#DCFCE7', borderColor: 'rgba(22, 163, 74, 0.3)' },
                   ]}
@@ -1183,10 +1286,10 @@ export const AdminDashboardScreen: React.FC = () => {
                   <Text
                     style={[
                       styles.saActionPillText,
-                      { color: operatingStatus?.isKitchenActive === false ? '#6B7280' : '#16A34A' },
+                      { color: operatingStatus?.isKitchenActive === false || !isKdsAllowed ? '#6B7280' : '#16A34A' },
                     ]}
                   >
-                    {operatingStatus?.isKitchenActive === false ? 'SIMPLIFIED' : 'LIVE KDS'}
+                    {!isKdsAllowed ? 'SIMPLIFIED 🔒' : operatingStatus?.isKitchenActive === false ? 'SIMPLIFIED' : 'LIVE KDS'}
                   </Text>
                 </View>
               </View>
@@ -2177,7 +2280,7 @@ export const AdminDashboardScreen: React.FC = () => {
                       {/* POS Terminal */}
                       <TouchableOpacity
                         style={styles.quickCardAction}
-                        onPress={() => handleModulePress('pos', isPosAndCounterOrderingAllowed)}
+                        onPress={() => handleModulePress('pos', isPosBillingAllowed)}
                         activeOpacity={0.85}
                       >
                         <LinearGradient
@@ -2233,7 +2336,7 @@ export const AdminDashboardScreen: React.FC = () => {
                       {/* Business Analytics */}
                       <TouchableOpacity
                         style={styles.quickCardAction}
-                        onPress={() => handleModulePress('reports', true)}
+                        onPress={() => handleModulePress('reports', isReportsAllowed)}
                         activeOpacity={0.85}
                       >
                         <LinearGradient
@@ -2255,7 +2358,7 @@ export const AdminDashboardScreen: React.FC = () => {
                       {/* Staff Roles */}
                       <TouchableOpacity
                         style={styles.mgmtRowItem}
-                        onPress={() => handleModulePress('roles', true)}
+                        onPress={() => handleModulePress('roles', isStaffRolesAllowed)}
                         activeOpacity={0.7}
                       >
                         <View style={styles.mgmtIconBox}>
@@ -2773,18 +2876,11 @@ export const AdminDashboardScreen: React.FC = () => {
                 <View style={styles.particularSectionCard}>
                   <Text style={styles.particularSectionHeader}>ENABLED STORE ENTITLEMENTS</Text>
                   <View style={styles.particularEntitlementsGrid}>
-                    {[
-                      { name: 'Table Ordering & QR Dine-in', enabled: checkEntitlement('IsTableOrderingEnabled') },
-                      { name: 'Counter POS & Fast Billing', enabled: checkEntitlement('IsCounterOrderingEnabled') },
-                      { name: 'Kitchen Display System (KDS)', enabled: checkEntitlement('IsKdsEnabled') },
-                      { name: 'Self Pickup / Takeaway', enabled: checkEntitlement('IsSelfPickupEnabled') },
-                      { name: 'Online Direct Delivery', enabled: checkEntitlement('IsDeliveryEnabled') },
-                      { name: 'SMS Alerts & Instant Receipts', enabled: checkEntitlement('IsSmsEnabled') },
-                    ].map((feat, fIdx) => (
+                    {getSubscriptionFeatureList(activeSubscription).map((feat, fIdx) => (
                       <View key={`feat-badge-${fIdx}`} style={styles.particularEntitlementChip}>
                         <CheckCircle2 size={13} color={feat.enabled ? '#17845A' : '#9CA3AF'} />
                         <Text style={[styles.particularEntitlementText, !feat.enabled && { color: '#9CA3AF' }]}>
-                          {feat.name}
+                          {feat.label}
                         </Text>
                       </View>
                     ))}
@@ -2835,7 +2931,7 @@ export const AdminDashboardScreen: React.FC = () => {
         </Modal>
 
         {/* SUBSCRIPTION PLAN SELECTION MODAL */}
-        <Modal visible={planSelectionModalVisible} animationType="slide" transparent>
+        <Modal visible={planSelectionModalVisible} animationType="slide" transparent onRequestClose={() => { if (!isStrictlyLocked) setPlanSelectionModalVisible(false); }}>
           <View style={styles.planModalOverlay}>
             <View style={styles.planModalCard}>
               <View style={styles.planModalHeader}>
@@ -2843,9 +2939,11 @@ export const AdminDashboardScreen: React.FC = () => {
                   <Text style={styles.planModalTitle}>Select Subscription Plan</Text>
                   <Text style={styles.planModalSub}>Choose plan for outlet "{activeRestaurant?.restaurantName || 'My Restaurant'}"</Text>
                 </View>
-                <TouchableOpacity onPress={() => setPlanSelectionModalVisible(false)} style={styles.modalCloseCircle}>
-                  <X size={16} color="#DE8626" />
-                </TouchableOpacity>
+                {!isStrictlyLocked && (
+                  <TouchableOpacity onPress={() => setPlanSelectionModalVisible(false)} style={styles.modalCloseCircle}>
+                    <X size={16} color="#DE8626" />
+                  </TouchableOpacity>
+                )}
               </View>
 
               <ScrollView style={{ maxHeight: 520 }} showsVerticalScrollIndicator={false}>
@@ -2913,49 +3011,43 @@ export const AdminDashboardScreen: React.FC = () => {
                         </View>
 
                         {/* Included Feature Entitlements Section */}
-                        {plan.entitlements && plan.entitlements.length > 0 ? (
-                          <View style={styles.ownerEntitlementsSection}>
-                            <Text style={styles.ownerEntitlementsTitle}>INCLUDED FEATURE ENTITLEMENTS</Text>
-                            <View style={styles.ownerEntitlementsGrid}>
-                              {plan.entitlements.map((ent, eIdx) => {
-                                const isAllowed = ent.isAllowed;
-                                const hasAddonPct = (ent.featureCommissionPercentage || 0) > 0;
-                                const hasAddonFlat = (ent.featureFlatFeePerOrder || 0) > 0;
+                        <View style={styles.ownerEntitlementsSection}>
+                          <Text style={styles.ownerEntitlementsTitle}>INCLUDED FEATURE ENTITLEMENTS</Text>
+                          <View style={styles.ownerEntitlementsGrid}>
+                            {getPlanFeatureList(plan).map((feat, eIdx) => {
+                              const isAllowed = feat.enabled;
 
-                                return (
-                                  <View
-                                    key={`owner-ent-${ent.configKey}-${eIdx}`}
+                              return (
+                                <View
+                                  key={`owner-feat-${feat.key}-${eIdx}`}
+                                  style={[
+                                    styles.ownerEntitlementBadge,
+                                    isAllowed ? styles.ownerEntitlementAllowed : styles.ownerEntitlementDisabled,
+                                  ]}
+                                >
+                                  {isAllowed ? (
+                                    <CheckCircle2 size={12} color="#17845A" />
+                                  ) : (
+                                    <Lock size={11} color="#9CA3AF" />
+                                  )}
+                                  <Text
                                     style={[
-                                      styles.ownerEntitlementBadge,
-                                      isAllowed ? styles.ownerEntitlementAllowed : styles.ownerEntitlementDisabled,
+                                      styles.ownerEntitlementText,
+                                      isAllowed ? styles.ownerEntitlementTextAllowed : styles.ownerEntitlementTextDisabled,
                                     ]}
                                   >
-                                    {isAllowed ? (
-                                      <CheckCircle2 size={12} color="#17845A" />
-                                    ) : (
-                                      <X size={12} color="#8C7A6B" />
-                                    )}
-                                    <Text
-                                      style={[
-                                        styles.ownerEntitlementText,
-                                        isAllowed ? styles.ownerEntitlementTextAllowed : styles.ownerEntitlementTextDisabled,
-                                      ]}
-                                    >
-                                      {ent.configKey}
+                                    {feat.shortLabel || feat.label}
+                                  </Text>
+                                  {isAllowed && feat.commissionBadge ? (
+                                    <Text style={styles.ownerEntitlementAddonText}>
+                                      ({feat.commissionBadge})
                                     </Text>
-                                    {isAllowed && (hasAddonPct || hasAddonFlat) ? (
-                                      <Text style={styles.ownerEntitlementAddonText}>
-                                        ({hasAddonPct ? `+${ent.featureCommissionPercentage}%` : ''}
-                                        {hasAddonPct && hasAddonFlat ? ' ' : ''}
-                                        {hasAddonFlat ? `+₹${ent.featureFlatFeePerOrder}` : ''})
-                                      </Text>
-                                    ) : null}
-                                  </View>
-                                );
-                              })}
-                            </View>
+                                  ) : null}
+                                </View>
+                              );
+                            })}
                           </View>
-                        ) : null}
+                        </View>
 
                         <TouchableOpacity
                           activeOpacity={0.88}
@@ -2981,6 +3073,39 @@ export const AdminDashboardScreen: React.FC = () => {
                   })
                 )}
               </ScrollView>
+              {isStrictlyLocked && (
+                <View style={{ flexDirection: 'row', gap: 10, marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#E7E1DA' }}>
+                  {restaurants.length > 1 && (
+                    <TouchableOpacity
+                      style={{ flex: 1, paddingVertical: 12, alignItems: 'center', backgroundColor: '#F3F4F6', borderRadius: 14 }}
+                      onPress={() => {
+                        setPlanSelectionModalVisible(false);
+                        setRestModalVisible(true);
+                      }}
+                    >
+                      <Text style={{ fontSize: 13, fontWeight: '700', color: '#1E2930' }}>Switch Outlet</Text>
+                    </TouchableOpacity>
+                  )}
+                  <TouchableOpacity
+                    style={{ flex: 1, paddingVertical: 12, alignItems: 'center', backgroundColor: '#FEE2E2', borderRadius: 14 }}
+                    onPress={() => {
+                      Alert.alert('Confirm Sign Out', 'Are you sure you want to sign out?', [
+                        { text: 'Cancel', style: 'cancel' },
+                        {
+                          text: 'Sign Out',
+                          style: 'destructive',
+                          onPress: () => {
+                            setPlanSelectionModalVisible(false);
+                            logout();
+                          },
+                        },
+                      ]);
+                    }}
+                  >
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#DC2626' }}>Sign Out</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
             </View>
           </View>
         </Modal>

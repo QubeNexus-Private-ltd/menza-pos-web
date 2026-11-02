@@ -74,6 +74,7 @@ import { OrderRemoteDataSource } from '../../../data/datasources/OrderRemoteData
 import { OrderMaster } from '../../../domain/models/Order';
 import { useAuthStore } from '../../state/useAuthStore';
 import { useSubscriptionStore } from '../../state/useSubscriptionStore';
+import { FeatureGate } from '../../components/subscription/FeatureGate';
 import { usePrinterStore } from '../../state/usePrinterStore';
 import { useNotificationStore } from '../../state/useNotificationStore';
 import { GildedAlertModal, GildedAlertConfig } from '../../components/GildedAlertModal';
@@ -963,6 +964,7 @@ export const FloorTableScreen: React.FC<FloorTableScreenProps> = ({ onClose, onO
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom', 'left', 'right']}>
       <StatusBar barStyle="dark-content" backgroundColor="#FAF7F2" translucent={false} />
+      <FeatureGate feature="tableConfiguration" title="Floor Tables & Dine-in" planSuggestion="Dine-In Pro Plan" onClose={onClose}>
       <View style={styles.container}>
         {/* HEADER BAR */}
         <View style={styles.topHeader}>
@@ -3264,6 +3266,7 @@ export const FloorTableScreen: React.FC<FloorTableScreenProps> = ({ onClose, onO
 
         <GildedAlertModal {...alertConfig} onClose={() => setAlertConfig((prev) => ({ ...prev, visible: false }))} />
       </View>
+      </FeatureGate>
     </SafeAreaView>
   );
 };

@@ -31,6 +31,7 @@ import {
   X,
 } from 'lucide-react-native';
 import { useAuthStore } from '../../state/useAuthStore';
+import { extractApiErrorMessage } from '../../../core/utils/errorSanitizer';
 
 interface RecentStaff {
   mobile: string;
@@ -208,12 +209,13 @@ export const PinLockScreen: React.FC = () => {
           });
         } else {
           triggerShake();
-          setErrorMsg(result.message || 'Incorrect PIN. Try again (Default: 1234)');
+          setErrorMsg(result.message || 'Incorrect PIN. Please try again.');
           setPin('');
         }
       } catch (err: any) {
         triggerShake();
-        setErrorMsg('Authentication failed. Please check connection and try again.');
+        const serverMsg = extractApiErrorMessage(err);
+        setErrorMsg(serverMsg || 'Authentication failed. Please verify credentials and try again.');
         setPin('');
       } finally {
         setIsVerifying(false);
@@ -525,6 +527,7 @@ export const PinLockScreen: React.FC = () => {
                 {[0, 1, 2, 3].map((idx) => {
                   const isFilled = pin.length > idx;
                   const isCurrent = pin.length === idx;
+                  const isErrorState = Boolean(errorMsg && !pin.length);
                   return (
                     <View
                       key={`pin-vault-${idx}`}
@@ -532,6 +535,7 @@ export const PinLockScreen: React.FC = () => {
                         styles.vaultBox,
                         isFilled && styles.vaultBoxFilled,
                         isCurrent && styles.vaultBoxCurrent,
+                        isErrorState && styles.vaultBoxError,
                       ]}
                     >
                       {isFilled ? (
@@ -541,6 +545,7 @@ export const PinLockScreen: React.FC = () => {
                           style={[
                             styles.vaultDotEmpty,
                             isCurrent && styles.vaultDotCurrent,
+                            isErrorState && styles.vaultDotError,
                           ]}
                         />
                       )}
@@ -563,7 +568,7 @@ export const PinLockScreen: React.FC = () => {
                   </View>
                 ) : (
                   <Text style={styles.hintText}>
-                    Enter 4-digit PIN • Default: <Text style={styles.hintBold}>1234</Text>
+                    Enter 4-digit PIN for staff authentication
                   </Text>
                 )}
               </View>
@@ -1102,6 +1107,10 @@ const styles = StyleSheet.create({
     shadowRadius: 5,
     elevation: 3,
   },
+  vaultBoxError: {
+    borderColor: '#DC2626',
+    backgroundColor: '#FEF2F2',
+  },
   vaultDotEmpty: {
     width: 8,
     height: 8,
@@ -1117,8 +1126,11 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     backgroundColor: '#FFFFFF',
   },
+  vaultDotError: {
+    backgroundColor: '#DC2626',
+  },
   messageRow: {
-    minHeight: 22,
+    minHeight: 28,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 10,
@@ -1136,12 +1148,22 @@ const styles = StyleSheet.create({
   errorRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    maxWidth: '96%',
   },
   errorMsgText: {
     fontSize: 11,
     fontWeight: '700',
     color: '#DC2626',
+    textAlign: 'center',
+    flexShrink: 1,
   },
   hintText: {
     fontSize: 11,

@@ -83,6 +83,11 @@ export const AuthGuard: React.FC<{ children: React.ReactNode }> = ({ children })
       <PinLockView
         isOverlay={false}
         onSuccess={() => {
+          if (typeof window !== 'undefined' && window.sessionStorage) {
+            try {
+              window.sessionStorage.setItem('menza_pos_unlocked', 'true');
+            } catch {}
+          }
           useAuthStore.setState({ isPinLocked: false });
         }}
         onForgotPin={(prefilledMobile) => {

@@ -15,6 +15,8 @@ const STORAGE_KEYS = {
   IS_PIN_LOCK_ENABLED: '@menza_is_pin_lock_enabled',
   ACTIVE_STAFF_NAME: '@menza_active_staff_name',
   REMEMBERED_MOBILE: '@menza_remembered_mobile',
+  IS_PIN_LOCKED: '@menza_is_pin_locked',
+  LAST_UNLOCKED_AT: '@menza_last_unlocked_at',
 };
 
 export interface PersistedSession {
@@ -29,6 +31,8 @@ export interface PersistedSession {
   isPinLockEnabled?: boolean;
   activeStaffName?: string | null;
   rememberedMobile?: string | null;
+  isPinLocked?: boolean | null;
+  lastUnlockedAt?: number | null;
 }
 
 export class SessionStorage {
@@ -102,6 +106,8 @@ export class SessionStorage {
         STORAGE_KEYS.IS_PIN_LOCK_ENABLED,
         STORAGE_KEYS.ACTIVE_STAFF_NAME,
         STORAGE_KEYS.REMEMBERED_MOBILE,
+        STORAGE_KEYS.IS_PIN_LOCKED,
+        STORAGE_KEYS.LAST_UNLOCKED_AT,
       ];
 
       const stores = await AsyncStorage.multiGet(keys);
@@ -118,6 +124,10 @@ export class SessionStorage {
       const isPinLockEnabled = data[STORAGE_KEYS.IS_PIN_LOCK_ENABLED] === 'true';
       const activeStaffName = data[STORAGE_KEYS.ACTIVE_STAFF_NAME] || null;
       const rememberedMobile = data[STORAGE_KEYS.REMEMBERED_MOBILE] || null;
+      const isPinLockedRaw = data[STORAGE_KEYS.IS_PIN_LOCKED];
+      const isPinLocked = isPinLockedRaw !== null && isPinLockedRaw !== undefined ? isPinLockedRaw === 'true' : null;
+      const lastUnlockedAtRaw = data[STORAGE_KEYS.LAST_UNLOCKED_AT];
+      const lastUnlockedAt = lastUnlockedAtRaw ? Number(lastUnlockedAtRaw) : null;
 
       let user: User | null = null;
       let restaurants: RestaurantDetail[] = [];
@@ -159,6 +169,8 @@ export class SessionStorage {
         isPinLockEnabled,
         activeStaffName,
         rememberedMobile: rememberedMobile || user?.mobile || null,
+        isPinLocked,
+        lastUnlockedAt,
       };
     } catch (err: any) {
       logger.api('API_ERROR', 'Failed to load session from AsyncStorage', { error: err?.message });
@@ -174,6 +186,8 @@ export class SessionStorage {
         isPinLockEnabled: false,
         activeStaffName: null,
         rememberedMobile: null,
+        isPinLocked: null,
+        lastUnlockedAt: null,
       };
     }
   }
@@ -270,10 +284,34 @@ export class SessionStorage {
         STORAGE_KEYS.USER,
         STORAGE_KEYS.RESTAURANTS,
         STORAGE_KEYS.ACTIVE_RESTAURANT,
+        STORAGE_KEYS.IS_PIN_LOCKED,
+        STORAGE_KEYS.LAST_UNLOCKED_AT,
       ]);
       logger.auth('LOGOUT_COMPLETED', 'Session cleared from AsyncStorage');
     } catch (err: any) {
       logger.api('API_ERROR', 'Failed to clear session from AsyncStorage', { error: err?.message });
+    }
+  }
+
+  /**
+   * Persist terminal PIN locked state
+   */
+  static async savePinLocked(isLocked: boolean): Promise<void> {
+    try {
+      await AsyncStorage.setItem(STORAGE_KEYS.IS_PIN_LOCKED, isLocked ? 'true' : 'false');
+    } catch (err: any) {
+      logger.api('API_ERROR', 'Failed to save PIN locked state in storage', { error: err?.message });
+    }
+  }
+
+  /**
+   * Persist last unlocked timestamp for inactivity auto-lock calculation
+   */
+  static async saveLastUnlockedAt(timestamp: number): Promise<void> {
+    try {
+      await AsyncStorage.setItem(STORAGE_KEYS.LAST_UNLOCKED_AT, String(timestamp));
+    } catch (err: any) {
+      logger.api('API_ERROR', 'Failed to save last unlocked timestamp in storage', { error: err?.message });
     }
   }
 

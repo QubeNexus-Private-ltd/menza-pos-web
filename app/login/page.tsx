@@ -26,6 +26,7 @@ import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { RestaurantDetail } from '@shared/domain/models/Restaurant';
 import { isSalesPersonUser } from '@/lib/auth/permissions';
 import { PinLockView } from '@/components/auth/PinLockView';
+import { extractApiErrorMessage } from '@shared/core/utils/errorSanitizer';
 
 const authRepository = new AuthRepositoryImpl(new AuthRemoteDataSource());
 
@@ -124,12 +125,15 @@ function LoginContent() {
     return () => clearInterval(interval);
   }, []);
 
+  const hasResetMobileInitializedRef = useRef<boolean>(Boolean(mobileFromUrl));
+
   useEffect(() => {
     const urlMobile = searchParams.get('mobile');
-    if (urlMobile && !resetMobile) {
+    if (!hasResetMobileInitializedRef.current && urlMobile) {
       setResetMobile(urlMobile.replace(/[^0-9]/g, '').slice(-10));
+      hasResetMobileInitializedRef.current = true;
     }
-  }, [searchParams, resetMobile]);
+  }, [searchParams]);
 
   // Redirect if already authenticated and unlocked (unless in setup-pin flow)
   useEffect(() => {
@@ -176,18 +180,12 @@ function LoginContent() {
       return 'You appear to be offline. Please check your internet connection.';
     }
 
-    const status = Number(err?.response?.status);
-    const rawMsg =
-      err?.response?.data?.message || err?.response?.data?.Message || err?.response?.data;
-
-    if (
-      typeof rawMsg === 'string' &&
-      rawMsg.trim().length > 0 &&
-      rawMsg.length < 120 &&
-      !rawMsg.includes('{')
-    ) {
-      return rawMsg.trim();
+    const serverMsg = extractApiErrorMessage(err);
+    if (serverMsg) {
+      return serverMsg;
     }
+
+    const status = Number(err?.response?.status);
 
     if (context === 'send_otp') {
       if (status === 429) {
@@ -199,7 +197,13 @@ function LoginContent() {
       return 'Unable to send OTP. Please check your mobile number and try again.';
     }
 
-    if (status === 400 || status === 401 || status === 404) {
+    if (status === 404) {
+      return 'No registered account found for this mobile number.';
+    }
+    if (status === 403) {
+      return 'Account access is restricted or inactive. Contact store manager.';
+    }
+    if (status === 400 || status === 401) {
       return 'Invalid or expired verification code. Please check and try again.';
     }
 

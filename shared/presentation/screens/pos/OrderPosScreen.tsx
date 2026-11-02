@@ -33,7 +33,7 @@ import {
   Utensils,
   Search,
   Phone,
-  Receipt,
+  ReceiptText,
   ChevronUp,
   IndianRupee,
   Smartphone,
@@ -66,6 +66,7 @@ import { usePrinterStore } from '../../state/usePrinterStore';
 import { useNotificationStore } from '../../state/useNotificationStore';
 import { useSubscriptionStore } from '../../state/useSubscriptionStore';
 import { SubscriptionGraceBanner } from '../../components/subscription/SubscriptionGraceBanner';
+import { FeatureGate } from '../../components/subscription/FeatureGate';
 import { SubscriptionBillingScreen } from '../subscription/SubscriptionBillingScreen';
 import { BluetoothPrinterScreen } from '../printer/BluetoothPrinterScreen';
 import { OrderNotificationModal } from '../dashboard/OrderNotificationModal';
@@ -1043,8 +1044,15 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
-      <StatusBar barStyle="dark-content" backgroundColor="#FAF7F2" translucent={false} />
-      <View style={styles.container}>
+      <FeatureGate
+        feature="posBilling"
+        title="POS Billing Terminal"
+        planSuggestion="Standard or Pro Plan"
+        onClose={onClose}
+        onUpgradePress={() => setSubscriptionModalVisible(true)}
+      >
+        <StatusBar barStyle="dark-content" backgroundColor="#FAF7F2" translucent={false} />
+        <View style={styles.container}>
         {/* TOP STREAMLINED UNIFIED HEADER */}
         <View
           style={[
@@ -2023,7 +2031,7 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
               <View style={styles.cartBillCard}>
                 {hasGstNumber && Boolean(restaurantConfig?.gstNumber) && (
                   <View style={styles.gstinBadge}>
-                    <Receipt size={11} color="#D96B14" />
+                    <ReceiptText size={11} color="#D96B14" />
                     <Text style={styles.gstinBadgeText}>
                       GSTIN: {restaurantConfig!.gstNumber!.trim()}
                     </Text>
@@ -2491,6 +2499,7 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
           }}
         />
       </Modal>
+    </FeatureGate>
     </SafeAreaView>
   );
 };

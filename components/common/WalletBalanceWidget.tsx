@@ -62,7 +62,7 @@ export const WalletBalanceWidget: React.FC<WalletBalanceWidgetProps> = ({
   const lowThreshold = Number(wallet?.lowBalanceThreshold ?? 200);
   const isLowBalance = balance < lowThreshold;
 
-  // 1. PILL VARIANT (Header Bar - Identical UX to F:\Menza)
+  // 1. PILL VARIANT (Header Bar - Unified h-9 rounded-xl)
   if (variant === 'pill') {
     return (
       <button
@@ -71,10 +71,10 @@ export const WalletBalanceWidget: React.FC<WalletBalanceWidgetProps> = ({
         title={`Prepaid Platform Fee Wallet: ₹${balance.toLocaleString('en-IN')}${
           isLowBalance ? ' (Low Balance - Click to Recharge)' : ' (Click to Top Up)'
         }`}
-        className={`group inline-flex h-[34px] items-center gap-2 rounded-full border px-2.5 text-xs font-extrabold transition-all cursor-pointer shadow-xs active:scale-[0.98] ${
+        className={`group inline-flex h-9 items-center gap-2 rounded-xl border px-2.5 text-xs font-bold transition-all cursor-pointer shadow-2xs active:scale-[0.98] ${
           isLowBalance
-            ? 'border-amber-400 bg-[#FFF7EE] dark:bg-amber-950/30 text-amber-900 dark:text-amber-200 hover:border-[#DE8626] ring-1 ring-amber-400/30'
-            : 'border-[#E7E0D6] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#1C1917] dark:text-[#F3F4F6] hover:border-[#DE8626] hover:shadow-sm'
+            ? 'border-amber-400 bg-amber-500/10 text-amber-900 dark:text-amber-200 hover:border-[#DE8626] ring-1 ring-amber-400/30'
+            : 'border-[#E7E0D6] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#1E2930] dark:text-[#F3F4F6] hover:border-[#DE8626]'
         } ${className}`}
       >
         <div className="flex items-center gap-1.5">
@@ -86,14 +86,14 @@ export const WalletBalanceWidget: React.FC<WalletBalanceWidgetProps> = ({
           {loading && !wallet ? (
             <span className="inline-block h-3.5 w-10 animate-pulse rounded bg-black/10 dark:bg-white/10" />
           ) : (
-            <span className="text-[12px] font-extrabold tracking-tight">
+            <span className="text-xs font-bold tracking-tight">
               ₹{balance.toLocaleString('en-IN')}
             </span>
           )}
         </div>
 
-        {/* Small '+' Top Up Pill Circle Button (exact parity with Menza pillPlus) */}
-        <div className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-[#DE8626] text-white shadow-xs group-hover:scale-110 transition-transform">
+        {/* Small '+' Top Up Button */}
+        <div className="flex h-4 w-4 shrink-0 items-center justify-center rounded-md bg-[#DE8626] text-white shadow-2xs group-hover:scale-105 transition-transform">
           <Plus className="h-2.5 w-2.5 stroke-[3]" />
         </div>
       </button>

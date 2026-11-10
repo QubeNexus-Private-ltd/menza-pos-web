@@ -306,7 +306,8 @@ export const ForgotPinScreen: React.FC = () => {
                           onBlur={() => setFocusedInput(null)}
                           placeholder="••••••"
                           placeholderTextColor="#9CA3AF"
-                          keyboardType="number-pad"
+                          keyboardType={Platform.OS === 'ios' ? 'number-pad' : 'numeric'}
+                          inputMode="numeric"
                           maxLength={6}
                           autoFocus
                         />
@@ -343,7 +344,8 @@ export const ForgotPinScreen: React.FC = () => {
                           onBlur={() => setFocusedInput(null)}
                           placeholder="••••"
                           placeholderTextColor="#9CA3AF"
-                          keyboardType="number-pad"
+                          keyboardType={Platform.OS === 'ios' ? 'number-pad' : 'numeric'}
+                          inputMode="numeric"
                           secureTextEntry
                           maxLength={4}
                         />
@@ -367,7 +369,8 @@ export const ForgotPinScreen: React.FC = () => {
                           onBlur={() => setFocusedInput(null)}
                           placeholder="••••"
                           placeholderTextColor="#9CA3AF"
-                          keyboardType="number-pad"
+                          keyboardType={Platform.OS === 'ios' ? 'number-pad' : 'numeric'}
+                          inputMode="numeric"
                           secureTextEntry
                           maxLength={4}
                         />

@@ -74,6 +74,7 @@ import { useAuthStore } from '../../state/useAuthStore';
 import { usePrinterStore } from '../../state/usePrinterStore';
 import { useNotificationStore } from '../../state/useNotificationStore';
 import { useAppVersionStore } from '../../state/useAppVersionStore';
+import { AppUpdateModal } from '../../components/AppUpdateModal';
 import { useSubscriptionStore, isTableOrderSubscriptionAllowed, extractTableOrderFlag } from '../../state/useSubscriptionStore';
 import { getPlanFeatureList, getSubscriptionFeatureList, formatEntitlementTitle } from '../../../core/utils/entitlementCatalog';
 import { SubscriptionGraceBanner } from '../../components/subscription/SubscriptionGraceBanner';
@@ -213,14 +214,14 @@ export const AdminDashboardScreen: React.FC = () => {
   const subscriptionDataSource = useMemo(() => new SubscriptionRemoteDataSource(), []);
   const orderRemoteDataSource = useMemo(() => new OrderRemoteDataSource(), []);
   const superAdminRepository = useMemo(() => new SuperAdminRepositoryImpl(new SuperAdminRemoteDataSource()), []);
-  /*
   const {
     updateInfo: appVersionUpdateInfo,
+    latestVersion: appVersionLatest,
+    latestBuildNumber: appVersionBuild,
     isChecking: isCheckingAppVersion,
     checkAppVersion,
     showUpdateModal,
   } = useAppVersionStore();
-  */
 
   const [activeTab, setActiveTab] = useState<NavTabKey>('dashboard');
   const [restModalVisible, setRestModalVisible] = useState(false);
@@ -229,7 +230,14 @@ export const AdminDashboardScreen: React.FC = () => {
   useEffect(() => {
     logger.navigation('AdminDashboardScreen');
     initPrinter();
-  }, [initPrinter]);
+    checkAppVersion(false);
+  }, [initPrinter, checkAppVersion]);
+
+  useEffect(() => {
+    if (activeTab === 'more') {
+      checkAppVersion(false);
+    }
+  }, [activeTab, checkAppVersion]);
 
   // Subscription Lock & Plan Selector State
   const storeSubscription = useSubscriptionStore((state) => state.subscription);
@@ -1548,24 +1556,39 @@ export const AdminDashboardScreen: React.FC = () => {
         </View>
       )}
 
-      {/* App Version Display (Check commented out as requested) */}
+      {/* App Version Display (Retrieved from AppVersion API: appType=POS_ADMIN, platform=android) */}
       <View style={[styles.settingsTileCard, { marginTop: 10 }]}>
         <View style={[styles.settingsTileIconBox, { backgroundColor: '#FFF0DE' }]}>
           <ArrowUpCircle size={20} color="#D96B14" />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.settingsTileTitle}>Menza POS App</Text>
-          <Text style={styles.settingsTileDesc}>
-            Version {APP_CONSTANTS.APP_VERSION}
-          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 }}>
+            <Text style={styles.settingsTileDesc}>
+              Version {appVersionLatest || appVersionUpdateInfo?.latestVersion || APP_CONSTANTS.APP_VERSION}
+              {appVersionBuild || appVersionUpdateInfo?.latestBuildNumber
+                ? ' (Build ' + (appVersionBuild || appVersionUpdateInfo?.latestBuildNumber) + ')'
+                : ''}
+            </Text>
+            {isCheckingAppVersion ? (
+              <ActivityIndicator size="small" color="#D96B14" style={{ transform: [{ scale: 0.7 }] }} />
+            ) : null}
+          </View>
         </View>
 
-        {/* Remote version check commented out as requested
         <TouchableOpacity
           style={{
-            backgroundColor: '#F3F4F6',
-            paddingHorizontal: 12,
-            paddingVertical: 7,
+            backgroundColor:
+              appVersionUpdateInfo?.isSoftUpdateAvailable || appVersionUpdateInfo?.isForceUpdateRequired
+                ? '#FFF0DE'
+                : '#F3F4F6',
+            borderWidth: 1,
+            borderColor:
+              appVersionUpdateInfo?.isSoftUpdateAvailable || appVersionUpdateInfo?.isForceUpdateRequired
+                ? '#FED7AA'
+                : '#E5E7EB',
+            paddingHorizontal: 10,
+            paddingVertical: 6,
             borderRadius: 8,
             alignItems: 'center',
             justifyContent: 'center',
@@ -1578,7 +1601,10 @@ export const AdminDashboardScreen: React.FC = () => {
             }
             const res = await checkAppVersion(true);
             if (res?.isUpToDate) {
-              Alert.alert('App Up to Date', `You are running the latest version of Menza POS (v${APP_CONSTANTS.APP_VERSION}).`);
+              Alert.alert(
+                'App Up to Date',
+                'You are running the latest version of Menza POS (v' + (res.latestVersion || APP_CONSTANTS.APP_VERSION) + ').'
+              );
             }
           }}
           activeOpacity={0.7}
@@ -1586,12 +1612,22 @@ export const AdminDashboardScreen: React.FC = () => {
           {isCheckingAppVersion ? (
             <ActivityIndicator size="small" color="#D96B14" />
           ) : (
-            <Text style={{ fontSize: 11, fontWeight: '700', color: '#374151' }}>
-              {appVersionUpdateInfo?.isSoftUpdateAvailable || appVersionUpdateInfo?.isForceUpdateRequired ? 'View Update' : 'Check'}
+            <Text
+              style={{
+                fontSize: 10,
+                fontWeight: '700',
+                color:
+                  appVersionUpdateInfo?.isSoftUpdateAvailable || appVersionUpdateInfo?.isForceUpdateRequired
+                    ? '#D96B14'
+                    : '#4B5563',
+              }}
+            >
+              {appVersionUpdateInfo?.isSoftUpdateAvailable || appVersionUpdateInfo?.isForceUpdateRequired
+                ? 'View Update'
+                : 'Check'}
             </Text>
           )}
         </TouchableOpacity>
-        */}
       </View>
 
       {/* Logout CTA */}
@@ -3264,6 +3300,9 @@ export const AdminDashboardScreen: React.FC = () => {
             }
           }}
         />
+
+        {/* Global Remote App Version Update Enforcement Modal */}
+        <AppUpdateModal />
       </View>
     </SafeAreaView>
   );

@@ -51,6 +51,14 @@ interface PrinterState {
   printBifurcatedOrder: (data: ReceiptData) => Promise<{ receiptPrinted: boolean; kotPrinted: boolean }>;
   printTestReceipt: (restaurantName?: string) => Promise<boolean>;
   printTestKot: (restaurantName?: string) => Promise<boolean>;
+  printTableQrSticker: (params: {
+    restaurantName?: string;
+    tableNumber: string | number;
+    sectionName?: string;
+    qrUrl: string;
+    isRolling?: boolean;
+    logoUrl?: string;
+  }) => Promise<boolean>;
   clearError: () => void;
 }
 
@@ -460,6 +468,30 @@ export const usePrinterStore = create<PrinterState>((set, get) => ({
       set({
         isPrinting: false,
         lastErrorMessage: err?.message || 'Failed to print test KOT',
+      });
+      throw err;
+    }
+  },
+
+  printTableQrSticker: async (params) => {
+    let { paperWidth, connectedDevice } = get();
+    if (!connectedDevice) {
+      await get().ensureConnection();
+      connectedDevice = get().connectedDevice;
+    }
+    if (!connectedDevice) {
+      throw new Error('No Bluetooth printer connected. Please connect your printer in Printer Settings.');
+    }
+
+    try {
+      set({ isPrinting: true, lastErrorMessage: null });
+      const ok = await printerService.printTableQrSticker(params, paperWidth);
+      set({ isPrinting: false });
+      return ok;
+    } catch (err: any) {
+      set({
+        isPrinting: false,
+        lastErrorMessage: err?.message || 'Failed to print table QR sticker',
       });
       throw err;
     }

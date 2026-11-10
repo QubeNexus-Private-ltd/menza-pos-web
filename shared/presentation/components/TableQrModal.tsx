@@ -32,6 +32,7 @@ import * as Sharing from 'expo-sharing';
 import { TableRemoteDataSource } from '../../data/datasources/TableRemoteDataSource';
 import { TableQrResponseDTO } from '../../domain/models/Table';
 import { APP_CONSTANTS } from '../../core/constants/appConstants';
+import { usePrinterStore } from '../state/usePrinterStore';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const tableDataSource = new TableRemoteDataSource();
@@ -61,6 +62,8 @@ export const TableQrModal: React.FC<TableQrModalProps> = ({
   const [copied, setCopied] = useState<boolean>(false);
   const [timeLeft, setTimeLeft] = useState<number>(900); // 15 mins default
   const [generatingPdf, setGeneratingPdf] = useState<boolean>(false);
+  const [printingThermal, setPrintingThermal] = useState<boolean>(false);
+  const { connectedDevice, printTableQrSticker } = usePrinterStore();
 
   // Spin animation for the refresh button
   const spinValue = useRef(new Animated.Value(0)).current;
@@ -332,6 +335,35 @@ export const TableQrModal: React.FC<TableQrModalProps> = ({
     }
   };
 
+  const handlePrintThermalSticker = async () => {
+    if (!connectedDevice) {
+      Alert.alert(
+        'Printer Not Connected ⚠️',
+        'Please pair and connect your Bluetooth thermal printer in Settings → Printer first.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    try {
+      setPrintingThermal(true);
+      const ok = await printTableQrSticker({
+        restaurantName,
+        tableNumber,
+        sectionName,
+        qrUrl: customerUrl,
+        isRolling: mode === 'rolling',
+      });
+      if (ok) {
+        Alert.alert('Sticker Printed! 🖨️', `Thermal QR sticker for Table #${tableNumber} sent to printer.`);
+      }
+    } catch (err: any) {
+      Alert.alert('Thermal Print Error', err?.message || 'Failed to print thermal sticker.');
+    } finally {
+      setPrintingThermal(false);
+    }
+  };
+
   const handleDownloadPdf = async () => {
     try {
       setGeneratingPdf(true);
@@ -497,6 +529,22 @@ export const TableQrModal: React.FC<TableQrModalProps> = ({
               >
                 <Share2 size={14} color="#DE8626" />
                 <Text style={styles.actionBtnSecondaryText}>Share</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={handlePrintThermalSticker}
+                style={[styles.actionBtnSecondary, { borderColor: '#DE8626', backgroundColor: '#FFF7ED' }]}
+                activeOpacity={0.8}
+                disabled={printingThermal}
+              >
+                {printingThermal ? (
+                  <ActivityIndicator size="small" color="#DE8626" />
+                ) : (
+                  <>
+                    <Printer size={14} color="#DE8626" />
+                    <Text style={[styles.actionBtnSecondaryText, { color: '#DE8626', fontWeight: '800' }]}>Roll</Text>
+                  </>
+                )}
               </TouchableOpacity>
 
               <TouchableOpacity

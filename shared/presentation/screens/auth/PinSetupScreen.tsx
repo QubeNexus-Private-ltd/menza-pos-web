@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   ActivityIndicator,
   Keyboard,
@@ -10,7 +10,6 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  TouchableWithoutFeedback,
   View,
   useWindowDimensions,
 } from 'react-native';
@@ -34,6 +33,9 @@ export const PinSetupScreen: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [focusedInput, setFocusedInput] = useState<'pin' | 'confirm' | null>(null);
 
+  const pinInputRef = useRef<TextInput>(null);
+  const confirmPinInputRef = useRef<TextInput>(null);
+
   const completePinSetup = useAuthStore((state) => state.completePinSetup);
   const activeStaffName = useAuthStore((state) => state.activeStaffName);
   const user = useAuthStore((state) => state.user);
@@ -46,6 +48,9 @@ export const PinSetupScreen: React.FC = () => {
     const cleaned = text.replace(/[^0-9]/g, '').slice(0, 4);
     setPin(cleaned);
     if (errorMsg) setErrorMsg(null);
+    if (cleaned.length === 4) {
+      confirmPinInputRef.current?.focus();
+    }
   };
 
   const handleConfirmPinChange = (text: string) => {
@@ -103,119 +108,135 @@ export const PinSetupScreen: React.FC = () => {
         <ScrollView
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
           bounces={false}
           showsVerticalScrollIndicator={false}
         >
-          <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-            <View style={styles.centerContainer}>
-              <View style={[styles.card, { width: cardWidth }]}>
-                {/* Header Icon */}
-                <View style={styles.iconCircle}>
-                  <KeyRound size={28} color="#DE8626" />
-                </View>
+          <View style={styles.centerContainer}>
+            <View style={[styles.card, { width: cardWidth }]}>
+              {/* Header Icon */}
+              <View style={styles.iconCircle}>
+                <KeyRound size={28} color="#DE8626" />
+              </View>
 
-                {/* Title & Subtitle */}
-                <Text style={styles.title}>Set Up Your POS PIN</Text>
-                <Text style={styles.welcomeText}>Welcome, {displayName}</Text>
-                <Text style={styles.subtitle}>
-                  Create a personal 4-digit PIN for rapid terminal unlocking and quick staff switching.
+              {/* Title & Subtitle */}
+              <Text style={styles.title}>Set Up Your POS PIN</Text>
+              <Text style={styles.welcomeText}>Welcome, {displayName}</Text>
+              <Text style={styles.subtitle}>
+                Create a personal 4-digit PIN for rapid terminal unlocking and quick staff switching.
+              </Text>
+
+              {/* Error Banner */}
+              {errorMsg && (
+                <View style={styles.errorBanner}>
+                  <AlertCircle size={15} color="#DC2626" />
+                  <Text style={styles.errorBannerText}>{errorMsg}</Text>
+                </View>
+              )}
+
+              {/* Form Inputs */}
+              <View style={styles.formGroup}>
+                <Text
+                  style={styles.inputLabel}
+                  onPress={() => pinInputRef.current?.focus()}
+                >
+                  New 4-Digit PIN
                 </Text>
-
-                {/* Error Banner */}
-                {errorMsg && (
-                  <View style={styles.errorBanner}>
-                    <AlertCircle size={15} color="#DC2626" />
-                    <Text style={styles.errorBannerText}>{errorMsg}</Text>
-                  </View>
-                )}
-
-                {/* Form Inputs */}
-                <View style={styles.formGroup}>
-                  <Text style={styles.inputLabel}>New 4-Digit PIN</Text>
-                  <View
-                    style={[
-                      styles.inputWrapper,
-                      focusedInput === 'pin' && styles.inputWrapperFocused,
-                    ]}
-                  >
-                    <TextInput
-                      style={styles.textInput}
-                      value={pin}
-                      onChangeText={handlePinChange}
-                      onFocus={() => setFocusedInput('pin')}
-                      onBlur={() => setFocusedInput(null)}
-                      placeholder="••••"
-                      placeholderTextColor="#9CA3AF"
-                      keyboardType="number-pad"
-                      secureTextEntry
-                      maxLength={4}
-                      autoFocus
-                    />
-                  </View>
-                </View>
-
-                <View style={styles.formGroup}>
-                  <Text style={styles.inputLabel}>Confirm 4-Digit PIN</Text>
-                  <View
-                    style={[
-                      styles.inputWrapper,
-                      focusedInput === 'confirm' && styles.inputWrapperFocused,
-                    ]}
-                  >
-                    <TextInput
-                      style={styles.textInput}
-                      value={confirmPin}
-                      onChangeText={handleConfirmPinChange}
-                      onFocus={() => setFocusedInput('confirm')}
-                      onBlur={() => setFocusedInput(null)}
-                      placeholder="••••"
-                      placeholderTextColor="#9CA3AF"
-                      keyboardType="number-pad"
-                      secureTextEntry
-                      maxLength={4}
-                    />
-                  </View>
-                </View>
-
-                {/* Save Button */}
                 <TouchableOpacity
+                  activeOpacity={1}
+                  onPress={() => pinInputRef.current?.focus()}
                   style={[
-                    styles.primaryBtn,
-                    (pin.length !== 4 || confirmPin.length !== 4 || loading) && styles.primaryBtnDisabled,
+                    styles.inputWrapper,
+                    focusedInput === 'pin' && styles.inputWrapperFocused,
                   ]}
-                  onPress={handleSubmit}
-                  disabled={pin.length !== 4 || confirmPin.length !== 4 || loading}
-                  activeOpacity={0.85}
                 >
-                  {loading ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
-                  ) : (
-                    <>
-                      <Text style={styles.primaryBtnText}>Save & Activate PIN</Text>
-                      <ArrowRight size={18} color="#FFFFFF" />
-                    </>
-                  )}
-                </TouchableOpacity>
-
-                {/* Skip Option */}
-                <TouchableOpacity
-                  style={styles.skipBtn}
-                  onPress={handleSkip}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.skipBtnText}>Skip for now (Use default 1234)</Text>
+                  <TextInput
+                    ref={pinInputRef}
+                    style={styles.textInput}
+                    value={pin}
+                    onChangeText={handlePinChange}
+                    onFocus={() => setFocusedInput('pin')}
+                    onBlur={() => setFocusedInput(null)}
+                    placeholder="••••"
+                    placeholderTextColor="#9CA3AF"
+                    keyboardType={Platform.OS === 'ios' ? 'number-pad' : 'numeric'}
+                    inputMode="numeric"
+                    secureTextEntry
+                    maxLength={4}
+                  />
                 </TouchableOpacity>
               </View>
 
-              {/* Security Hint */}
-              <View style={styles.securityHint}>
-                <ShieldCheck size={13} color="#9CA3AF" />
-                <Text style={styles.securityHintText}>
-                  Your PIN is securely hashed & stored per terminal
+              <View style={styles.formGroup}>
+                <Text
+                  style={styles.inputLabel}
+                  onPress={() => confirmPinInputRef.current?.focus()}
+                >
+                  Confirm 4-Digit PIN
                 </Text>
+                <TouchableOpacity
+                  activeOpacity={1}
+                  onPress={() => confirmPinInputRef.current?.focus()}
+                  style={[
+                    styles.inputWrapper,
+                    focusedInput === 'confirm' && styles.inputWrapperFocused,
+                  ]}
+                >
+                  <TextInput
+                    ref={confirmPinInputRef}
+                    style={styles.textInput}
+                    value={confirmPin}
+                    onChangeText={handleConfirmPinChange}
+                    onFocus={() => setFocusedInput('confirm')}
+                    onBlur={() => setFocusedInput(null)}
+                    placeholder="••••"
+                    placeholderTextColor="#9CA3AF"
+                    keyboardType={Platform.OS === 'ios' ? 'number-pad' : 'numeric'}
+                    inputMode="numeric"
+                    secureTextEntry
+                    maxLength={4}
+                  />
+                </TouchableOpacity>
               </View>
+
+              {/* Save Button */}
+              <TouchableOpacity
+                style={[
+                  styles.primaryBtn,
+                  (pin.length !== 4 || confirmPin.length !== 4 || loading) && styles.primaryBtnDisabled,
+                ]}
+                onPress={handleSubmit}
+                disabled={pin.length !== 4 || confirmPin.length !== 4 || loading}
+                activeOpacity={0.85}
+              >
+                {loading ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <>
+                    <Text style={styles.primaryBtnText}>Save & Activate PIN</Text>
+                    <ArrowRight size={18} color="#FFFFFF" />
+                  </>
+                )}
+              </TouchableOpacity>
+
+              {/* Skip Option */}
+              <TouchableOpacity
+                style={styles.skipBtn}
+                onPress={handleSkip}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.skipBtnText}>Skip for now (Use default 1234)</Text>
+              </TouchableOpacity>
             </View>
-          </TouchableWithoutFeedback>
+
+            {/* Security Hint */}
+            <View style={styles.securityHint}>
+              <ShieldCheck size={13} color="#9CA3AF" />
+              <Text style={styles.securityHintText}>
+                Your PIN is securely hashed & stored per terminal
+              </Text>
+            </View>
+          </View>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>

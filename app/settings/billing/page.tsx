@@ -73,10 +73,8 @@ export default function SubscriptionBillingPage() {
 
 
   const handleOpenActiveSubInvoice = () => {
-    if (!activeSub) return;
-    const rawId = String(activeSub.subscriptionId || activeSub.subscriptionConfigurationId || 1);
-    const seqStr = rawId.replace(/[^0-9]/g, '').slice(-5).padStart(5, '0');
-    const invNumber = activeSub.invoiceNumber || `MZ/26-27/S${seqStr}`;
+    if (!activeSub || !activeSub.invoiceNumber || Number(activeSub.amountPaid || 0) <= 0) return;
+    const invNumber = activeSub.invoiceNumber;
 
     const recipientGst =
       activeSub.restaurantGstNumber ||
@@ -128,9 +126,8 @@ export default function SubscriptionBillingPage() {
   };
 
   const handleOpenHistoryInvoice = (item: RestaurantSubscriptionHistory) => {
-    const rawId = String(item.id || item.restaurantSubscriptionRelationshipId || 1);
-    const seqStr = rawId.replace(/[^0-9]/g, '').slice(-5).padStart(5, '0');
-    const invNumber = item.invoiceNumber || `MZ/26-27/S${seqStr}`;
+    if (!item || !item.invoiceNumber || Number(item.amountPaid || 0) <= 0) return;
+    const invNumber = item.invoiceNumber;
 
     const recipientGst =
       item.restaurantGstNumber ||
@@ -503,7 +500,7 @@ export default function SubscriptionBillingPage() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2.5">
-              {activeSub && (
+              {Boolean(activeSub?.invoiceNumber) && Number(activeSub?.amountPaid || 0) > 0 && (
                 <button
                   type="button"
                   onClick={handleOpenActiveSubInvoice}
@@ -662,7 +659,7 @@ export default function SubscriptionBillingPage() {
                       <CreditCard className="h-4 w-4 text-emerald-600" />
                       <span>Amount Paid</span>
                     </div>
-                    {Number(activeSub?.amountPaid || 0) > 0 && (
+                    {Boolean(activeSub?.invoiceNumber) && Number(activeSub?.amountPaid || 0) > 0 && (
                       <button
                         type="button"
                         onClick={handleOpenActiveSubInvoice}
@@ -1255,7 +1252,7 @@ export default function SubscriptionBillingPage() {
                           <span className="text-[10px] text-emerald-600 font-bold uppercase">
                             {item.newStatus || 'ACTIVE'}
                           </span>
-                          {item.amountPaid > 0 && (
+                          {Boolean(item.invoiceNumber) && Number(item.amountPaid || 0) > 0 && (
                             <button
                               type="button"
                               onClick={() => handleOpenHistoryInvoice(item)}
@@ -1263,7 +1260,7 @@ export default function SubscriptionBillingPage() {
                               title="Download / View GST Tax Invoice"
                             >
                               <FileText className="h-3 w-3 text-emerald-600" />
-                              <span>{item.invoiceNumber || 'Tax Invoice'}</span>
+                              <span>{item.invoiceNumber}</span>
                               <Download className="h-2.5 w-2.5 opacity-80" />
                             </button>
                           )}

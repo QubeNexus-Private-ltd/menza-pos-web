@@ -165,7 +165,7 @@ export default function TablesPage() {
       }
       const [tablesRes, ordersRes, cfgRes] = await Promise.allSettled([
         tableDataSource.getTables(currentRestId),
-        orderDataSource.getTodayOrders(currentRestId, 'ALL', 1, 50),
+        orderDataSource.getTodayOrders(currentRestId, 'ALL', 1, 100),
         configDataSource.getConfig(currentRestId),
       ]);
 
@@ -324,11 +324,6 @@ export default function TablesPage() {
   // Find active order for table
   const getOrderForTable = useCallback(
     (table: TableMaster) => {
-      const tableStatus = (table.status || '').toUpperCase();
-      // An available table by definition has no active running order
-      if (tableStatus === 'AVAILABLE') {
-        return undefined;
-      }
       return activeOrders.find((o) => {
         const matchTable =
           (table.id && o.tableId === table.id) ||
@@ -347,8 +342,8 @@ export default function TablesPage() {
     setActiveTableOrder(null);
     const existingOrder = getOrderForTable(tbl);
     const statusUpper = (tbl.status || '').toUpperCase();
-    const isAvailable = statusUpper === 'AVAILABLE';
-    const isOccupied = !isAvailable && (statusUpper === 'OCCUPIED' || statusUpper === 'BILLED' || Boolean(tbl.activeOrderId) || Boolean(existingOrder));
+    const hasActiveOrder = Boolean(existingOrder) || Boolean(tbl.activeOrderId);
+    const isOccupied = hasActiveOrder || statusUpper === 'OCCUPIED' || statusUpper === 'BILLED';
     if (isOccupied) {
       try {
         setLoadingActiveOrder(true);
@@ -535,7 +530,7 @@ export default function TablesPage() {
 
   const occupiedCount = tables.filter((t) => {
     const st = (t.status || '').toUpperCase();
-    return st === 'OCCUPIED' || st === 'BILLED' || Boolean(t.activeOrderId);
+    return st === 'OCCUPIED' || st === 'BILLED' || Boolean(t.activeOrderId) || Boolean(getOrderForTable(t));
   }).length;
 
   return (
@@ -616,10 +611,11 @@ export default function TablesPage() {
               {filteredTables.map((tbl) => {
                 const activeOrder = getOrderForTable(tbl);
                 const statusUpper = (tbl.status || '').toUpperCase();
-                const isAvailable = statusUpper === 'AVAILABLE';
-                const isBilled = !isAvailable && statusUpper === 'BILLED';
-                const isCleaning = !isAvailable && statusUpper === 'CLEANING';
-                const isOccupied = !isAvailable && (statusUpper === 'OCCUPIED' || Boolean(tbl.activeOrderId) || Boolean(activeOrder));
+                const hasActiveOrder = Boolean(activeOrder) || Boolean(tbl.activeOrderId);
+                const isOccupied = hasActiveOrder || statusUpper === 'OCCUPIED';
+                const isBilled = !isOccupied && statusUpper === 'BILLED';
+                const isCleaning = !isOccupied && statusUpper === 'CLEANING';
+                const isAvailable = !isOccupied && !isBilled && !isCleaning;
 
                 const activeServiceReq = serviceRequests.find(
                   (r) => r.tableId === tbl.id || r.tableName === tbl.tableNumber || r.tableName === tbl.tableName
@@ -792,10 +788,11 @@ export default function TablesPage() {
           const existingOrder = getOrderForTable(actionTable);
           const activeOrder = activeTableOrder || existingOrder;
           const statusUpper = (actionTable.status || '').toUpperCase();
-          const isAvailable = statusUpper === 'AVAILABLE';
-          const isBilled = !isAvailable && statusUpper === 'BILLED';
-          const isCleaning = !isAvailable && statusUpper === 'CLEANING';
-          const isOccupied = !isAvailable && (statusUpper === 'OCCUPIED' || Boolean(actionTable.activeOrderId) || Boolean(activeOrder));
+          const hasActiveOrder = Boolean(activeOrder) || Boolean(actionTable.activeOrderId);
+          const isOccupied = hasActiveOrder || statusUpper === 'OCCUPIED';
+          const isBilled = !isOccupied && statusUpper === 'BILLED';
+          const isCleaning = !isOccupied && statusUpper === 'CLEANING';
+          const isAvailable = !isOccupied && !isBilled && !isCleaning;
 
           return (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">

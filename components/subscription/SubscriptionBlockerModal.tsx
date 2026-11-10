@@ -88,9 +88,8 @@ export const SubscriptionBlockerModal: React.FC = () => {
   const platformLegalName = platformGstInfo?.platformLegalName || 'Menza Technologies Private Limited';
 
   const handleOpenHistoryInvoice = (item: any) => {
-    const rawId = String(item.id || item.restaurantSubscriptionRelationshipId || 1);
-    const seqStr = rawId.replace(/[^0-9]/g, '').slice(-5).padStart(5, '0');
-    const invNumber = item.invoiceNumber || `MZ/26-27/S${seqStr}`;
+    if (!item || !item.invoiceNumber || Number(item.amountPaid || 0) <= 0) return;
+    const invNumber = item.invoiceNumber;
 
     const itemRecipientGst =
       item.restaurantGstNumber ||
@@ -1532,7 +1531,7 @@ export const SubscriptionBlockerModal: React.FC = () => {
                             <span className="text-[10px] text-emerald-600 font-bold uppercase">
                               {item.newStatus || 'ACTIVE'}
                             </span>
-                            {item.amountPaid > 0 && (
+                            {Boolean(item.invoiceNumber) && Number(item.amountPaid || 0) > 0 && (
                               <button
                                 type="button"
                                 onClick={() => handleOpenHistoryInvoice(item)}
@@ -1540,7 +1539,7 @@ export const SubscriptionBlockerModal: React.FC = () => {
                                 title="Download / View GST Tax Invoice"
                               >
                                 <FileText className="h-3 w-3 text-emerald-600" />
-                                <span>{item.invoiceNumber || 'Tax Invoice'}</span>
+                                <span>{item.invoiceNumber}</span>
                                 <Download className="h-2.5 w-2.5 opacity-80" />
                               </button>
                             )}

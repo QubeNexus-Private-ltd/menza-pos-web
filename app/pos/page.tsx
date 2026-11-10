@@ -143,6 +143,9 @@ import {
   onWalletBalanceChanged,
   onPosTableStatusChanged,
   onPosOrderCreated,
+  onPosOrderStatusChanged,
+  onPosOrderSettled,
+  onKitchenStatusChanged,
   onSignalRReconnected,
 } from '@/lib/signalr/signalrService';
 
@@ -256,6 +259,11 @@ export default function PosPage() {
     }
     return null;
   });
+  const selectedTableRef = useRef<TableMaster | null>(selectedTable);
+  useEffect(() => {
+    selectedTableRef.current = selectedTable;
+  }, [selectedTable]);
+
   const [activeTableOrder, setActiveTableOrder] = useState<OrderMaster | null>(() => {
     if (typeof window !== 'undefined') {
       const qTableId = new URLSearchParams(window.location.search).get('tableId');
@@ -574,6 +582,49 @@ export default function PosPage() {
       }
     });
 
+    const handleOrderRealtimeUpdate = (orderData: any) => {
+      if (!isMounted || !currentRestId) return;
+      const targetTableId = Number(orderData?.tableId || orderData?.TableId || 0);
+      const targetTableName = orderData?.tableName || orderData?.TableName;
+
+      if (targetTableId > 0) {
+        usePosCatalogStore.getState().invalidateActiveTableOrder(targetTableId);
+      }
+
+      // Refresh table list so occupied status / active order reflects on UI
+      tableDataSource.getTables(currentRestId).then((tList) => {
+        if (isMounted) {
+          setTables(tList);
+          usePosCatalogStore.getState().updateTables(tList);
+        }
+      }).catch(() => {});
+
+      // If the currently open table in POS matches this order, reload its order details
+      const curTable = selectedTableRef.current;
+      if (curTable) {
+        const isMatch =
+          (targetTableId > 0 && curTable.id === targetTableId) ||
+          Boolean(
+            targetTableName &&
+              (curTable.tableName === targetTableName ||
+                curTable.tableNumber === targetTableName ||
+                `T-${curTable.tableNumber}` === targetTableName ||
+                `Table ${curTable.tableNumber}` === targetTableName)
+          );
+        if (isMatch) {
+          loadActiveTableOrder(curTable.id, true);
+        }
+      }
+    };
+
+    const unsubOrderCreated = onPosOrderCreated(handleOrderRealtimeUpdate);
+    const unsubOrderStatus = onPosOrderStatusChanged(handleOrderRealtimeUpdate);
+    const unsubOrderSettled = onPosOrderSettled((orderData) => {
+      handleOrderRealtimeUpdate(orderData);
+      loadOperatingStatus();
+    });
+    const unsubKitchenStatus = onKitchenStatusChanged(handleOrderRealtimeUpdate);
+
     return () => {
       isMounted = false;
       unsubStatus();
@@ -581,6 +632,10 @@ export default function PosPage() {
       unsubTable();
       unsubReconnect();
       unsubWalletEvents();
+      unsubOrderCreated();
+      unsubOrderStatus();
+      unsubOrderSettled();
+      unsubKitchenStatus();
       cleanupNetworkListeners();
       stopWorker();
     };
@@ -600,7 +655,7 @@ export default function PosPage() {
       // Check if active order was already fetched within last 60 seconds (e.g. from tables floor page)
       if (!forceRefresh) {
         const cachedOrder = usePosCatalogStore.getState().getActiveTableOrder(tableId);
-        if (cachedOrder !== undefined) {
+        if (cachedOrder !== undefined && cachedOrder !== null) {
           setActiveTableOrder(cachedOrder);
           if (cachedOrder?.customerName) {
             setCustomerName((prev) => prev || cachedOrder.customerName || '');

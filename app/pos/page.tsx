@@ -185,6 +185,7 @@ export default function PosPage() {
   const autoPrintReceipt = usePrinterStore((s) => s.autoPrintReceipt);
   const autoPrintKot = usePrinterStore((s) => s.autoPrintKot);
   const canTakeOrders = useSubscriptionStore((s) => s.canTakeOrders);
+  const isZeroCommission = useSubscriptionStore((s) => s.isZeroCommission());
   const hasEntitlement = useSubscriptionStore((s) => s.hasEntitlement);
   const isSubscriptionExpired = useSubscriptionStore((s) => s.isExpired);
   const subscriptionLifecycleState = useSubscriptionStore((s) => s.lifecycleState);
@@ -1314,10 +1315,12 @@ export default function PosPage() {
     const effectiveCustomerName =
       cleanName || (selectedTable ? `Table ${selectedTable.tableNumber}` : 'Walk-in Customer');
 
-    // Wallet Safeguard
+    // Wallet Safeguard (exempt 0-commission / unlimited subscription plans)
+    const isZeroComm = useSubscriptionStore.getState().isZeroCommission();
     const isWalletExhausted =
-      operatingStatus?.status === 'WALLET_EXHAUSTED' ||
-      (restaurantConfig?.walletBalance !== undefined && restaurantConfig.walletBalance <= 0);
+      !isZeroComm &&
+      (operatingStatus?.status === 'WALLET_EXHAUSTED' ||
+        (restaurantConfig?.walletBalance !== undefined && restaurantConfig.walletBalance <= 0));
 
     if (isWalletExhausted) {
       showAlert(
@@ -1346,7 +1349,10 @@ export default function PosPage() {
 
     // Inactive Store / Operating Status Safeguard
     const isInactive = activeRestaurant?.isActive === false || restaurantConfig?.isActive === false;
-    const isClosedOrPaused = operatingStatus && !operatingStatus.canPlaceOrder;
+    const isClosedOrPaused =
+      operatingStatus &&
+      !operatingStatus.canPlaceOrder &&
+      (!isZeroComm || operatingStatus.status !== 'WALLET_EXHAUSTED');
 
     if (isInactive || isClosedOrPaused) {
       const title = isInactive ? 'Store is Inactive 🔴' : 'Store is Closed / Paused ⚠️';
@@ -2446,9 +2452,10 @@ export default function PosPage() {
             {/* Subscription Grace Banner */}
             <SubscriptionGraceBanner onRenewPress={openRenewalModal} />
 
-            {/* Prepaid Wallet Exhausted Banner */}
-            {((restaurantConfig?.walletBalance !== undefined && restaurantConfig.walletBalance <= 0) ||
-              operatingStatus?.status === 'WALLET_EXHAUSTED') && (
+            {/* Prepaid Wallet Exhausted Banner (exempt 0-commission / unlimited subscription plans) */}
+            {!isZeroCommission &&
+              ((restaurantConfig?.walletBalance !== undefined && restaurantConfig.walletBalance <= 0) ||
+                operatingStatus?.status === 'WALLET_EXHAUSTED') && (
               <div
                 onClick={() => setWalletModalOpen(true)}
                 className="flex items-center justify-between rounded-2xl border border-red-500/40 bg-red-500/10 px-3.5 py-2 text-xs cursor-pointer hover:bg-red-500/15 transition-all shadow-xs"

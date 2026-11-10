@@ -1,6 +1,8 @@
 import { NativeModules, Platform, PermissionsAndroid, Linking } from 'react-native';
 import { EscPosBuilder, ReceiptData, PaperWidth } from '../../core/printer/EscPosBuilder';
 import { logger } from '../../core/logging';
+import { useAuthStore } from '../../presentation/state/useAuthStore';
+import { RestaurantConfigRemoteDataSource } from './RestaurantConfigRemoteDataSource';
 
 export interface BluetoothDevice {
   name: string;
@@ -335,6 +337,96 @@ export class BluetoothPrinterService {
   }
 
   private static logoCache = new Map<string, { widthBytes: number; heightDots: number; bytes: number[] }>();
+  private static cachedConfig: any = null;
+
+  /**
+   * Centralized ReceiptData enrichment pipeline.
+   * Automatically fills missing restaurantName, address, contactPhone, logoUrl,
+   * upiId, upiPayeeName, showUpiQr, and gstNumber from Zustand stores
+   * or cached RestaurantConfig so individual screens never fail to print logos or QR codes.
+   */
+  async enrichReceiptData(data: ReceiptData): Promise<ReceiptData> {
+    const authState = useAuthStore.getState();
+    const activeRest = (authState.activeRestaurant || authState.restaurants?.[0]) as any;
+
+    let logoUrl = (
+      data.logoUrl ||
+      activeRest?.logoUrl ||
+      activeRest?.imageUrl ||
+      BluetoothPrinterService.cachedConfig?.logoUrl ||
+      ''
+    ).trim();
+
+    let upiId = (
+      data.upiId ||
+      activeRest?.bankerUpiId ||
+      activeRest?.upiId ||
+      BluetoothPrinterService.cachedConfig?.bankerUpiId ||
+      ''
+    ).trim();
+
+    let upiPayeeName =
+      data.upiPayeeName ||
+      activeRest?.bankerAccountHolderName ||
+      activeRest?.restaurantName ||
+      BluetoothPrinterService.cachedConfig?.bankerAccountHolderName ||
+      BluetoothPrinterService.cachedConfig?.restaurantName ||
+      'Menza Restaurant';
+
+    let showUpiQr =
+      data.showUpiQr !== undefined
+        ? data.showUpiQr
+        : (activeRest?.printUpiQrOnReceipts !== false &&
+           BluetoothPrinterService.cachedConfig?.printUpiQrOnReceipts !== false);
+
+    let gstNumber =
+      data.gstNumber ||
+      activeRest?.gstNumber ||
+      activeRest?.gstin ||
+      BluetoothPrinterService.cachedConfig?.gstNumber ||
+      undefined;
+
+    const restId = Number(activeRest?.restaurantId || (globalThis as any).__MENZA_ACTIVE_REST_ID__ || 0);
+
+    // Quick remote fetch if logo or UPI is not yet known
+    if ((!logoUrl || !upiId) && restId > 0 && !BluetoothPrinterService.cachedConfig) {
+      try {
+        const ds = new RestaurantConfigRemoteDataSource();
+        const cfg = await Promise.race([
+          ds.getConfig(restId),
+          new Promise<null>((res) => setTimeout(() => res(null), 1500)),
+        ]);
+        if (cfg) {
+          BluetoothPrinterService.cachedConfig = cfg;
+          if (!logoUrl && cfg.logoUrl) logoUrl = cfg.logoUrl.trim();
+          if (!upiId && cfg.bankerUpiId) upiId = cfg.bankerUpiId.trim();
+          if (!upiPayeeName && (cfg.bankerAccountHolderName || cfg.restaurantName)) {
+            upiPayeeName = cfg.bankerAccountHolderName || cfg.restaurantName;
+          }
+          if (data.showUpiQr === undefined && cfg.printUpiQrOnReceipts !== undefined) {
+            showUpiQr = cfg.printUpiQrOnReceipts !== false;
+          }
+          if (!gstNumber && cfg.gstNumber) gstNumber = cfg.gstNumber;
+        }
+      } catch {
+        // Silently proceed
+      }
+    }
+
+    return {
+      ...data,
+      restaurantName: data.restaurantName || activeRest?.restaurantName || 'Menza Restaurant',
+      address: data.address || activeRest?.address || undefined,
+      city: data.city || activeRest?.city || undefined,
+      state: data.state || activeRest?.state || undefined,
+      contactPhone: data.contactPhone || activeRest?.contactNumber || activeRest?.ownerMobile || undefined,
+      logoUrl: logoUrl || undefined,
+      upiId: upiId || undefined,
+      upiPayeeName,
+      showUpiQr,
+      gstNumber,
+    };
+  }
 
   /** Rasterize store logo from URL to ESC/POS monochrome bitmap */
   async rasterizeStoreLogo(logoUrl: string, maxWidthDots: number = 384): Promise<{ widthBytes: number; heightDots: number; bytes: number[] } | null> {
@@ -365,7 +457,8 @@ export class BluetoothPrinterService {
 
   /** Print formatted customer tax receipt */
   async printReceipt(data: ReceiptData, paperWidth: PaperWidth = '58mm'): Promise<boolean> {
-    let receiptData = { ...data };
+    const enriched = await this.enrichReceiptData(data);
+    let receiptData = { ...enriched };
     if (!receiptData.logoBitmap && receiptData.logoUrl) {
       try {
         const maxDots = paperWidth === '80mm' ? 480 : 320;
@@ -403,7 +496,8 @@ export class BluetoothPrinterService {
     // 1. Print Customer Tax Invoice if enabled (with cut at the end)
     if (printReceiptEnabled) {
       try {
-        let receiptData = { ...data };
+        const enriched = await this.enrichReceiptData(data);
+        let receiptData = { ...enriched };
         if (!receiptData.logoBitmap && receiptData.logoUrl) {
           const maxDots = paperWidth === '80mm' ? 480 : 320;
           const rasterized = await this.rasterizeStoreLogo(receiptData.logoUrl, maxDots);
@@ -438,13 +532,99 @@ export class BluetoothPrinterService {
 
   /** Print a standard test receipt */
   async printTestReceipt(restaurantName?: string, paperWidth: PaperWidth = '58mm'): Promise<boolean> {
-    const bytes = EscPosBuilder.buildTestReceipt(restaurantName, paperWidth);
-    return await this.printBytes(bytes);
+    const authState = useAuthStore.getState();
+    const activeRest = (authState.activeRestaurant || authState.restaurants?.[0]) as any;
+
+    const rawTestData: ReceiptData = {
+      orderId: '101',
+      orderNumber: '101',
+      restaurantName: restaurantName || activeRest?.restaurantName || 'Menza Bistro',
+      address: activeRest?.address || 'Menza POS Thermal Printer',
+      contactPhone: activeRest?.contactNumber || activeRest?.ownerMobile,
+      logoUrl: activeRest?.logoUrl || activeRest?.imageUrl,
+      customerName: 'Guest Tester',
+      tableName: 'Table 1',
+      orderType: 'Dine In',
+      items: [
+        { itemName: 'Paneer Butter Masala', quantity: 2, unitPrice: 280, totalPrice: 560 },
+        { itemName: 'Butter Naan', quantity: 4, unitPrice: 40, totalPrice: 160 },
+        { itemName: 'Fresh Lime Soda', quantity: 1, unitPrice: 60, totalPrice: 60 },
+      ],
+      subtotal: 780,
+      cgstAmount: 19.5,
+      sgstAmount: 19.5,
+      taxAmount: 39,
+      grandTotal: 819,
+      paymentMode: 'UPI',
+      paymentStatus: 'PAID',
+      date: new Date(),
+      upiId: (activeRest?.bankerUpiId || activeRest?.upiId || 'menzahospitality@icici').trim(),
+      upiPayeeName: activeRest?.bankerAccountHolderName || activeRest?.restaurantName || 'Menza Restaurant',
+      showUpiQr: true,
+      footerMessage: 'Thank you for dining with us! Please visit again.',
+    };
+
+    return await this.printReceipt(rawTestData, paperWidth);
   }
 
   /** Print a standard test KOT ticket */
   async printTestKot(restaurantName?: string, paperWidth: PaperWidth = '58mm'): Promise<boolean> {
     const bytes = EscPosBuilder.buildTestKot(restaurantName, paperWidth);
+    return await this.printBytes(bytes);
+  }
+
+  /** Print a standalone Table QR Sticker to 58mm/80mm thermal roll */
+  async printTableQrSticker(
+    params: {
+      restaurantName?: string;
+      tableNumber: string | number;
+      sectionName?: string;
+      qrUrl: string;
+      isRolling?: boolean;
+      logoUrl?: string;
+    },
+    paperWidth: PaperWidth = '58mm'
+  ): Promise<boolean> {
+    const authState = useAuthStore.getState();
+    const activeRest = (authState.activeRestaurant || authState.restaurants?.[0]) as any;
+
+    const resolvedRestaurantName =
+      params.restaurantName ||
+      activeRest?.restaurantName ||
+      BluetoothPrinterService.cachedConfig?.restaurantName ||
+      'Menza Restaurant';
+
+    const resolvedLogoUrl = (
+      params.logoUrl ||
+      activeRest?.logoUrl ||
+      activeRest?.imageUrl ||
+      BluetoothPrinterService.cachedConfig?.logoUrl ||
+      ''
+    ).trim();
+
+    let logoBitmap: { widthBytes: number; heightDots: number; bytes: number[] } | undefined;
+    if (resolvedLogoUrl) {
+      try {
+        const maxDots = paperWidth === '80mm' ? 420 : 280;
+        const rasterized = await this.rasterizeStoreLogo(resolvedLogoUrl, maxDots);
+        if (rasterized) logoBitmap = rasterized;
+      } catch (err: any) {
+        logger.warn('PRINTER', 'STICKER_LOGO_RASTER_FAILED', err?.message);
+      }
+    }
+
+    const bytes = EscPosBuilder.buildTableQrSticker(
+      {
+        restaurantName: resolvedRestaurantName,
+        tableNumber: params.tableNumber,
+        sectionName: params.sectionName,
+        qrUrl: params.qrUrl,
+        isRolling: params.isRolling,
+        logoBitmap,
+      },
+      paperWidth
+    );
+
     return await this.printBytes(bytes);
   }
 }

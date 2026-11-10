@@ -5,10 +5,17 @@ import {
   UserSubscriptionStatus,
   SubscriptionLifecycleState,
   PlanChangeType,
+  extractTableOrderFlag,
+  isTruthyFlag,
+  extractFeatureFlag,
+  extractApplicationFlag,
+  MenzaApplicationKey,
+  MenzaFeatureKey,
 } from '../../domain/models/Subscription';
 import { SubscriptionRemoteDataSource } from '../../data/datasources/SubscriptionRemoteDataSource';
 import { SubscriptionRepositoryImpl } from '../../data/repositories/SubscriptionRepositoryImpl';
 import { SubscriptionEvents } from '../../core/utils/subscriptionEvents';
+import { apiCacheManager } from '../../core/network/apiClient';
 import { useAuthStore } from './useAuthStore';
 
 const subscriptionRepo = new SubscriptionRepositoryImpl(new SubscriptionRemoteDataSource());
@@ -30,6 +37,7 @@ interface SubscriptionStoreState {
   error: string | null;
 
   // Computed Convenience Flags
+  hasLoaded: boolean;
   lifecycleState: SubscriptionLifecycleState;
   daysRemaining: number;
   isInGracePeriod: boolean;
@@ -47,7 +55,7 @@ interface SubscriptionStoreState {
   } | null;
 
   // Actions
-  fetchSubscriptionStatus: (restaurantId?: number) => Promise<UserSubscriptionStatus | null>;
+  fetchSubscriptionStatus: (restaurantId?: number, forceRefresh?: boolean) => Promise<UserSubscriptionStatus | null>;
   fetchPlans: () => Promise<SubscriptionPlan[]>;
   fetchSubscriptionHistory: (restaurantId?: number) => Promise<RestaurantSubscriptionHistory[]>;
   openRenewalModal: (targetPlan?: SubscriptionPlan) => void;
@@ -58,6 +66,9 @@ interface SubscriptionStoreState {
   calculatePlanChange: (targetPlan: SubscriptionPlan) => PlanChangeCalculation;
   hasEntitlement: (configKey: string) => boolean;
   canTakeOrders: () => boolean;
+  isZeroCommission: () => boolean;
+  isAppAllowed: (appKey: MenzaApplicationKey | string) => boolean;
+  isFeatureAllowed: (featureKey: MenzaFeatureKey | string) => boolean;
   reset: () => void;
 }
 
@@ -81,6 +92,17 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
     }
   });
 
+  // Listen for global subscription update / plan change events
+  SubscriptionEvents.subscribeUpdated(() => {
+    const activeRestId =
+      useAuthStore.getState().activeRestaurant?.restaurantId ||
+      (globalThis as any).__MENZA_ACTIVE_REST_ID__ ||
+      0;
+    if (activeRestId > 0) {
+      get().fetchSubscriptionStatus(activeRestId, true).catch(() => {});
+    }
+  });
+
   return {
     subscription: null,
     plans: [],
@@ -89,6 +111,7 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
     isHistoryLoading: false,
     error: null,
 
+    hasLoaded: false,
     lifecycleState: 'NONE',
     daysRemaining: 0,
     isInGracePeriod: false,
@@ -101,7 +124,7 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
     expiredPromptMessage: null,
     selectedPlanForAction: null,
 
-    fetchSubscriptionStatus: async (restaurantId?: number) => {
+    fetchSubscriptionStatus: async (restaurantId?: number, forceRefresh: boolean = true) => {
       const activeRestId =
         restaurantId ||
         useAuthStore.getState().activeRestaurant?.restaurantId ||
@@ -111,6 +134,7 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
       if (!activeRestId || activeRestId <= 0) {
         set({
           subscription: null,
+          hasLoaded: false,
           lifecycleState: 'NONE',
           daysRemaining: 0,
           isInGracePeriod: false,
@@ -122,11 +146,18 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
 
       try {
         set({ isLoading: true, error: null });
-        const sub = await subscriptionRepo.getRestaurantSubscription(activeRestId);
+        if (forceRefresh) {
+          apiCacheManager.invalidate('/Subscription');
+        }
+        if (get().plans.length === 0 || forceRefresh) {
+          await get().fetchPlans().catch(() => {});
+        }
+        const sub = await subscriptionRepo.getRestaurantSubscription(activeRestId, forceRefresh);
 
         if (!sub) {
           set({
             subscription: null,
+            hasLoaded: true,
             lifecycleState: 'NONE',
             daysRemaining: 0,
             isInGracePeriod: false,
@@ -150,8 +181,13 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
 
         const daysRem = sub.hasQueuedRenewal ? totalDaysRem : rawDaysRem;
         const graceEnd = new Date(effectiveEndDate.getTime() + 3 * 24 * 60 * 60 * 1000);
+        const isExplicitlyInactive =
+          sub.isActive === false ||
+          sub.status?.toUpperCase() === 'INACTIVE' ||
+          sub.lifecycleState === 'INACTIVE' ||
+          sub.lifecycleState === 'SUSPENDED';
 
-        const inGrace = !sub.hasQueuedRenewal &&
+        const inGrace = !isExplicitlyInactive && !sub.hasQueuedRenewal &&
           (sub.isInGracePeriod ??
           (sub.lifecycleState === 'GRACE_PERIOD' ||
             sub.status?.toUpperCase() === 'GRACE_PERIOD' ||
@@ -161,23 +197,25 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
           sub.graceDaysRemaining ??
           (inGrace ? Math.max(0, Math.ceil((graceEnd.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))) : 0);
 
-        const expired = !sub.hasQueuedRenewal &&
+        const expired = isExplicitlyInactive || (!sub.hasQueuedRenewal &&
           (sub.isExpired ||
           sub.lifecycleState === 'EXPIRED' ||
           sub.status?.toUpperCase() === 'EXPIRED' ||
-          (!inGrace && now > graceEnd && daysRem <= 0));
+          (!inGrace && now > graceEnd && daysRem <= 0)));
 
         let lifecycle: SubscriptionLifecycleState = sub.lifecycleState || 'ACTIVE';
-        if (sub.status?.toUpperCase() === 'PENDING') lifecycle = 'PENDING';
+        if (isExplicitlyInactive) lifecycle = 'INACTIVE';
+        else if (sub.status?.toUpperCase() === 'PENDING') lifecycle = 'PENDING';
         else if (expired) lifecycle = 'EXPIRED';
         else if (inGrace) lifecycle = 'GRACE_PERIOD';
         else lifecycle = 'ACTIVE';
 
         const updatedSub: UserSubscriptionStatus = {
           ...sub,
-          daysRemaining: daysRem,
-          totalDaysRemaining: totalDaysRem,
-          currentCycleDaysRemaining: rawDaysRem,
+          isActive: !isExplicitlyInactive && !expired,
+          daysRemaining: isExplicitlyInactive ? 0 : daysRem,
+          totalDaysRemaining: isExplicitlyInactive ? 0 : totalDaysRem,
+          currentCycleDaysRemaining: isExplicitlyInactive ? 0 : rawDaysRem,
           isInGracePeriod: inGrace,
           graceDaysRemaining: graceRem,
           isExpired: expired,
@@ -185,9 +223,10 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
         };
 
         set({
+          hasLoaded: true,
           subscription: updatedSub,
           lifecycleState: lifecycle,
-          daysRemaining: daysRem,
+          daysRemaining: isExplicitlyInactive ? 0 : daysRem,
           isInGracePeriod: inGrace,
           graceDaysRemaining: graceRem,
           isExpired: expired,
@@ -196,7 +235,7 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
 
         return updatedSub;
       } catch (err: any) {
-        set({ error: err?.message || 'Failed to fetch subscription status', isLoading: false });
+        set({ error: err?.message || 'Failed to fetch subscription status', isLoading: false, hasLoaded: true });
         return null;
       }
     },
@@ -320,25 +359,68 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
     },
 
     hasEntitlement: (configKey: string): boolean => {
-      const { subscription, lifecycleState } = get();
-      // If expired beyond grace period, all entitlements blocked
-      if (lifecycleState === 'EXPIRED') return false;
-      if (!subscription) return true; // Default permissive fallback if no sub loaded yet
+      const { subscription, lifecycleState, isExpired, isInGracePeriod, hasLoaded } = get();
+      if (!hasLoaded) return true;
+      if (!subscription || lifecycleState === 'EXPIRED' || lifecycleState === 'INACTIVE' || (isExpired && !isInGracePeriod)) return false;
 
       const entitlements = subscription.entitlements || [];
+      const k = configKey.toLowerCase();
+      if (k === 'iskdsenabled' || k === 'iskdsappenabled' || k === 'iscaptainmenzaappenabled') {
+        const match = entitlements.find((e: any) => {
+          const ek = (e.configKey || e.ConfigKey || '').toLowerCase();
+          return ek === 'iskdsenabled' || ek === 'iskdsappenabled' || ek === 'iscaptainmenzaappenabled';
+        });
+        if (match) return Boolean(match.isAllowed ?? (match as any).IsAllowed);
+        return Boolean((subscription as any).isKdsEnabled ?? (subscription as any).allowKds ?? subscription.isKdsAppEnabled);
+      }
       const item = entitlements.find(
-        (e) => e.configKey?.toLowerCase() === configKey.toLowerCase()
+        (e: any) => (e.configKey || e.ConfigKey || '').toLowerCase() === k
       );
-      return item ? item.isAllowed : true;
+      return item ? Boolean(item.isAllowed ?? (item as any).IsAllowed) : true;
+    },
+
+    isZeroCommission: (): boolean => {
+      const { subscription } = get();
+      if (!subscription) return false;
+      const pct = subscription.effectiveCommissionPercentage ?? 0;
+      const flat = subscription.effectiveFlatCommissionPerOrder ?? 0;
+      return pct <= 0 && flat <= 0;
     },
 
     canTakeOrders: (): boolean => {
-      const { lifecycleState } = get();
-      return lifecycleState !== 'EXPIRED';
+      const { subscription, lifecycleState, isExpired, isInGracePeriod, hasLoaded } = get();
+      if (!hasLoaded) return true;
+      if (!subscription || lifecycleState === 'NONE' || lifecycleState === 'EXPIRED' || lifecycleState === 'INACTIVE') return false;
+      if (isExpired && !isInGracePeriod) return false;
+      return true;
+    },
+
+    isTableOrderAllowed: (): boolean => {
+      const { subscription, plans } = get();
+      return isTableOrderSubscriptionAllowed(subscription, plans);
+    },
+
+    isAppAllowed: (appKey: MenzaApplicationKey | string): boolean => {
+      const { subscription, lifecycleState, isExpired, isInGracePeriod, hasLoaded } = get();
+      if (!hasLoaded) return true;
+      if (!subscription || lifecycleState === 'NONE' || lifecycleState === 'EXPIRED' || lifecycleState === 'INACTIVE' || (isExpired && !isInGracePeriod)) {
+        return false;
+      }
+      return extractApplicationFlag(subscription, appKey);
+    },
+
+    isFeatureAllowed: (featureKey: MenzaFeatureKey | string): boolean => {
+      const { subscription, lifecycleState, isExpired, isInGracePeriod, hasLoaded } = get();
+      if (!hasLoaded) return true;
+      if (!subscription || lifecycleState === 'NONE' || lifecycleState === 'EXPIRED' || lifecycleState === 'INACTIVE' || (isExpired && !isInGracePeriod)) {
+        return false;
+      }
+      return extractFeatureFlag(subscription, featureKey);
     },
 
     reset: () => {
       set({
+        hasLoaded: false,
         subscription: null,
         plans: [],
         history: [],
@@ -359,3 +441,69 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
     },
   };
 });
+
+/**
+ * Validates whether the active subscription has table ordering enabled (isTableOrder / istableorder).
+ * Returns true when the subscription explicitly includes table ordering entitlement/flag (handling
+ * boolean true, bit 1, 'true', '1', nested configuration/plan, or active status), and is not expired beyond grace period.
+ */
+export const isTableOrderSubscriptionAllowed = (
+  subscription: UserSubscriptionStatus | null | undefined,
+  plans?: SubscriptionPlan[]
+): boolean => {
+  if (!subscription) return false;
+
+  // If subscription is explicitly inactive or expired beyond grace period, all paid features blocked
+  if (
+    subscription.isActive === false ||
+    subscription.status?.toUpperCase() === 'INACTIVE' ||
+    subscription.lifecycleState === 'INACTIVE' ||
+    (subscription.isExpired && !subscription.isInGracePeriod)
+  ) {
+    return false;
+  }
+
+  const raw: any = subscription;
+
+  // 1. Direct table order flags on subscription (handles boolean, 1, 'true', '1', entitlements, nested)
+  const directFlag = extractTableOrderFlag(raw);
+  if (directFlag !== undefined) {
+    return directFlag;
+  }
+
+  // 2. Matched plan from available subscription plans
+  if (Array.isArray(plans) && plans.length > 0) {
+    const plan: any =
+      plans.find((p) => p.id === raw.subscriptionConfigurationId) ||
+      plans.find(
+        (p) =>
+          (p.subscriptionCode && p.subscriptionCode.toLowerCase() === (raw.subscriptionCode || '').toLowerCase()) ||
+          (p.subscriptionName && p.subscriptionName.toLowerCase() === (raw.planName || '').toLowerCase()) ||
+          (p.planName && p.planName.toLowerCase() === (raw.planName || '').toLowerCase())
+      );
+    if (plan) {
+      const planFlag = extractTableOrderFlag(plan);
+      if (planFlag !== undefined) {
+        return planFlag;
+      }
+    }
+  }
+
+  // 3. Fallback: Check if plan name or code implies pro / dine-in / table service plan
+  const planName = String(raw.planName || raw.subscriptionName || '').toLowerCase();
+  if (
+    planName.includes('dine') ||
+    planName.includes('table') ||
+    planName.includes('hybrid') ||
+    planName.includes('pro') ||
+    planName.includes('premium') ||
+    planName.includes('enterprise')
+  ) {
+    return true;
+  }
+
+  return false;
+};
+
+export { extractTableOrderFlag, isTruthyFlag };
+

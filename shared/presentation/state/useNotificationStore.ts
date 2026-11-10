@@ -223,10 +223,9 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
         : 'STATUS_CHANGED';
 
     // Orders taken by waiter on dining tables:
-    // 1. Initial Order Placement (NEW_ORDER): Waiter and KDS handle this; Cashier does NOT receive audible/modal alerts.
-    // 2. Kitchen Preparation Statuses (Preparing, Ready, Served): Chef and waiter manage this; Cashier is NOT disturbed.
-    // ONLY Bill Requests and Order Status changes (Cancelled, Settled, or overarching status changes) should alert cashier!
-    if (isWaiterOrder && !isBillRequest && (eventType === 'NEW_ORDER' || (isKitchenUpdate && isKitchenPrepStatus))) {
+    // Kitchen Preparation Statuses (Preparing, Ready, Served) are managed by chef and waiter on KDS; Cashier is NOT disturbed.
+    // However, NEW_ORDER, Add-ons, Bill Requests, Cancellations, and Settlements MUST alert the cashier!
+    if (isWaiterOrder && !isBillRequest && !isAddOn && eventType !== 'NEW_ORDER' && (isKitchenUpdate && isKitchenPrepStatus)) {
       // Silently keep order and table status tracking in sync without alerting cashier/owner
       set({
         knownOrderIds: currentKnownIds,
@@ -554,7 +553,7 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
       const statusUpper = currentStatus.toUpperCase();
       const isKitchenPrepStatus = statusUpper === 'PREPARING' || statusUpper === 'READY' || statusUpper === 'SERVED';
 
-      if (isWaiterOrder && (isNew || isKitchenPrepStatus)) {
+      if (isWaiterOrder && !isNew && isKitchenPrepStatus) {
         return;
       }
 

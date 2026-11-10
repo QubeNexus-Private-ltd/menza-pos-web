@@ -439,8 +439,9 @@ export class WebPrinterService {
       return EscPosBuilder.buildReceipt(enrichedData, paperWidth);
     };
 
-    // 1. Direct Web Bluetooth (BLE)
-    if (channel === 'web_bluetooth' || (channel === 'auto' && this.isBluetoothConnected())) {
+    // 1. Direct Web Bluetooth (BLE): check if currently connected OR has a saved printer ready to auto-reconnect
+    const isBleReady = this.isBluetoothConnected() || this.hasSavedBluetoothDevice();
+    if (channel === 'web_bluetooth' || (channel === 'auto' && isBleReady)) {
       try {
         const bytes = await getEscPosBytes();
         await this.printDirectBluetooth(bytes);
@@ -493,8 +494,9 @@ export class WebPrinterService {
       return EscPosBuilder.buildKot(data, paperWidth);
     };
 
-    // 1. Direct Web Bluetooth (BLE)
-    if (channel === 'web_bluetooth' || (channel === 'auto' && this.isBluetoothConnected())) {
+    // 1. Direct Web Bluetooth (BLE): check if currently connected OR has a saved printer ready to auto-reconnect
+    const isBleReady = this.isBluetoothConnected() || this.hasSavedBluetoothDevice();
+    if (channel === 'web_bluetooth' || (channel === 'auto' && isBleReady)) {
       try {
         const bytes = getEscPosBytes();
         await this.printDirectBluetooth(bytes);
@@ -744,7 +746,35 @@ export class WebPrinterService {
   }
 
   /**
-   * Get connected Bluetooth printer name
+   * Check if user previously paired and saved a Bluetooth printer in this browser
+   */
+  static hasSavedBluetoothDevice(): boolean {
+    return WebBluetoothPrinterService.getInstance().hasSavedDevice();
+  }
+
+  /**
+   * Check if Bluetooth service is actively reconnecting in background
+   */
+  static isBluetoothReconnecting(): boolean {
+    return WebBluetoothPrinterService.getInstance().isConnectingBle();
+  }
+
+  /**
+   * Auto-reconnect to saved Bluetooth printer (silent background reconnect on reload)
+   */
+  static async autoReconnectBluetooth(silent = true): Promise<boolean> {
+    return WebBluetoothPrinterService.getInstance().autoReconnect(silent);
+  }
+
+  /**
+   * Explicit user-triggered reconnect to saved Bluetooth printer
+   */
+  static async reconnectBluetooth(): Promise<{ success: boolean; deviceName?: string; message: string }> {
+    return WebBluetoothPrinterService.getInstance().reconnect();
+  }
+
+  /**
+   * Get connected or saved Bluetooth printer name
    */
   static getConnectedBluetoothDeviceName(): string | null {
     return WebBluetoothPrinterService.getInstance().getConnectedDeviceName();
@@ -758,10 +788,24 @@ export class WebPrinterService {
   }
 
   /**
-   * Disconnect active Web Bluetooth session
+   * Disconnect active Web Bluetooth session (keeps saved device for 1-click reconnect)
    */
   static async disconnectBluetoothDevice(): Promise<void> {
     return WebBluetoothPrinterService.getInstance().disconnect();
+  }
+
+  /**
+   * Completely unpair / forget Bluetooth printer and clear storage
+   */
+  static async forgetBluetoothDevice(): Promise<void> {
+    return WebBluetoothPrinterService.getInstance().forgetDevice();
+  }
+
+  /**
+   * Subscribe to real-time Bluetooth connection updates
+   */
+  static onBluetoothStatusChange(listener: (status: any) => void): () => void {
+    return WebBluetoothPrinterService.getInstance().onStatusChange(listener);
   }
 
   /**

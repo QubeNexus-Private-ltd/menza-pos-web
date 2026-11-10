@@ -1,6 +1,12 @@
-import { apiClient } from '../../core/network/apiClient';
-import { RestaurantSubscriptionHistory, SubscriptionPlan, UserSubscriptionStatus } from '../../domain/models/Subscription';
+import { apiClient, apiCacheManager } from '../../core/network/apiClient';
+import {
+  RestaurantSubscriptionHistory,
+  SubscriptionPlan,
+  UserSubscriptionStatus,
+  extractTableOrderFlag,
+} from '../../domain/models/Subscription';
 import { useAuthStore } from '../../presentation/state/useAuthStore';
+import { SubscriptionEvents } from '../../core/utils/subscriptionEvents';
 
 export class SubscriptionRemoteDataSource {
   async getPlans(): Promise<SubscriptionPlan[]> {
@@ -10,10 +16,15 @@ export class SubscriptionRemoteDataSource {
       const list = Array.isArray(data) ? data : (data?.items || data?.data || []);
       return list.map((item: any) => {
         const entitlements = item.entitlements || item.Entitlements || [];
-        const checkEntitlement = (key: string) => {
+        const checkEntitlement = (key: string, defaultIfMissing: boolean = false) => {
+          if (!Array.isArray(entitlements) || entitlements.length === 0) return defaultIfMissing;
           const e = entitlements.find((x: any) => (x.configKey || x.ConfigKey || '').toLowerCase() === key.toLowerCase());
-          return e ? Boolean(e.isAllowed ?? e.IsAllowed) : true;
+          return e ? Boolean(e.isAllowed ?? e.IsAllowed) : defaultIfMissing;
         };
+        const tableOrderFlag =
+          extractTableOrderFlag(item) ??
+          extractTableOrderFlag({ entitlements }) ??
+          checkEntitlement('IsTableOrderingEnabled', false);
         return {
           id: item.id || item.Id || 0,
           subscriptionCode: item.subscriptionCode || item.SubscriptionCode || '',
@@ -32,13 +43,13 @@ export class SubscriptionRemoteDataSource {
           minCommissionFloorPerOrder: Number(item.minCommissionFloorPerOrder ?? item.MinCommissionFloorPerOrder ?? 0),
           maxCommissionCapPerOrder: Number(item.maxCommissionCapPerOrder ?? item.MaxCommissionCapPerOrder ?? 0),
           includedWalletCredit: Number(item.includedWalletCredit ?? item.IncludedWalletCredit ?? 0),
-          allowTableOrdering: checkEntitlement('IsTableOrderingEnabled'),
-          allowCounterOrdering: checkEntitlement('IsCounterOrderingEnabled'),
-          allowSelfPickup: checkEntitlement('IsSelfPickupEnabled'),
-          allowDelivery: checkEntitlement('IsDeliveryEnabled'),
-          allowKds: checkEntitlement('IsKdsEnabled'),
-          allowOnlinePayment: checkEntitlement('AllowOnlinePayment'),
-          allowSmsNotifications: checkEntitlement('IsSmsNotificationsEnabled'),
+          allowTableOrdering: tableOrderFlag,
+          isTableOrder: tableOrderFlag,
+          allowCounterOrdering: checkEntitlement('IsCounterOrderingEnabled', true),
+          allowSelfPickup: checkEntitlement('IsSelfPickupEnabled', false),
+          allowDelivery: checkEntitlement('IsDeliveryEnabled', false),
+          allowKds: checkEntitlement('IsKdsEnabled', false),
+          allowOnlinePayment: checkEntitlement('AllowOnlinePayment', true),
           isActive: Boolean(item.isActive ?? item.IsActive ?? true),
           entitlements: entitlements.map((e: any) => ({
             id: e.id || e.Id,
@@ -183,8 +194,6 @@ export class SubscriptionRemoteDataSource {
         AllowKds: plan.allowKds ?? true,
         allowOnlinePayment: plan.allowOnlinePayment ?? true,
         AllowOnlinePayment: plan.allowOnlinePayment ?? true,
-        allowSmsNotifications: plan.allowSmsNotifications ?? true,
-        AllowSmsNotifications: plan.allowSmsNotifications ?? true,
         isActive: plan.isActive ?? true,
         IsActive: plan.isActive ?? true,
       };
@@ -202,57 +211,277 @@ export class SubscriptionRemoteDataSource {
     return await this.getRestaurantSubscription(activeRestId);
   }
 
-  async getRestaurantSubscription(restaurantId: number): Promise<UserSubscriptionStatus | null> {
+  async getRestaurantSubscription(restaurantId: number, bypassCache: boolean = true): Promise<UserSubscriptionStatus | null> {
     if (!restaurantId || restaurantId <= 0) return null;
+    if (bypassCache) {
+      apiCacheManager.invalidate('/Subscription');
+    }
+    const reqConfig: any = bypassCache
+      ? { headers: { 'Cache-Control': 'no-cache' }, skipCache: true }
+      : {};
     try {
       let activeItem: any = null;
 
-      // 1. Primary: Try dedicated ActivePlan API endpoint by restaurantId
+      // 0. Fetch available plans first for accurate configuration mapping
+      let availablePlans: SubscriptionPlan[] = [];
       try {
-        const activeRes = await apiClient.get(`/Subscription/ActivePlan/Restaurant/${restaurantId}`);
-        if (activeRes.status === 200 && activeRes.data) {
-          activeItem = activeRes.data;
-        }
-      } catch (err: any) {
-        if (err.response?.status === 403) {
-          console.warn(`[SubscriptionRemoteDataSource] Access denied (403) for restaurant ${restaurantId}. User can only view their own restaurant.`);
-          return null;
-        }
-        // ActivePlan returns 404 if no active subscription plan exists
+        availablePlans = await this.getPlans();
+      } catch {
+        // fallback
       }
 
-      // 2. Fallback: Query all restaurant subscriptions if ActivePlan endpoint returns 404
-      if (!activeItem) {
-        try {
-          const response = await apiClient.get(`/Subscription/RestaurantSubscription/Restaurant/${restaurantId}`);
-          const data = response.data;
-          const list = Array.isArray(data) ? data : (data?.items || data?.data || (data && typeof data === 'object' ? [data] : []));
-          if (Array.isArray(list) && list.length > 0) {
-            // Sort list by startDate descending (and id descending) so the newest upgrade takes precedence
-            const sortedList = [...list].sort((a: any, b: any) => {
-              const startA = new Date(a.startDate || a.StartDate || 0).getTime();
-              const startB = new Date(b.startDate || b.StartDate || 0).getTime();
-              if (startB !== startA) return startB - startA;
-              const idA = Number(a.id || a.Id || 0);
-              const idB = Number(b.id || b.Id || 0);
-              return idB - idA;
-            });
+      // Helper to unwrap server envelope
+      const unwrapItem = (raw: any): any => {
+        if (!raw || typeof raw !== 'object') return null;
+        if (raw.data && typeof raw.data === 'object' && !Array.isArray(raw.data)) return raw.data;
+        if (raw.result && typeof raw.result === 'object' && !Array.isArray(raw.result)) return raw.result;
+        if (raw.item && typeof raw.item === 'object' && !Array.isArray(raw.item)) return raw.item;
+        return raw;
+      };
 
-            // Find active or grace period first
-            activeItem = sortedList.find((x: any) => {
-              const st = (x.status || x.Status || '').toUpperCase();
-              return st === 'ACTIVE' || st === 'GRACE_PERIOD';
-            });
-            // If none active/grace, take the latest subscription
-            if (!activeItem) {
-              activeItem = sortedList[0];
-            }
-          }
-        } catch (err: any) {
-          if (err.response?.status === 403) {
-            return null;
+      // Helper to extract primary key ID from any subscription object across backend naming conventions
+      const getRecordId = (x: any): number => {
+        if (!x || typeof x !== 'object') return 0;
+        return Number(
+          x.restaurantSubscriptionRelationshipId ??
+          x.RestaurantSubscriptionRelationshipId ??
+          x.restaurantSubscriptionId ??
+          x.RestaurantSubscriptionId ??
+          x.subscriptionRelationshipId ??
+          x.SubscriptionRelationshipId ??
+          x.subscriptionId ??
+          x.SubscriptionId ??
+          x.id ??
+          x.Id ??
+          0
+        );
+      };
+
+      // Helper to extract timestamp (created, updated, payment, or start)
+      const getRecordTimestamp = (x: any): number => {
+        if (!x || typeof x !== 'object') return 0;
+        const rawDate =
+          x.createdDateUtc ||
+          x.CreatedDateUtc ||
+          x.createdDate ||
+          x.CreatedDate ||
+          x.createdAt ||
+          x.CreatedAt ||
+          x.updatedDateUtc ||
+          x.UpdatedDateUtc ||
+          x.paymentDate ||
+          x.PaymentDate ||
+          x.startDate ||
+          x.StartDate ||
+          0;
+        return rawDate ? new Date(rawDate).getTime() : 0;
+      };
+
+      // Helper to extract plan / subscriptionConfigurationId
+      const getConfigId = (x: any): number => {
+        if (!x || typeof x !== 'object') return 0;
+        const direct = Number(
+          x.subscriptionConfigurationId ??
+          x.SubscriptionConfigurationId ??
+          x.subscriptionConfigId ??
+          x.SubscriptionConfigId ??
+          x.planId ??
+          x.PlanId ??
+          x.configurationId ??
+          x.ConfigurationId ??
+          x.plan?.id ??
+          x.Plan?.id ??
+          x.subscriptionConfiguration?.id ??
+          x.SubscriptionConfiguration?.id ??
+          0
+        );
+        if (direct > 0) return direct;
+
+        // If x is a SubscriptionConfiguration object itself (e.g. from ActivePlan endpoint)
+        const idVal = Number(x.id ?? x.Id ?? 0);
+        if (idVal > 0 && Array.isArray(availablePlans) && availablePlans.some((p) => p.id === idVal)) {
+          return idVal;
+        }
+
+        // Match by subscriptionCode or planName/subscriptionName in availablePlans
+        if (Array.isArray(availablePlans) && availablePlans.length > 0) {
+          const code = String(x.subscriptionCode || x.SubscriptionCode || '').toLowerCase().trim();
+          const name = String(x.subscriptionName || x.SubscriptionName || x.planName || x.PlanName || '').toLowerCase().trim();
+          if (code || name) {
+            const matched = availablePlans.find(
+              (p) =>
+                (code && p.subscriptionCode && p.subscriptionCode.toLowerCase().trim() === code) ||
+                (name && p.subscriptionName && p.subscriptionName.toLowerCase().trim() === name) ||
+                (name && p.planName && p.planName.toLowerCase().trim() === name)
+            );
+            if (matched && matched.id > 0) return matched.id;
           }
         }
+
+        return 0;
+      };
+
+      // Check whether a candidate has an active or non-terminal status
+      const isCandidateActive = (x: any): boolean => {
+        if (!x || typeof x !== 'object') return false;
+        if (x.isActive === false || x.IsActive === false) {
+          return false;
+        }
+        const st = String(
+          x.status ??
+          x.Status ??
+          x.newStatus ??
+          x.NewStatus ??
+          x.paymentStatus ??
+          x.PaymentStatus ??
+          ''
+        ).toUpperCase().trim();
+        if (
+          st === 'EXPIRED' ||
+          st === 'CANCELLED' ||
+          st === 'FAILED' ||
+          st === 'SUPERSEDED' ||
+          st === 'TERMINATED' ||
+          st === 'UPGRADED' ||
+          st === 'REPLACED' ||
+          st === 'INACTIVE'
+        ) {
+          return false;
+        }
+        return true;
+      };
+
+      // 1. Fetch ActivePlan and RestaurantSubscription in parallel
+      let apItem: any = null;
+      let listItems: any[] = [];
+
+      const [activePlanRes, listRes] = await Promise.allSettled([
+        apiClient.get(`/Subscription/ActivePlan/Restaurant/${restaurantId}`, reqConfig),
+        apiClient.get(`/Subscription/RestaurantSubscription/Restaurant/${restaurantId}`, reqConfig),
+      ]);
+
+      if (activePlanRes.status === 'fulfilled' && activePlanRes.value?.data) {
+        const unwrapped = unwrapItem(activePlanRes.value.data);
+        if (unwrapped && typeof unwrapped === 'object') {
+          const hasId = getRecordId(unwrapped) > 0 || getConfigId(unwrapped) > 0;
+          const hasName = unwrapped.subscriptionName || unwrapped.SubscriptionName || unwrapped.planName;
+          if (hasId || hasName) {
+            apItem = unwrapped;
+          }
+        }
+      }
+
+      if (listRes.status === 'fulfilled' && listRes.value?.data) {
+        const rawData = listRes.value.data;
+        const list = Array.isArray(rawData)
+          ? rawData
+          : Array.isArray(rawData?.items)
+          ? rawData.items
+          : Array.isArray(rawData?.data)
+          ? rawData.data
+          : rawData && typeof rawData === 'object'
+          ? [rawData]
+          : [];
+        listItems = list.filter((item: any) => {
+          if (!item || typeof item !== 'object') return false;
+          const rId = Number(
+            item.restaurantId ??
+            item.RestaurantId ??
+            item.restaurantID ??
+            item.RestaurantID ??
+            0
+          );
+          return rId === 0 || rId === restaurantId;
+        });
+      }
+
+      // Fallback: If listRes was empty or failed, fetch all restaurant subscriptions and filter by restaurantId
+      if (listItems.length === 0) {
+        try {
+          const allSubs = await this.getAllRestaurantSubscriptions();
+          if (Array.isArray(allSubs) && allSubs.length > 0) {
+            listItems = allSubs.filter((item: any) => {
+              const rId = Number(
+                item.restaurantId ??
+                item.RestaurantId ??
+                item.restaurantID ??
+                item.RestaurantID ??
+                item.restaurant_id ??
+                item.Restaurant_Id ??
+                0
+              );
+              return rId === restaurantId;
+            });
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      // Collect real subscription candidates (actual subscriptions, NOT audit log history)
+      const candidates: any[] = [];
+      if (apItem && typeof apItem === 'object') {
+        candidates.push({ ...apItem, _source: 'activePlan' });
+      }
+      for (const item of listItems) {
+        if (item && typeof item === 'object') {
+          candidates.push({ ...item, _source: 'restaurantSubscription' });
+        }
+      }
+
+      // Sort candidate subscriptions so the newest, currently active plan is ALWAYS first:
+      // 1. Valid/Active status prioritized over expired/superseded/upgraded
+      // 2. Primary key ID descending (highest auto-increment ID is the newest database record)
+      // 3. Start date descending (latest start date first)
+      // 4. Created / payment timestamp descending
+      candidates.sort((a, b) => {
+        const activeA = isCandidateActive(a) ? 1 : 0;
+        const activeB = isCandidateActive(b) ? 1 : 0;
+        if (activeB !== activeA) return activeB - activeA;
+
+        const idA = getRecordId(a);
+        const idB = getRecordId(b);
+        if (idB !== idA) return idB - idA;
+
+        const startA = new Date(a.startDate || a.StartDate || 0).getTime();
+        const startB = new Date(b.startDate || b.StartDate || 0).getTime();
+        if (startB !== startA) return startB - startA;
+
+        const timeA = getRecordTimestamp(a);
+        const timeB = getRecordTimestamp(b);
+        if (timeB !== timeA) return timeB - timeA;
+
+        return 0;
+      });
+
+      // Find the winning primary candidate that has a valid configId
+      const primaryCandidate =
+        candidates.find((c) => isCandidateActive(c) && getConfigId(c) > 0) ||
+        candidates.find((c) => getConfigId(c) > 0) ||
+        candidates.find((c) => isCandidateActive(c)) ||
+        candidates[0] ||
+        null;
+
+      if (primaryCandidate) {
+        const primaryConfig = getConfigId(primaryCandidate);
+        const apConfig = apItem ? getConfigId(apItem) : 0;
+
+        if (apItem && (primaryConfig === apConfig || apConfig === 0)) {
+          activeItem = {
+            ...apItem,
+            ...primaryCandidate,
+            subscriptionConfigurationId: primaryConfig || apConfig,
+          };
+        } else {
+          // The winning candidate represents the newer plan: merge with matched plan attributes
+          activeItem = {
+            ...(apItem && apConfig === primaryConfig ? apItem : {}),
+            ...primaryCandidate,
+            subscriptionConfigurationId: primaryConfig,
+          };
+        }
+      } else {
+        activeItem = null;
       }
 
       if (activeItem) {
@@ -262,23 +491,30 @@ export class SubscriptionRemoteDataSource {
         const diffTime = endDate.getTime() - now.getTime();
         const daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
         const rawStatus = (activeItem.status || activeItem.Status || 'Active').toUpperCase();
+        const isExplicitlyInactive =
+          activeItem.isActive === false ||
+          activeItem.IsActive === false ||
+          rawStatus === 'INACTIVE';
 
         const graceEnd = new Date(endDate.getTime() + 3 * 24 * 60 * 60 * 1000);
         const isInGracePeriod =
-          activeItem.isInGracePeriod ??
-          (rawStatus === 'GRACE_PERIOD' || (now > endDate && now <= graceEnd));
+          !isExplicitlyInactive &&
+          (activeItem.isInGracePeriod ??
+          (rawStatus === 'GRACE_PERIOD' || (now > endDate && now <= graceEnd)));
 
         const graceDaysRemaining =
           activeItem.graceDaysRemaining ??
           (isInGracePeriod ? Math.max(0, Math.ceil((graceEnd.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))) : 0);
 
         const isExpired =
-          activeItem.isSubscriptionExpired ??
-          (rawStatus === 'EXPIRED' || (!isInGracePeriod && now > graceEnd && daysRemaining <= 0));
+          isExplicitlyInactive ||
+          (activeItem.isSubscriptionExpired ??
+            (rawStatus === 'EXPIRED' || (!isInGracePeriod && now > graceEnd && daysRemaining <= 0)));
 
         let lifecycleState: any = activeItem.lifecycleState || activeItem.LifecycleState;
         if (!lifecycleState) {
-          if (rawStatus === 'PENDING') lifecycleState = 'PENDING';
+          if (isExplicitlyInactive) lifecycleState = 'INACTIVE';
+          else if (rawStatus === 'PENDING') lifecycleState = 'PENDING';
           else if (rawStatus === 'UPGRADED') lifecycleState = 'UPGRADED';
           else if (rawStatus === 'CANCELLED') lifecycleState = 'CANCELLED';
           else if (isExpired) lifecycleState = 'EXPIRED';
@@ -292,30 +528,84 @@ export class SubscriptionRemoteDataSource {
         const currentCycleDaysRemaining = Number(activeItem.currentCycleDaysRemaining ?? activeItem.CurrentCycleDaysRemaining ?? daysRemaining);
         const queuedRenewalDays = Number(activeItem.queuedRenewalDays ?? activeItem.QueuedRenewalDays ?? 0);
 
+        let configId = getConfigId(activeItem) || undefined;
+
+        let matchedPlan: SubscriptionPlan | undefined;
+        if (configId && Array.isArray(availablePlans)) {
+          matchedPlan = availablePlans.find((p) => p.id === configId);
+        }
+        if (!matchedPlan && Array.isArray(availablePlans)) {
+          const code = String(activeItem.subscriptionCode || activeItem.SubscriptionCode || '').toLowerCase().trim();
+          const name = String(activeItem.subscriptionName || activeItem.SubscriptionName || activeItem.planName || activeItem.PlanName || '').toLowerCase().trim();
+          matchedPlan = availablePlans.find(
+            (p) =>
+              (code && p.subscriptionCode && p.subscriptionCode.toLowerCase().trim() === code) ||
+              (name && p.subscriptionName && p.subscriptionName.toLowerCase().trim() === name) ||
+              (name && p.planName && p.planName.toLowerCase().trim() === name)
+          );
+          if (matchedPlan) {
+            configId = matchedPlan.id;
+          }
+        }
+
+        let resolvedPlanName = matchedPlan?.subscriptionName || matchedPlan?.planName;
+        if (!resolvedPlanName) {
+          resolvedPlanName =
+            activeItem.subscriptionName ||
+            activeItem.SubscriptionName ||
+            activeItem.planName ||
+            activeItem.PlanName ||
+            activeItem.name ||
+            activeItem.Name ||
+            activeItem.plan?.subscriptionName ||
+            activeItem.plan?.planName ||
+            activeItem.plan?.name ||
+            activeItem.configuration?.subscriptionName ||
+            activeItem.subscriptionConfiguration?.subscriptionName ||
+            'Active Subscription';
+        }
+
+        const planTableOrder = matchedPlan ? extractTableOrderFlag(matchedPlan) : undefined;
+        const itemTableOrder = extractTableOrderFlag(activeItem);
+        const tableOrderFlag =
+          planTableOrder !== undefined
+            ? planTableOrder
+            : (itemTableOrder ?? Boolean(activeItem.allowTableOrdering ?? activeItem.AllowTableOrdering));
+
+        const resolvedEntitlements =
+          (matchedPlan?.entitlements && matchedPlan.entitlements.length > 0)
+            ? matchedPlan.entitlements
+            : (activeItem.entitlements && activeItem.entitlements.length > 0)
+            ? activeItem.entitlements
+            : [];
+
         return {
-          subscriptionId: activeItem.id || activeItem.Id || activeItem.subscriptionConfigurationId || 1,
-          subscriptionConfigurationId: activeItem.subscriptionConfigurationId || activeItem.SubscriptionConfigurationId || undefined,
-          planName: activeItem.subscriptionName || activeItem.SubscriptionName || activeItem.planName || 'Active Subscription',
+          subscriptionId: getRecordId(activeItem) || configId || 1,
+          subscriptionConfigurationId: configId,
+          planName: resolvedPlanName || 'Active Subscription',
           startDate: activeItem.startDate || activeItem.StartDate || new Date().toISOString(),
           endDate: endDateStr || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
           isExpired: isExpired,
+          isActive: !isExplicitlyInactive && !isExpired,
           daysRemaining: hasQueuedRenewal ? totalDaysRemaining : daysRemaining,
           isInGracePeriod: isInGracePeriod,
           graceDaysRemaining: graceDaysRemaining,
           lifecycleState: lifecycleState,
-          status: isExpired ? 'Expired' : isInGracePeriod ? 'Grace Period' : rawStatus === 'PENDING' ? 'Pending' : 'Active',
-          amountPaid: Number(activeItem.amountPaid ?? activeItem.AmountPaid ?? 0),
+          status: isExplicitlyInactive ? 'Inactive' : isExpired ? 'Expired' : isInGracePeriod ? 'Grace Period' : rawStatus === 'PENDING' ? 'Pending' : 'Active',
+          amountPaid: Number(activeItem.amountPaid ?? activeItem.AmountPaid ?? matchedPlan?.price ?? 0),
           paymentReferenceNo: activeItem.paymentReferenceNo || activeItem.PaymentReferenceNo,
-          effectiveCommissionPercentage: Number(activeItem.effectiveCommissionPercentage ?? activeItem.EffectiveCommissionPercentage ?? 0),
-          effectiveFlatCommissionPerOrder: Number(activeItem.effectiveFlatCommissionPerOrder ?? activeItem.EffectiveFlatCommissionPerOrder ?? 0),
-          effectiveMinCommissionFloor: Number(activeItem.effectiveMinCommissionFloor ?? activeItem.EffectiveMinCommissionFloor ?? 0),
-          effectiveMaxCommissionCap: Number(activeItem.effectiveMaxCommissionCap ?? activeItem.EffectiveMaxCommissionCap ?? 0),
-          entitlements: activeItem.entitlements || activeItem.Entitlements || [],
+          effectiveCommissionPercentage: Number(activeItem.effectiveCommissionPercentage ?? activeItem.EffectiveCommissionPercentage ?? matchedPlan?.baseCommissionPercentage ?? 0),
+          effectiveFlatCommissionPerOrder: Number(activeItem.effectiveFlatCommissionPerOrder ?? activeItem.EffectiveFlatCommissionPerOrder ?? matchedPlan?.baseFlatCommissionPerOrder ?? 0),
+          effectiveMinCommissionFloor: Number(activeItem.effectiveMinCommissionFloor ?? activeItem.EffectiveMinCommissionFloor ?? matchedPlan?.minCommissionFloorPerOrder ?? 0),
+          effectiveMaxCommissionCap: Number(activeItem.effectiveMaxCommissionCap ?? activeItem.EffectiveMaxCommissionCap ?? matchedPlan?.maxCommissionCapPerOrder ?? 0),
+          entitlements: resolvedEntitlements,
           hasQueuedRenewal,
           effectiveCoverageEndDate,
           totalDaysRemaining: hasQueuedRenewal ? totalDaysRemaining : daysRemaining,
           currentCycleDaysRemaining: hasQueuedRenewal ? currentCycleDaysRemaining : daysRemaining,
           queuedRenewalDays,
+          isTableOrder: tableOrderFlag,
+          allowTableOrdering: tableOrderFlag,
         };
       }
 
@@ -369,6 +659,8 @@ export class SubscriptionRemoteDataSource {
 
       const response = await apiClient.post('/Subscription/RestaurantSubscription', payload);
       if (response.status === 200 || response.status === 201) {
+        apiCacheManager.invalidate('/Subscription');
+        SubscriptionEvents.emitUpdated();
         return {
           success: true,
           message: response.data?.message || 'Subscription plan activated successfully.',
@@ -484,24 +776,46 @@ export class SubscriptionRemoteDataSource {
         restaurantId,
         subscriptionConfigurationId,
         amountPaid,
+        type: 1,
+        paymentType: 1,
+        Type: 1,
+        PaymentType: 1,
         razorpayPaymentId,
         razorpaySignature,
       });
       const paymentStatus = (response.data?.paymentStatus || response.data?.status || '').toUpperCase();
-      const gatewayStatus = (response.data?.gatewayOrderStatus || '').toUpperCase();
-      const isSuccess = paymentStatus === 'SUCCESS' || gatewayStatus === 'PAID';
+      const gatewayStatus = (response.data?.gatewayOrderStatus || response.data?.orderStatus || '').toUpperCase();
+      const isSuccess =
+        response.data?.success === true ||
+        response.data?.isSuccess === true ||
+        paymentStatus === 'SUCCESS' ||
+        paymentStatus === 'PAID' ||
+        paymentStatus === 'COMPLETED' ||
+        gatewayStatus === 'PAID' ||
+        gatewayStatus === 'SUCCESS' ||
+        gatewayStatus === 'COMPLETED';
+
+      if (isSuccess) {
+        apiCacheManager.invalidate('/Subscription');
+        apiCacheManager.invalidate('/CashFreepayment');
+        SubscriptionEvents.emitUpdated();
+      }
 
       return {
         success: isSuccess,
         message: isSuccess
           ? 'Payment verified & subscription activated successfully.'
-          : (response.data?.failureReason || 'Payment verification pending or failed.'),
+          : (response.data?.failureReason || response.data?.message || 'Payment verification pending or failed.'),
       };
     } catch (error: any) {
       const serverMsg = error.response?.data?.message || error.response?.data;
-      const message = typeof serverMsg === 'string' ? serverMsg : (error.message || 'CashFree verification failed.');
+      const message = typeof serverMsg === 'string' ? serverMsg : (error.message || 'Payment verification failed.');
       return { success: false, message };
     }
+  }
+
+  async checkCashFreePaymentStatus(orderId: string) {
+    return this.getCashFreePaymentStatus(orderId);
   }
 
   async getCashFreePaymentStatus(
@@ -516,13 +830,17 @@ export class SubscriptionRemoteDataSource {
   }> {
     try {
       const response = await apiClient.get(`/CashFreepayment/status/${orderId}`);
+      const data = response.data;
+      const rawStatus = (data?.paymentStatus || data?.status || (data?.success ? 'SUCCESS' : 'PENDING')).toUpperCase();
+      const rawGateway = (data?.gatewayOrderStatus || data?.orderStatus || '').toUpperCase();
+
       return {
-        orderId: response.data?.orderId || orderId,
-        paymentStatus: response.data?.paymentStatus || 'PENDING',
-        gatewayOrderStatus: response.data?.gatewayOrderStatus || '',
-        transactionId: response.data?.transactionId || '',
-        amount: response.data?.amount || 0,
-        failureReason: response.data?.failureReason || '',
+        orderId: data?.orderId || orderId,
+        paymentStatus: rawStatus,
+        gatewayOrderStatus: rawGateway,
+        transactionId: data?.transactionId || data?.paymentId || '',
+        amount: Number(data?.amount || 0),
+        failureReason: data?.failureReason || data?.message || '',
       };
     } catch (error: any) {
       return {

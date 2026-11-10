@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
+import { WalletSkeleton } from '@/components/common/Skeleton';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { WebWalletService, RestaurantWalletDTO, WalletTransactionDTO } from '@/services/walletService';
 import { PaymentGatewayService, isRazorpayActive } from '@/payments/paymentGatewayService.web';
@@ -94,6 +95,7 @@ export default function WalletPage() {
   const currentRestId =
     activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
+
   const [wallet, setWallet] = useState<RestaurantWalletDTO | null>(null);
   const [transactions, setTransactions] = useState<WalletTransactionDTO[]>([]);
   const [loading, setLoading] = useState(true);
@@ -123,10 +125,25 @@ export default function WalletPage() {
   const [selectedInvoice, setSelectedInvoice] = useState<TaxInvoiceItem | null>(null);
   const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
 
+  // Clean slate and show skeleton immediately upon restaurant switch
+  useEffect(() => {
+    setWallet(null);
+    setTransactions([]);
+    setLoading(true);
+  }, [currentRestId]);
+
+
   const handleOpenInvoice = (tx: WalletTransactionDTO) => {
-    const rawDigits = tx.id.replace(/[^0-9]/g, '');
-    const seqStr = rawDigits ? rawDigits.slice(-5).padStart(5, '0') : '00001';
-    const invNumber = tx.invoiceNumber || `MZ/26-27/W${seqStr}`;
+    if (!tx || Number(tx.amount || 0) <= 0) return;
+    if (!tx.transactionType?.toUpperCase().includes('RECHARGE')) {
+      alert('Tax Invoices are only issued for paid wallet recharges. Complimentary bonus credits and plan inclusions are covered under your Subscription Tax Invoice in Settings > Billing.');
+      return;
+    }
+    if (!tx.invoiceNumber) {
+      alert('A verified Tax Invoice number has not yet been generated for this recharge transaction.');
+      return;
+    }
+    const invNumber = tx.invoiceNumber;
 
     const recipientGst =
       wallet?.restaurantGstNumber ||
@@ -682,11 +699,17 @@ export default function WalletPage() {
               <button
                 type="button"
                 onClick={() => {
-                  const latestCredit = transactions.find((t) => t.direction === 'CREDIT');
-                  if (latestCredit) {
-                    handleOpenInvoice(latestCredit);
+                  const latestRecharge = transactions.find(
+                    (t) =>
+                      t.direction === 'CREDIT' &&
+                      t.transactionType.toUpperCase().includes('RECHARGE') &&
+                      Boolean(t.invoiceNumber) &&
+                      Number(t.amount || 0) > 0
+                  );
+                  if (latestRecharge) {
+                    handleOpenInvoice(latestRecharge);
                   } else {
-                    alert('No wallet recharge credits found yet. Top up your wallet to generate and download a GST Tax Invoice.');
+                    alert('No verified wallet recharge tax invoices found yet. Top up your wallet to generate a GST Tax Invoice, or visit Billing for your Subscription Tax Invoice.');
                   }
                 }}
                 className="flex items-center gap-1.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 px-3.5 py-2 text-xs font-bold text-emerald-700 dark:text-emerald-400 transition-colors shadow-xs cursor-pointer"
@@ -1009,10 +1032,20 @@ export default function WalletPage() {
               </div>
             </div>
 
-            {loading ? (
-              <div className="py-12 text-center text-xs text-[#667085]">
-                <RefreshCw className="h-5 w-5 animate-spin mx-auto mb-2 text-[#DE8626]" />
-                <span>Loading wallet ledger entries...</span>
+            {loading && transactions.length === 0 ? (
+              <div className="divide-y divide-[#E7E1DA]/60 dark:divide-[#2B3540]/60 animate-pulse p-4 space-y-3">
+                {[1,2,3,4,5].map(i => (
+                  <div key={i} className="pt-3 first:pt-0 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="h-9 w-9 rounded-xl bg-black/10 dark:bg-white/10" />
+                      <div className="space-y-1.5">
+                        <div className="h-3.5 w-36 rounded bg-black/10 dark:bg-white/10" />
+                        <div className="h-3 w-20 rounded bg-black/10 dark:bg-white/10" />
+                      </div>
+                    </div>
+                    <div className="h-5 w-20 rounded-lg bg-black/10 dark:bg-white/10" />
+                  </div>
+                ))}
               </div>
             ) : filteredTransactions.length === 0 ? (
               <div className="py-12 text-center text-xs text-[#667085] dark:text-[#94A3B8]">
@@ -1063,7 +1096,7 @@ export default function WalletPage() {
                                     Ref: {tx.paymentReference}
                                   </span>
                                 )}
-                                {(isCredit && (tx.invoiceNumber || tx.transactionType.toUpperCase().includes('RECHARGE'))) && (
+                                {(isCredit && tx.transactionType.toUpperCase().includes('RECHARGE') && Boolean(tx.invoiceNumber)) && (
                                   <button
                                     type="button"
                                     onClick={() => handleOpenInvoice(tx)}
@@ -1071,7 +1104,7 @@ export default function WalletPage() {
                                     title="View & Print GST Tax Invoice"
                                   >
                                     <FileText className="h-3 w-3 text-emerald-600" />
-                                    <span>{tx.invoiceNumber || 'Tax Invoice'}</span>
+                                    <span>{tx.invoiceNumber}</span>
                                   </button>
                                 )}
                               </div>
@@ -1161,7 +1194,7 @@ export default function WalletPage() {
 
                             {/* Dedicated Tax Invoice Download / View Column */}
                             <td className="py-3.5 pl-3 align-middle text-center whitespace-nowrap">
-                              {isCredit ? (
+                              {isCredit && tx.transactionType.toUpperCase().includes('RECHARGE') && Boolean(tx.invoiceNumber) ? (
                                 <button
                                   type="button"
                                   onClick={() => handleOpenInvoice(tx)}
@@ -1172,6 +1205,13 @@ export default function WalletPage() {
                                   <span>Invoice</span>
                                   <Download className="h-3 w-3 opacity-80" />
                                 </button>
+                              ) : isCredit && tx.transactionType.toUpperCase().includes('BONUS') ? (
+                                <span
+                                  className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold text-amber-700 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20"
+                                  title="Complimentary benefit included with your SaaS subscription. See Billing for your full Subscription Tax Invoice."
+                                >
+                                  Plan Perk
+                                </span>
                               ) : (
                                 <span className="text-[11px] text-[#667085] dark:text-[#94A3B8]">—</span>
                               )}
@@ -1280,24 +1320,16 @@ export default function WalletPage() {
                     <button
                       type="button"
                       onClick={() => {
-                        const latestCredit = transactions.find((t) => t.direction === 'CREDIT');
-                        if (latestCredit) {
-                          handleOpenInvoice(latestCredit);
+                        const latestRecharge = transactions.find(
+                          (t) =>
+                            t.direction === 'CREDIT' &&
+                            t.transactionType.toUpperCase().includes('RECHARGE') &&
+                            Boolean(t.invoiceNumber)
+                        );
+                        if (latestRecharge) {
+                          handleOpenInvoice(latestRecharge);
                         } else {
-                          handleOpenInvoice({
-                            id: `MZ-TX-${Date.now()}`,
-                            restaurantId: currentRestId || '',
-                            amount: rechargeAmount,
-                            baseAmount: rechargeBaseAmount,
-                            taxAmount: rechargeTaxAmount,
-                            taxPercentage: gstRate,
-                            direction: 'CREDIT',
-                            transactionType: 'WALLET_RECHARGE',
-                            description: 'Wallet top-up',
-                            balanceBefore: wallet?.balance || 0,
-                            balanceAfter: (wallet?.balance || 0) + rechargeAmount,
-                            createdAt: new Date().toISOString(),
-                          } as any);
+                          alert('Recharge invoice is being generated. You can download it shortly from your ledger below.');
                         }
                       }}
                       className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 px-4 py-2.5 text-xs font-bold text-white shadow-md transition-colors cursor-pointer"

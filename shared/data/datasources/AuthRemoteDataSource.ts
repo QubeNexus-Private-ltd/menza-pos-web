@@ -94,6 +94,7 @@ export class AuthRemoteDataSource {
       bannerUrl: topImage,
       restaurants: mappedRestaurants,
       isTermConditionChecked: Boolean(raw.isTermConditionChecked ?? raw.IsTermConditionChecked ?? false),
+      isPinConfigured: Boolean(raw.isPinConfigured ?? raw.IsPinConfigured ?? false),
     };
   }
 
@@ -186,5 +187,51 @@ export class AuthRemoteDataSource {
       console.warn('Backend Logout API call failed, continuing with client logout', err);
       return true;
     }
+  }
+  async loginWithStaffPin(
+    paramsOrRestId: { pin: string; mobile?: string; restaurantId?: number; deviceId?: string } | number,
+    pin?: string,
+    deviceId?: string
+  ): Promise<AuthResponse> {
+    let payload: { pin: string; mobileNumber?: string; restaurantId?: number; deviceId?: string };
+
+    if (typeof paramsOrRestId === 'object') {
+      const cleanMobile = paramsOrRestId.mobile
+        ? paramsOrRestId.mobile.replace(/[^0-9]/g, '').slice(-10)
+        : undefined;
+      payload = {
+        pin: String(paramsOrRestId.pin || '').trim(),
+        mobileNumber: cleanMobile,
+        restaurantId: paramsOrRestId.restaurantId,
+        deviceId: paramsOrRestId.deviceId,
+      };
+    } else {
+      payload = {
+        restaurantId: paramsOrRestId,
+        pin: String(pin || '').trim(),
+        deviceId,
+      };
+    }
+
+    const response = await apiClient.post('/Auth/StaffPinLogin', payload);
+    return this.mapAuthResponse(response.data);
+  }
+
+  async setStaffPin(targetUserId: number, pin: string): Promise<boolean> {
+    const response = await apiClient.post('/Auth/SetStaffPin', {
+      targetUserId,
+      pin: String(pin || '').trim(),
+    });
+    return response.status === 200;
+  }
+  async resetPinWithOtp(mobile: string, otpCode: string, newPin: string, deviceId?: string): Promise<AuthResponse> {
+    const cleanMobile = String(mobile || '').replace(/[^0-9]/g, '').slice(-10);
+    const response = await apiClient.post('/Auth/ResetPinWithOtp', {
+      mobileNumber: cleanMobile,
+      otpCode: String(otpCode || '').trim(),
+      newPin: String(newPin || '').trim(),
+      deviceId,
+    });
+    return this.mapAuthResponse(response.data);
   }
 }

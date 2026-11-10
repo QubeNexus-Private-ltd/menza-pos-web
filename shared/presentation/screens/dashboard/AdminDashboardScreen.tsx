@@ -74,10 +74,14 @@ import { useAuthStore } from '../../state/useAuthStore';
 import { usePrinterStore } from '../../state/usePrinterStore';
 import { useNotificationStore } from '../../state/useNotificationStore';
 import { useAppVersionStore } from '../../state/useAppVersionStore';
-import { useSubscriptionStore } from '../../state/useSubscriptionStore';
+import { AppUpdateModal } from '../../components/AppUpdateModal';
+import { useSubscriptionStore, isTableOrderSubscriptionAllowed, extractTableOrderFlag } from '../../state/useSubscriptionStore';
+import { getPlanFeatureList, getSubscriptionFeatureList, formatEntitlementTitle } from '../../../core/utils/entitlementCatalog';
 import { SubscriptionGraceBanner } from '../../components/subscription/SubscriptionGraceBanner';
 import { APP_CONSTANTS } from '../../../core/constants/appConstants';
 import { isCashierOnly } from '../../../core/auth/rolePermissions';
+import { SubscriptionEvents } from '../../../core/utils/subscriptionEvents';
+import { apiCacheManager } from '../../../core/network/apiClient';
 import { AuthRemoteDataSource } from '../../../data/datasources/AuthRemoteDataSource';
 import { SubscriptionRemoteDataSource } from '../../../data/datasources/SubscriptionRemoteDataSource';
 import { OrderRemoteDataSource } from '../../../data/datasources/OrderRemoteDataSource';
@@ -210,14 +214,14 @@ export const AdminDashboardScreen: React.FC = () => {
   const subscriptionDataSource = useMemo(() => new SubscriptionRemoteDataSource(), []);
   const orderRemoteDataSource = useMemo(() => new OrderRemoteDataSource(), []);
   const superAdminRepository = useMemo(() => new SuperAdminRepositoryImpl(new SuperAdminRemoteDataSource()), []);
-  /*
   const {
     updateInfo: appVersionUpdateInfo,
+    latestVersion: appVersionLatest,
+    latestBuildNumber: appVersionBuild,
     isChecking: isCheckingAppVersion,
     checkAppVersion,
     showUpdateModal,
   } = useAppVersionStore();
-  */
 
   const [activeTab, setActiveTab] = useState<NavTabKey>('dashboard');
   const [restModalVisible, setRestModalVisible] = useState(false);
@@ -226,10 +230,18 @@ export const AdminDashboardScreen: React.FC = () => {
   useEffect(() => {
     logger.navigation('AdminDashboardScreen');
     initPrinter();
-  }, [initPrinter]);
+    checkAppVersion(false);
+  }, [initPrinter, checkAppVersion]);
+
+  useEffect(() => {
+    if (activeTab === 'more') {
+      checkAppVersion(false);
+    }
+  }, [activeTab, checkAppVersion]);
 
   // Subscription Lock & Plan Selector State
-  const [activeSubscription, setActiveSubscription] = useState<UserSubscriptionStatus | null>(null);
+  const storeSubscription = useSubscriptionStore((state) => state.subscription);
+  const [activeSubscription, setActiveSubscription] = useState<UserSubscriptionStatus | null>(storeSubscription);
   const [loadingSubscription, setLoadingSubscription] = useState<boolean>(true);
   const [planSelectionModalVisible, setPlanSelectionModalVisible] = useState<boolean>(false);
   const [selectedSubscriptionDetailsModalVisible, setSelectedSubscriptionDetailsModalVisible] = useState<boolean>(false);
@@ -238,6 +250,12 @@ export const AdminDashboardScreen: React.FC = () => {
   const [walletBalance, setWalletBalance] = useState<number | null>(null);
   const [availablePlans, setAvailablePlans] = useState<SubscriptionPlan[]>([]);
   const [subscribingId, setSubscribingId] = useState<number | null>(null);
+
+  // Synchronize local activeSubscription whenever store updates
+  useEffect(() => {
+    setActiveSubscription(storeSubscription);
+  }, [storeSubscription]);
+
   const [processingOrder, setProcessingOrder] = useState<{
     orderId: string;
     planName: string;
@@ -519,8 +537,9 @@ export const AdminDashboardScreen: React.FC = () => {
       } else {
         await fetchUserRestaurants();
         if (currentRestId > 0) {
+          apiCacheManager.invalidate('/Subscription');
           await Promise.all([
-            fetchSubscriptionData(currentRestId),
+            fetchSubscriptionData(currentRestId, true),
             fetchTodayRevenueData(currentRestId, true),
             fetchWalletBalance(currentRestId),
             fetchOperatingStatus(currentRestId),
@@ -543,7 +562,7 @@ export const AdminDashboardScreen: React.FC = () => {
         setRestaurants(userRestList);
         const resolvedId = activeRestaurant?.restaurantId || userRestList[0]?.restaurantId;
         if (resolvedId && resolvedId > 0) {
-          fetchSubscriptionData(resolvedId);
+          fetchSubscriptionData(resolvedId, true);
           fetchTodayRevenueData(resolvedId, true);
         }
       }
@@ -554,10 +573,14 @@ export const AdminDashboardScreen: React.FC = () => {
     }
   };
 
-  const fetchSubscriptionData = async (restId: number) => {
+  const fetchSubscriptionData = async (restId: number, forceRefresh: boolean = true) => {
     try {
       setLoadingSubscription(true);
-      const sub = await useSubscriptionStore.getState().fetchSubscriptionStatus(restId);
+      if (forceRefresh) {
+        apiCacheManager.invalidate('/Subscription');
+      }
+      loadSubscriptionPlans();
+      const sub = await useSubscriptionStore.getState().fetchSubscriptionStatus(restId, forceRefresh);
       setActiveSubscription(sub);
       if (!sub || (sub.isExpired && !sub.isInGracePeriod)) {
         if (!isCashier) {
@@ -579,7 +602,9 @@ export const AdminDashboardScreen: React.FC = () => {
   const loadSubscriptionPlans = async () => {
     try {
       const plans = await subscriptionDataSource.getPlans();
-      setAvailablePlans(plans.filter((p) => p.isActive));
+      const activePlans = plans.filter((p) => p.isActive);
+      setAvailablePlans(activePlans);
+      useSubscriptionStore.setState({ plans: activePlans });
     } catch {
       // fallback
     }
@@ -600,11 +625,22 @@ export const AdminDashboardScreen: React.FC = () => {
   }, [activeSubscription, availablePlans]);
 
   const handleOpenSelectedSubscriptionDetails = () => {
-    if (availablePlans.length === 0) {
-      loadSubscriptionPlans();
+    loadSubscriptionPlans();
+    if (currentRestId > 0) {
+      fetchSubscriptionData(currentRestId, true);
     }
     setSelectedSubscriptionDetailsModalVisible(true);
   };
+
+  // React to subscription update events
+  useEffect(() => {
+    const unsub = SubscriptionEvents.subscribeUpdated(() => {
+      if (currentRestId > 0) {
+        fetchSubscriptionData(currentRestId, true);
+      }
+    });
+    return unsub;
+  }, [currentRestId]);
 
   const handleActivatePlan = async (plan: SubscriptionPlan) => {
     if (!currentRestId) {
@@ -613,6 +649,34 @@ export const AdminDashboardScreen: React.FC = () => {
     }
 
     const finalPrice = plan.finalPrice ?? Math.max(0, plan.price - (plan.discountAmount || 0));
+
+    // Handle direct activation for SuperAdmin or free plans / 0 amount
+    if (isSuperAdmin || finalPrice <= 0) {
+      try {
+        setSubscribingId(plan.id);
+        const assignRes = await subscriptionDataSource.assignSubscription(
+          currentRestId,
+          plan.id,
+          plan.durationInDays || plan.durationDays || 30,
+          0
+        );
+        if (assignRes.success) {
+          apiCacheManager.invalidate('/Subscription');
+          SubscriptionEvents.emitUpdated();
+          await fetchSubscriptionData(currentRestId, true);
+          setSelectedSubscriptionDetailsModalVisible(false);
+          setPlanSelectionModalVisible(false);
+          Alert.alert('Plan Activated 🎉', `Your plan "${plan.subscriptionName || plan.planName}" is now active.`);
+        } else {
+          Alert.alert('Activation Error', assignRes.message || 'Failed to activate plan.');
+        }
+      } catch (err: any) {
+        Alert.alert('Activation Error', err?.message || 'Failed to activate plan.');
+      } finally {
+        setSubscribingId(null);
+      }
+      return;
+    }
 
     const executePayment = async () => {
       try {
@@ -664,19 +728,39 @@ export const AdminDashboardScreen: React.FC = () => {
         }
 
         // Immediately verify and activate subscription (aligned with Wallet Recharge flow)
-        if (paymentResult?.razorpayPaymentId || paymentResult?.razorpaySignature) {
+        if (paymentResult?.success || paymentResult?.razorpayPaymentId || paymentResult?.razorpaySignature) {
           try {
-            await subscriptionDataSource.verifyCashFreePayment(
+            const vRes = await subscriptionDataSource.verifyCashFreePayment(
               payRes.orderId,
               currentRestId,
               plan.id,
               finalPrice,
-              paymentResult.razorpayPaymentId,
-              paymentResult.razorpaySignature
+              paymentResult?.razorpayPaymentId,
+              paymentResult?.razorpaySignature
             );
+            if (vRes.success) {
+              setProcessingOrder(null);
+              apiCacheManager.invalidate('/Subscription');
+              SubscriptionEvents.emitUpdated();
+              await fetchSubscriptionData(currentRestId, true);
+              Alert.alert('Plan Activated 🎉', `Your plan "${plan.subscriptionName || plan.planName}" is now active.`);
+            } else {
+              const pollRes = await subscriptionDataSource.checkCashFreePaymentStatus(payRes.orderId);
+              if (pollRes?.paymentStatus === 'SUCCESS' || pollRes?.gatewayOrderStatus === 'paid') {
+                setProcessingOrder(null);
+                apiCacheManager.invalidate('/Subscription');
+                SubscriptionEvents.emitUpdated();
+                await fetchSubscriptionData(currentRestId, true);
+                Alert.alert('Plan Activated 🎉', `Your plan "${plan.subscriptionName || plan.planName}" is now active.`);
+              } else {
+                Alert.alert('Payment Processing', 'Your payment is being confirmed. Your subscription will be updated shortly.');
+              }
+            }
           } catch (vErr) {
             console.warn('Subscription auto-verify note:', vErr);
           }
+        } else if (paymentResult && paymentResult.success === false) {
+          setProcessingOrder(null);
         }
       } catch (err: any) {
         Alert.alert('Payment Exception', err?.message || 'Failed to initiate payment.');
@@ -713,32 +797,195 @@ export const AdminDashboardScreen: React.FC = () => {
     await executePayment();
   };
 
-  const hasActiveSub = isSuperAdmin || (!!activeSubscription && !activeSubscription.isExpired && activeSubscription.daysRemaining > 0);
+  const hasActiveSub =
+    isSuperAdmin ||
+    (!!activeSubscription &&
+      !activeSubscription.isExpired &&
+      activeSubscription.isActive !== false &&
+      activeSubscription.lifecycleState !== 'INACTIVE' &&
+      activeSubscription.status?.toUpperCase() !== 'INACTIVE' &&
+      activeSubscription.daysRemaining > 0);
 
   const checkEntitlement = (key: string): boolean => {
     if (isSuperAdmin) return true;
     if (!hasActiveSub || !activeSubscription) return false;
     const entitlements = activeSubscription.entitlements || [];
     if (!Array.isArray(entitlements) || entitlements.length === 0) return false;
-    const ent: any = entitlements.find((e: any) => (e.configKey || e.ConfigKey || '').toLowerCase() === key.toLowerCase());
+    const targetKey = key.toLowerCase();
+    const isKds = targetKey === 'iskdsenabled' || targetKey === 'iskdsappenabled' || targetKey === 'iscaptainmenzaappenabled';
+    const ent: any = entitlements.find((e: any) => {
+      const k = (e.configKey || e.ConfigKey || '').toLowerCase();
+      return isKds
+        ? (k === 'iskdsenabled' || k === 'iskdsappenabled' || k === 'iscaptainmenzaappenabled')
+        : k === targetKey;
+    });
     return ent ? Boolean(ent.isAllowed ?? ent.IsAllowed) : false;
   };
 
-  // Core ordering flows (Counter ordering & Table floor) are NEVER blocked by subscription
-  const isTableOrderingAllowed = true;
-  const isTableOrderingActive = operatingStatus?.businessProfile !== 'QSR_CAFE';
+  // Gated strictly by subscription plan for Table ordering, Floor Tables tab & controller profile options
+  const isTableOrderInSubscription = useMemo(() => {
+    if (isSuperAdmin) return true;
+    const currentSub = activeSubscription || storeSubscription;
+    const currentPlans = availablePlans.length > 0 ? availablePlans : useSubscriptionStore.getState().plans;
+    return isTableOrderSubscriptionAllowed(currentSub, currentPlans);
+  }, [isSuperAdmin, activeSubscription, storeSubscription, availablePlans]);
+
+  const isTableOrderingAllowed = isTableOrderInSubscription;
+    const isTableOrderingActive = isTableOrderInSubscription && operatingStatus?.businessProfile !== 'QSR_CAFE';
   const isCounterOrderingAllowed = true;
   // Feature-gated by subscription plan
   const isKdsAllowed = checkEntitlement('IsKdsEnabled');
   const isSmsAllowed = checkEntitlement('IsSmsNotificationsEnabled');
-  const isPosAndCounterOrderingAllowed = true;
+  const isPosBillingAllowed = useMemo(() => {
+    if (isSuperAdmin) return true;
+    return useSubscriptionStore.getState().isFeatureAllowed('posBilling');
+  }, [isSuperAdmin, activeSubscription, storeSubscription]);
+  const isReportsAllowed = useMemo(() => {
+    if (isSuperAdmin) return true;
+    return useSubscriptionStore.getState().isFeatureAllowed('reports');
+  }, [isSuperAdmin, activeSubscription, storeSubscription]);
+  const isStaffRolesAllowed = useMemo(() => {
+    if (isSuperAdmin) return true;
+    return useSubscriptionStore.getState().isFeatureAllowed('staffPinLock');
+  }, [isSuperAdmin, activeSubscription, storeSubscription]);
+  const isPosAndCounterOrderingAllowed = isPosBillingAllowed;
+
+  // Strictly locked when no active subscription or expired beyond grace period
+  const isStrictlyLocked = useMemo(() => {
+    if (isSuperAdmin) return false;
+    const currentSub = activeSubscription || storeSubscription;
+    const hasLoaded = useSubscriptionStore.getState().hasLoaded;
+    if (!hasLoaded) return false;
+    if (!currentSub || currentSub.lifecycleState === 'NONE' || currentSub.lifecycleState === 'INACTIVE') return true;
+    if (currentSub.isExpired && !currentSub.isInGracePeriod) return true;
+    return false;
+  }, [isSuperAdmin, activeSubscription, storeSubscription]);
+
+  // Auto-redirect if store is currently on tables or pos tab but plan does not allow it
+  useEffect(() => {
+    if (activeTab === 'tables' && !isTableOrderInSubscription && !isSuperAdmin) {
+      setActiveTab('dashboard');
+    }
+    if (activeTab === 'pos' && !isPosBillingAllowed && !isSuperAdmin) {
+      setActiveTab('dashboard');
+    }
+  }, [activeTab, isTableOrderInSubscription, isPosBillingAllowed, isSuperAdmin]);
+
+  // Auto-open paywall blocker when strictly locked
+  useEffect(() => {
+    if (isStrictlyLocked && !isCashier) {
+      loadSubscriptionPlans();
+      setPlanSelectionModalVisible(true);
+    }
+  }, [isStrictlyLocked, isCashier]);
 
   const handleTabChange = (tab: NavTabKey) => {
-    // POS billing, table ordering, menus, and management are NEVER blocked by subscription
+    if (tab === 'tables' && !isTableOrderInSubscription) {
+      Alert.alert(
+        'Subscription Required',
+        'Dine-in and Table Seating require a subscription plan with Table Ordering enabled. Please upgrade your plan to unlock table service.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'View Plans',
+            onPress: () => {
+              loadSubscriptionPlans();
+              setPlanSelectionModalVisible(true);
+            },
+          },
+        ]
+      );
+      return;
+    }
+    if (tab === 'pos' && !isPosBillingAllowed) {
+      Alert.alert(
+        'Subscription Required',
+        'POS Billing Terminal requires a plan with POS Terminal Billing enabled. Please upgrade your plan to unlock POS billing.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'View Plans',
+            onPress: () => {
+              loadSubscriptionPlans();
+              setPlanSelectionModalVisible(true);
+            },
+          },
+        ]
+      );
+      return;
+    }
     setActiveTab(tab);
   };
 
-  const handleModulePress = (moduleKey: 'catalog' | 'tables' | 'pos' | 'roles' | 'config' | 'reports', isFeatureAllowed: boolean = true) => {
+  const handleModulePress = (moduleKey: 'catalog' | 'tables' | 'pos' | 'roles' | 'config' | 'reports', _isFeatureAllowed: boolean = true) => {
+    if (moduleKey === 'tables' && !isTableOrderInSubscription) {
+      Alert.alert(
+        'Subscription Required',
+        'Floor Tables and Table Seating require a plan with Table Ordering enabled.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Upgrade Plan',
+            onPress: () => {
+              loadSubscriptionPlans();
+              setPlanSelectionModalVisible(true);
+            },
+          },
+        ]
+      );
+      return;
+    }
+    if (moduleKey === 'pos' && !isPosBillingAllowed) {
+      Alert.alert(
+        'Subscription Required',
+        'POS Billing Terminal requires a plan with POS Terminal Billing enabled. Please upgrade your plan to unlock POS billing.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Upgrade Plan',
+            onPress: () => {
+              loadSubscriptionPlans();
+              setPlanSelectionModalVisible(true);
+            },
+          },
+        ]
+      );
+      return;
+    }
+    if (moduleKey === 'reports' && !isReportsAllowed) {
+      Alert.alert(
+        'Subscription Required',
+        'Business Reports & BI require a plan with Business Analytics enabled. Please upgrade your plan to unlock sales metrics and reports.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Upgrade Plan',
+            onPress: () => {
+              loadSubscriptionPlans();
+              setPlanSelectionModalVisible(true);
+            },
+          },
+        ]
+      );
+      return;
+    }
+    if (moduleKey === 'roles' && !isStaffRolesAllowed) {
+      Alert.alert(
+        'Subscription Required',
+        'Staff Members, Roles & Permissions require a plan with Staff Security & PIN Lock enabled. Please upgrade your plan to unlock staff permissions.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Upgrade Plan',
+            onPress: () => {
+              loadSubscriptionPlans();
+              setPlanSelectionModalVisible(true);
+            },
+          },
+        ]
+      );
+      return;
+    }
     logger.action('NAVIGATION', 'DASHBOARD_MODULE_OPENED', `Opened dashboard module: ${moduleKey}`, { moduleKey });
     setActiveTab(moduleKey as NavTabKey);
   };
@@ -1039,7 +1286,7 @@ export const AdminDashboardScreen: React.FC = () => {
                 <View
                   style={[
                     styles.saActionPill,
-                    operatingStatus?.isKitchenActive === false
+                    operatingStatus?.isKitchenActive === false || !isKdsAllowed
                       ? { backgroundColor: '#F3F4F6', borderColor: 'rgba(107, 114, 128, 0.3)' }
                       : { backgroundColor: '#DCFCE7', borderColor: 'rgba(22, 163, 74, 0.3)' },
                   ]}
@@ -1047,10 +1294,10 @@ export const AdminDashboardScreen: React.FC = () => {
                   <Text
                     style={[
                       styles.saActionPillText,
-                      { color: operatingStatus?.isKitchenActive === false ? '#6B7280' : '#16A34A' },
+                      { color: operatingStatus?.isKitchenActive === false || !isKdsAllowed ? '#6B7280' : '#16A34A' },
                     ]}
                   >
-                    {operatingStatus?.isKitchenActive === false ? 'SIMPLIFIED' : 'LIVE KDS'}
+                    {!isKdsAllowed ? 'SIMPLIFIED 🔒' : operatingStatus?.isKitchenActive === false ? 'SIMPLIFIED' : 'LIVE KDS'}
                   </Text>
                 </View>
               </View>
@@ -1309,24 +1556,39 @@ export const AdminDashboardScreen: React.FC = () => {
         </View>
       )}
 
-      {/* App Version Display (Check commented out as requested) */}
+      {/* App Version Display (Retrieved from AppVersion API: appType=POS_ADMIN, platform=android) */}
       <View style={[styles.settingsTileCard, { marginTop: 10 }]}>
         <View style={[styles.settingsTileIconBox, { backgroundColor: '#FFF0DE' }]}>
           <ArrowUpCircle size={20} color="#D96B14" />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.settingsTileTitle}>Menza POS App</Text>
-          <Text style={styles.settingsTileDesc}>
-            Version {APP_CONSTANTS.APP_VERSION}
-          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 }}>
+            <Text style={styles.settingsTileDesc}>
+              Version {appVersionLatest || appVersionUpdateInfo?.latestVersion || APP_CONSTANTS.APP_VERSION}
+              {appVersionBuild || appVersionUpdateInfo?.latestBuildNumber
+                ? ' (Build ' + (appVersionBuild || appVersionUpdateInfo?.latestBuildNumber) + ')'
+                : ''}
+            </Text>
+            {isCheckingAppVersion ? (
+              <ActivityIndicator size="small" color="#D96B14" style={{ transform: [{ scale: 0.7 }] }} />
+            ) : null}
+          </View>
         </View>
 
-        {/* Remote version check commented out as requested
         <TouchableOpacity
           style={{
-            backgroundColor: '#F3F4F6',
-            paddingHorizontal: 12,
-            paddingVertical: 7,
+            backgroundColor:
+              appVersionUpdateInfo?.isSoftUpdateAvailable || appVersionUpdateInfo?.isForceUpdateRequired
+                ? '#FFF0DE'
+                : '#F3F4F6',
+            borderWidth: 1,
+            borderColor:
+              appVersionUpdateInfo?.isSoftUpdateAvailable || appVersionUpdateInfo?.isForceUpdateRequired
+                ? '#FED7AA'
+                : '#E5E7EB',
+            paddingHorizontal: 10,
+            paddingVertical: 6,
             borderRadius: 8,
             alignItems: 'center',
             justifyContent: 'center',
@@ -1339,7 +1601,10 @@ export const AdminDashboardScreen: React.FC = () => {
             }
             const res = await checkAppVersion(true);
             if (res?.isUpToDate) {
-              Alert.alert('App Up to Date', `You are running the latest version of Menza POS (v${APP_CONSTANTS.APP_VERSION}).`);
+              Alert.alert(
+                'App Up to Date',
+                'You are running the latest version of Menza POS (v' + (res.latestVersion || APP_CONSTANTS.APP_VERSION) + ').'
+              );
             }
           }}
           activeOpacity={0.7}
@@ -1347,12 +1612,22 @@ export const AdminDashboardScreen: React.FC = () => {
           {isCheckingAppVersion ? (
             <ActivityIndicator size="small" color="#D96B14" />
           ) : (
-            <Text style={{ fontSize: 11, fontWeight: '700', color: '#374151' }}>
-              {appVersionUpdateInfo?.isSoftUpdateAvailable || appVersionUpdateInfo?.isForceUpdateRequired ? 'View Update' : 'Check'}
+            <Text
+              style={{
+                fontSize: 10,
+                fontWeight: '700',
+                color:
+                  appVersionUpdateInfo?.isSoftUpdateAvailable || appVersionUpdateInfo?.isForceUpdateRequired
+                    ? '#D96B14'
+                    : '#4B5563',
+              }}
+            >
+              {appVersionUpdateInfo?.isSoftUpdateAvailable || appVersionUpdateInfo?.isForceUpdateRequired
+                ? 'View Update'
+                : 'Check'}
             </Text>
           )}
         </TouchableOpacity>
-        */}
       </View>
 
       {/* Logout CTA */}
@@ -1819,7 +2094,7 @@ export const AdminDashboardScreen: React.FC = () => {
                     )}
 
                     {/* LOW / EXHAUSTED PLATFORM FEE WALLET BANNER */}
-                    {walletBalance !== null && (walletBalance <= 0 || walletBalance < 200) && (
+                    {!useSubscriptionStore.getState().isZeroCommission() && walletBalance !== null && (walletBalance <= 0 || walletBalance < 200) && (
                       <View style={[styles.lowWalletBanner, walletBalance <= 0 && { backgroundColor: '#FEF2F2', borderColor: '#FECACA' }]}>
                         <View style={styles.lowWalletBannerLeft}>
                           <View style={[styles.lowWalletIconCircle, walletBalance <= 0 && { backgroundColor: '#FEE2E2' }]}>
@@ -2041,7 +2316,7 @@ export const AdminDashboardScreen: React.FC = () => {
                       {/* POS Terminal */}
                       <TouchableOpacity
                         style={styles.quickCardAction}
-                        onPress={() => handleModulePress('pos', isPosAndCounterOrderingAllowed)}
+                        onPress={() => handleModulePress('pos', isPosBillingAllowed)}
                         activeOpacity={0.85}
                       >
                         <LinearGradient
@@ -2097,7 +2372,7 @@ export const AdminDashboardScreen: React.FC = () => {
                       {/* Business Analytics */}
                       <TouchableOpacity
                         style={styles.quickCardAction}
-                        onPress={() => handleModulePress('reports', true)}
+                        onPress={() => handleModulePress('reports', isReportsAllowed)}
                         activeOpacity={0.85}
                       >
                         <LinearGradient
@@ -2119,7 +2394,7 @@ export const AdminDashboardScreen: React.FC = () => {
                       {/* Staff Roles */}
                       <TouchableOpacity
                         style={styles.mgmtRowItem}
-                        onPress={() => handleModulePress('roles', true)}
+                        onPress={() => handleModulePress('roles', isStaffRolesAllowed)}
                         activeOpacity={0.7}
                       >
                         <View style={styles.mgmtIconBox}>
@@ -2434,7 +2709,9 @@ export const AdminDashboardScreen: React.FC = () => {
                       </View>
                       <StatusBadge
                         label={
-                          activeSubscription?.isExpired
+                          activeSubscription?.lifecycleState === 'INACTIVE' || activeSubscription?.status?.toUpperCase() === 'INACTIVE'
+                            ? 'INACTIVE'
+                            : activeSubscription?.isExpired
                             ? 'EXPIRED'
                             : activeSubscription?.isInGracePeriod
                             ? `GRACE (${activeSubscription.graceDaysRemaining}d)`
@@ -2445,7 +2722,9 @@ export const AdminDashboardScreen: React.FC = () => {
                             : 'ACTIVE TIER'
                         }
                         variant={
-                          activeSubscription?.isExpired
+                          activeSubscription?.lifecycleState === 'INACTIVE' || activeSubscription?.status?.toUpperCase() === 'INACTIVE'
+                            ? 'danger'
+                            : activeSubscription?.isExpired
                             ? 'danger'
                             : activeSubscription?.isInGracePeriod
                             ? 'warning'
@@ -2633,18 +2912,11 @@ export const AdminDashboardScreen: React.FC = () => {
                 <View style={styles.particularSectionCard}>
                   <Text style={styles.particularSectionHeader}>ENABLED STORE ENTITLEMENTS</Text>
                   <View style={styles.particularEntitlementsGrid}>
-                    {[
-                      { name: 'Table Ordering & QR Dine-in', enabled: checkEntitlement('IsTableOrderingEnabled') },
-                      { name: 'Counter POS & Fast Billing', enabled: checkEntitlement('IsCounterOrderingEnabled') },
-                      { name: 'Kitchen Display System (KDS)', enabled: checkEntitlement('IsKdsEnabled') },
-                      { name: 'Self Pickup / Takeaway', enabled: checkEntitlement('IsSelfPickupEnabled') },
-                      { name: 'Online Direct Delivery', enabled: checkEntitlement('IsDeliveryEnabled') },
-                      { name: 'SMS Alerts & Instant Receipts', enabled: checkEntitlement('IsSmsEnabled') },
-                    ].map((feat, fIdx) => (
+                    {getSubscriptionFeatureList(activeSubscription).map((feat, fIdx) => (
                       <View key={`feat-badge-${fIdx}`} style={styles.particularEntitlementChip}>
                         <CheckCircle2 size={13} color={feat.enabled ? '#17845A' : '#9CA3AF'} />
                         <Text style={[styles.particularEntitlementText, !feat.enabled && { color: '#9CA3AF' }]}>
-                          {feat.name}
+                          {feat.label}
                         </Text>
                       </View>
                     ))}
@@ -2695,7 +2967,7 @@ export const AdminDashboardScreen: React.FC = () => {
         </Modal>
 
         {/* SUBSCRIPTION PLAN SELECTION MODAL */}
-        <Modal visible={planSelectionModalVisible} animationType="slide" transparent>
+        <Modal visible={planSelectionModalVisible} animationType="slide" transparent onRequestClose={() => { if (!isStrictlyLocked) setPlanSelectionModalVisible(false); }}>
           <View style={styles.planModalOverlay}>
             <View style={styles.planModalCard}>
               <View style={styles.planModalHeader}>
@@ -2703,9 +2975,11 @@ export const AdminDashboardScreen: React.FC = () => {
                   <Text style={styles.planModalTitle}>Select Subscription Plan</Text>
                   <Text style={styles.planModalSub}>Choose plan for outlet "{activeRestaurant?.restaurantName || 'My Restaurant'}"</Text>
                 </View>
-                <TouchableOpacity onPress={() => setPlanSelectionModalVisible(false)} style={styles.modalCloseCircle}>
-                  <X size={16} color="#DE8626" />
-                </TouchableOpacity>
+                {!isStrictlyLocked && (
+                  <TouchableOpacity onPress={() => setPlanSelectionModalVisible(false)} style={styles.modalCloseCircle}>
+                    <X size={16} color="#DE8626" />
+                  </TouchableOpacity>
+                )}
               </View>
 
               <ScrollView style={{ maxHeight: 520 }} showsVerticalScrollIndicator={false}>
@@ -2773,49 +3047,43 @@ export const AdminDashboardScreen: React.FC = () => {
                         </View>
 
                         {/* Included Feature Entitlements Section */}
-                        {plan.entitlements && plan.entitlements.length > 0 ? (
-                          <View style={styles.ownerEntitlementsSection}>
-                            <Text style={styles.ownerEntitlementsTitle}>INCLUDED FEATURE ENTITLEMENTS</Text>
-                            <View style={styles.ownerEntitlementsGrid}>
-                              {plan.entitlements.map((ent, eIdx) => {
-                                const isAllowed = ent.isAllowed;
-                                const hasAddonPct = (ent.featureCommissionPercentage || 0) > 0;
-                                const hasAddonFlat = (ent.featureFlatFeePerOrder || 0) > 0;
+                        <View style={styles.ownerEntitlementsSection}>
+                          <Text style={styles.ownerEntitlementsTitle}>INCLUDED FEATURE ENTITLEMENTS</Text>
+                          <View style={styles.ownerEntitlementsGrid}>
+                            {getPlanFeatureList(plan).map((feat, eIdx) => {
+                              const isAllowed = feat.enabled;
 
-                                return (
-                                  <View
-                                    key={`owner-ent-${ent.configKey}-${eIdx}`}
+                              return (
+                                <View
+                                  key={`owner-feat-${feat.key}-${eIdx}`}
+                                  style={[
+                                    styles.ownerEntitlementBadge,
+                                    isAllowed ? styles.ownerEntitlementAllowed : styles.ownerEntitlementDisabled,
+                                  ]}
+                                >
+                                  {isAllowed ? (
+                                    <CheckCircle2 size={12} color="#17845A" />
+                                  ) : (
+                                    <Lock size={11} color="#9CA3AF" />
+                                  )}
+                                  <Text
                                     style={[
-                                      styles.ownerEntitlementBadge,
-                                      isAllowed ? styles.ownerEntitlementAllowed : styles.ownerEntitlementDisabled,
+                                      styles.ownerEntitlementText,
+                                      isAllowed ? styles.ownerEntitlementTextAllowed : styles.ownerEntitlementTextDisabled,
                                     ]}
                                   >
-                                    {isAllowed ? (
-                                      <CheckCircle2 size={12} color="#17845A" />
-                                    ) : (
-                                      <X size={12} color="#8C7A6B" />
-                                    )}
-                                    <Text
-                                      style={[
-                                        styles.ownerEntitlementText,
-                                        isAllowed ? styles.ownerEntitlementTextAllowed : styles.ownerEntitlementTextDisabled,
-                                      ]}
-                                    >
-                                      {ent.configKey}
+                                    {feat.shortLabel || feat.label}
+                                  </Text>
+                                  {isAllowed && feat.commissionBadge ? (
+                                    <Text style={styles.ownerEntitlementAddonText}>
+                                      ({feat.commissionBadge})
                                     </Text>
-                                    {isAllowed && (hasAddonPct || hasAddonFlat) ? (
-                                      <Text style={styles.ownerEntitlementAddonText}>
-                                        ({hasAddonPct ? `+${ent.featureCommissionPercentage}%` : ''}
-                                        {hasAddonPct && hasAddonFlat ? ' ' : ''}
-                                        {hasAddonFlat ? `+₹${ent.featureFlatFeePerOrder}` : ''})
-                                      </Text>
-                                    ) : null}
-                                  </View>
-                                );
-                              })}
-                            </View>
+                                  ) : null}
+                                </View>
+                              );
+                            })}
                           </View>
-                        ) : null}
+                        </View>
 
                         <TouchableOpacity
                           activeOpacity={0.88}
@@ -2841,6 +3109,39 @@ export const AdminDashboardScreen: React.FC = () => {
                   })
                 )}
               </ScrollView>
+              {isStrictlyLocked && (
+                <View style={{ flexDirection: 'row', gap: 10, marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#E7E1DA' }}>
+                  {restaurants.length > 1 && (
+                    <TouchableOpacity
+                      style={{ flex: 1, paddingVertical: 12, alignItems: 'center', backgroundColor: '#F3F4F6', borderRadius: 14 }}
+                      onPress={() => {
+                        setPlanSelectionModalVisible(false);
+                        setRestModalVisible(true);
+                      }}
+                    >
+                      <Text style={{ fontSize: 13, fontWeight: '700', color: '#1E2930' }}>Switch Outlet</Text>
+                    </TouchableOpacity>
+                  )}
+                  <TouchableOpacity
+                    style={{ flex: 1, paddingVertical: 12, alignItems: 'center', backgroundColor: '#FEE2E2', borderRadius: 14 }}
+                    onPress={() => {
+                      Alert.alert('Confirm Sign Out', 'Are you sure you want to sign out?', [
+                        { text: 'Cancel', style: 'cancel' },
+                        {
+                          text: 'Sign Out',
+                          style: 'destructive',
+                          onPress: () => {
+                            setPlanSelectionModalVisible(false);
+                            logout();
+                          },
+                        },
+                      ]);
+                    }}
+                  >
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#DC2626' }}>Sign Out</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
             </View>
           </View>
         </Modal>
@@ -2859,17 +3160,21 @@ export const AdminDashboardScreen: React.FC = () => {
             keyId={processingOrder.keyId}
             onSuccess={() => {
               setProcessingOrder(null);
+              apiCacheManager.invalidate('/Subscription');
               WalletEvents.emit();
+              SubscriptionEvents.emitUpdated();
               if (currentRestId > 0) {
-                fetchSubscriptionData(currentRestId);
+                fetchSubscriptionData(currentRestId, true);
                 fetchWalletBalance(currentRestId);
               }
             }}
             onClose={() => {
               setProcessingOrder(null);
+              apiCacheManager.invalidate('/Subscription');
               WalletEvents.emit();
+              SubscriptionEvents.emitUpdated();
               if (currentRestId > 0) {
-                fetchSubscriptionData(currentRestId);
+                fetchSubscriptionData(currentRestId, true);
                 fetchWalletBalance(currentRestId);
               }
             }}
@@ -2971,9 +3276,13 @@ export const AdminDashboardScreen: React.FC = () => {
           restaurantName={activeRestaurant?.restaurantName || 'Active Restaurant'}
           isOwnerOrAdmin={!isCashier}
           initialStatus={operatingStatus}
-          isTableOrderingAllowed={isTableOrderingAllowed}
+          isTableOrderingAllowed={isTableOrderInSubscription}
           onEditHours={() => {
             setActiveTab('config');
+          }}
+          onUpgradePlan={() => {
+            loadSubscriptionPlans();
+            setPlanSelectionModalVisible(true);
           }}
           onStatusUpdated={(updated) => {
             setOperatingStatus(updated);
@@ -2991,6 +3300,9 @@ export const AdminDashboardScreen: React.FC = () => {
             }
           }}
         />
+
+        {/* Global Remote App Version Update Enforcement Modal */}
+        <AppUpdateModal />
       </View>
     </SafeAreaView>
   );

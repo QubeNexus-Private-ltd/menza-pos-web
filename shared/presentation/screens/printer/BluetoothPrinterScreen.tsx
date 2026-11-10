@@ -74,6 +74,27 @@ export const BluetoothPrinterScreen: React.FC<BluetoothPrinterScreenProps> = ({ 
 
   const [localFooter, setLocalFooter] = useState(customFooter);
   const [connectingAddress, setConnectingAddress] = useState<string | null>(null);
+  const [previewTab, setPreviewTab] = useState<'receipt' | 'kot'>('receipt');
+
+  const previewLogoUrl = (
+    activeRestaurant?.logoUrl ||
+    (activeRestaurant as any)?.imageUrl ||
+    ''
+  ).trim();
+
+  const effectiveUpiId = (
+    (activeRestaurant as any)?.bankerUpiId ||
+    (activeRestaurant as any)?.upiId ||
+    'menzahospitality@icici'
+  ).trim();
+
+  const effectivePayeeName =
+    (activeRestaurant as any)?.bankerAccountHolderName ||
+    activeRestaurant?.restaurantName ||
+    'Menza Bistro';
+
+  const upiUri = `upi://pay?pa=${encodeURIComponent(effectiveUpiId)}&pn=${encodeURIComponent(effectivePayeeName)}&am=819.00&tn=TestReceipt-101&cu=INR`;
+  const previewQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(upiUri)}&color=000000&bgcolor=FFFFFF&margin=1`;
 
   useEffect(() => {
     logger.navigation('BluetoothPrinterScreen');
@@ -657,7 +678,263 @@ export const BluetoothPrinterScreen: React.FC<BluetoothPrinterScreenProps> = ({ 
             </View>
           </View>
 
-          {/* 4. SETUP & PAIRING GUIDE */}
+          {/* 4. LIVE THERMAL ROLL PREVIEW */}
+          <View style={styles.previewContainerCard}>
+            <View style={styles.previewHeaderRow}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <FileText size={16} color="#DE8626" />
+                <Text style={styles.previewTitle}>Live Thermal Roll Preview</Text>
+              </View>
+              <View style={styles.previewTabs}>
+                <TouchableOpacity
+                  onPress={() => setPreviewTab('receipt')}
+                  style={[
+                    styles.previewTabBtn,
+                    previewTab === 'receipt' && styles.previewTabBtnActive,
+                  ]}
+                  activeOpacity={0.7}
+                >
+                  <Text
+                    style={[
+                      styles.previewTabBtnText,
+                      previewTab === 'receipt' && styles.previewTabBtnTextActive,
+                    ]}
+                  >
+                    Receipt
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => setPreviewTab('kot')}
+                  style={[
+                    styles.previewTabBtn,
+                    previewTab === 'kot' && styles.previewTabBtnActive,
+                  ]}
+                  activeOpacity={0.7}
+                >
+                  <Text
+                    style={[
+                      styles.previewTabBtnText,
+                      previewTab === 'kot' && styles.previewTabBtnTextActive,
+                    ]}
+                  >
+                    Kitchen KOT
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <Text style={styles.previewSubtitle}>
+              Live simulation for {paperWidth.toUpperCase()} thermal roll. Shows active logo & UPI QR code.
+            </Text>
+
+            {/* Thermal Paper Simulation Roll */}
+            <View style={styles.thermalRollWrapper}>
+              <View
+                style={[
+                  styles.thermalRollPaper,
+                  { width: paperWidth === '80mm' ? 320 : 255 },
+                ]}
+              >
+                {previewTab === 'receipt' ? (
+                  /* CUSTOMER RECEIPT PREVIEW */
+                  <View style={styles.paperContent}>
+                    {previewLogoUrl ? (
+                      <View style={styles.paperLogoContainer}>
+                        <Image
+                          source={{ uri: previewLogoUrl }}
+                          style={{
+                            width: paperWidth === '80mm' ? 120 : 90,
+                            height: paperWidth === '80mm' ? 60 : 45,
+                          }}
+                          resizeMode="contain"
+                        />
+                      </View>
+                    ) : null}
+
+                    <Text style={styles.paperStoreName}>
+                      {activeRestaurant?.restaurantName || 'Menza Bistro'}
+                    </Text>
+                    {activeRestaurant?.address ? (
+                      <Text style={styles.paperStoreSub}>
+                        {activeRestaurant.address}
+                        {activeRestaurant.city ? `, ${activeRestaurant.city}` : ''}
+                      </Text>
+                    ) : null}
+                    {activeRestaurant?.ownerMobile ? (
+                      <Text style={styles.paperStoreSub}>
+                        Ph: {activeRestaurant.ownerMobile}
+                      </Text>
+                    ) : null}
+                    {(activeRestaurant as any)?.gstNumber ? (
+                      <Text style={styles.paperStoreSub}>
+                        GSTIN: {(activeRestaurant as any).gstNumber}
+                      </Text>
+                    ) : null}
+
+                    <Text style={styles.paperDivider}>
+                      {paperWidth === '80mm'
+                        ? '================================================'
+                        : '================================'}
+                    </Text>
+
+                    <View style={styles.paperRow}>
+                      <Text style={styles.paperTextBold}>Token: #101</Text>
+                      <Text style={styles.paperTextBold}>DINE-IN</Text>
+                    </View>
+                    <View style={styles.paperRow}>
+                      <Text style={styles.paperTextSmall}>Order #101</Text>
+                      <Text style={styles.paperTextSmall}>Table 1</Text>
+                    </View>
+
+                    <Text style={styles.paperDivider}>
+                      {paperWidth === '80mm'
+                        ? '------------------------------------------------'
+                        : '--------------------------------'}
+                    </Text>
+
+                    {/* Items */}
+                    <View style={styles.paperItemRow}>
+                      <Text style={[styles.paperText, { flex: 1 }]}>2x Paneer Butter Masala</Text>
+                      <Text style={styles.paperText}>₹560.00</Text>
+                    </View>
+                    <View style={styles.paperItemRow}>
+                      <Text style={[styles.paperText, { flex: 1 }]}>4x Butter Naan</Text>
+                      <Text style={styles.paperText}>₹160.00</Text>
+                    </View>
+                    <View style={styles.paperItemRow}>
+                      <Text style={[styles.paperText, { flex: 1 }]}>1x Fresh Lime Soda</Text>
+                      <Text style={styles.paperText}>₹60.00</Text>
+                    </View>
+
+                    <Text style={styles.paperDivider}>
+                      {paperWidth === '80mm'
+                        ? '------------------------------------------------'
+                        : '--------------------------------'}
+                    </Text>
+
+                    <View style={styles.paperRow}>
+                      <Text style={styles.paperText}>Subtotal</Text>
+                      <Text style={styles.paperText}>₹780.00</Text>
+                    </View>
+                    <View style={styles.paperRow}>
+                      <Text style={styles.paperTextSmall}>CGST (2.5%)</Text>
+                      <Text style={styles.paperTextSmall}>₹19.50</Text>
+                    </View>
+                    <View style={styles.paperRow}>
+                      <Text style={styles.paperTextSmall}>SGST (2.5%)</Text>
+                      <Text style={styles.paperTextSmall}>₹19.50</Text>
+                    </View>
+
+                    <Text style={styles.paperDivider}>
+                      {paperWidth === '80mm'
+                        ? '================================================'
+                        : '================================'}
+                    </Text>
+
+                    <View style={styles.paperRow}>
+                      <Text style={[styles.paperTextBold, { fontSize: 13 }]}>GRAND TOTAL</Text>
+                      <Text style={[styles.paperTextBold, { fontSize: 13 }]}>₹819.00</Text>
+                    </View>
+
+                    {/* Dynamic UPI QR Section */}
+                    <Text style={styles.paperDivider}>
+                      {paperWidth === '80mm'
+                        ? '------------------------------------------------'
+                        : '--------------------------------'}
+                    </Text>
+                    <View style={styles.paperQrContainer}>
+                      <Text style={styles.paperQrHeader}>SCAN & PAY WITH ANY UPI APP</Text>
+                      <Image
+                        source={{ uri: previewQrUrl }}
+                        style={styles.paperQrImage}
+                        resizeMode="contain"
+                      />
+                      <Text style={styles.paperQrUpiText}>UPI ID: {effectiveUpiId}</Text>
+                      <Text style={styles.paperQrAppsText}>
+                        Google Pay • PhonePe • Paytm • BHIM
+                      </Text>
+                    </View>
+
+                    <Text style={styles.paperDivider}>
+                      {paperWidth === '80mm'
+                        ? '------------------------------------------------'
+                        : '--------------------------------'}
+                    </Text>
+                    <Text style={styles.paperFooterMsg}>
+                      {localFooter || 'Thank you! Please visit again.'}
+                    </Text>
+                  </View>
+                ) : (
+                  /* KITCHEN KOT PREVIEW */
+                  <View style={styles.paperContent}>
+                    <Text style={styles.paperKotTitle}>*** KITCHEN ORDER TICKET ***</Text>
+                    <View style={styles.paperRow}>
+                      <Text style={styles.paperTextBold}>Token: #101</Text>
+                      <Text style={styles.paperTextBold}>Table 1</Text>
+                    </View>
+                    <View style={styles.paperRow}>
+                      <Text style={styles.paperTextSmall}>KOT-#101</Text>
+                      <Text style={styles.paperTextSmall}>Section: Main Hall</Text>
+                    </View>
+
+                    <Text style={styles.paperDivider}>
+                      {paperWidth === '80mm'
+                        ? '================================================'
+                        : '================================'}
+                    </Text>
+
+                    <View style={styles.paperItemRow}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.paperTextBold}>2 x Paneer Butter Masala</Text>
+                        <Text style={styles.paperInstruction}>* Inst: Medium Spicy</Text>
+                      </View>
+                    </View>
+                    <View style={styles.paperItemRow}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.paperTextBold}>4 x Butter Naan</Text>
+                      </View>
+                    </View>
+                    <View style={styles.paperItemRow}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.paperTextBold}>1 x Fresh Lime Soda</Text>
+                        <Text style={styles.paperInstruction}>* Inst: Less Sugar</Text>
+                      </View>
+                    </View>
+
+                    <Text style={styles.paperDivider}>
+                      {paperWidth === '80mm'
+                        ? '================================================'
+                        : '================================'}
+                    </Text>
+                    <Text style={styles.paperFooterMsg}>Total Dishes: 7 items</Text>
+                  </View>
+                )}
+              </View>
+            </View>
+
+            {/* Direct Test Print Trigger */}
+            <View style={styles.previewActionRow}>
+              <TouchableOpacity
+                style={[styles.previewPrintBtn, isPrinting && { opacity: 0.7 }]}
+                onPress={previewTab === 'receipt' ? handleTestPrint : handleTestKot}
+                activeOpacity={0.8}
+                disabled={isPrinting}
+              >
+                {isPrinting ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <>
+                    <Printer size={15} color="#FFFFFF" />
+                    <Text style={styles.previewPrintBtnText}>
+                      Print Test {previewTab === 'receipt' ? 'Receipt' : 'KOT'} ({paperWidth})
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* 5. SETUP & PAIRING GUIDE */}
           <View style={styles.tipsCard}>
             <View style={styles.tipsHeaderRow}>
               <Info size={16} color="#DE8626" />
@@ -1280,8 +1557,216 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
+  previewContainerCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: Spacing.borderRadius.card,
+    padding: Spacing.md,
+    borderWidth: 1.2,
+    borderColor: '#E7E1DA',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 2,
+    gap: 12,
+  },
+  previewHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  previewTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#1E2930',
+  },
+  previewSubtitle: {
+    fontSize: 11,
+    color: '#6B7280',
+    marginTop: -4,
+  },
+  previewTabs: {
+    flexDirection: 'row',
+    backgroundColor: '#FAF7F2',
+    borderRadius: 8,
+    padding: 2,
+    borderWidth: 1,
+    borderColor: '#E7E1DA',
+  },
+  previewTabBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  previewTabBtnActive: {
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  previewTabBtnText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#6B7280',
+  },
+  previewTabBtnTextActive: {
+    color: '#DE8626',
+    fontWeight: '800',
+  },
+  thermalRollWrapper: {
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 12,
+    paddingVertical: 14,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  thermalRollPaper: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    padding: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  paperContent: {
+    alignItems: 'stretch',
+  },
+  paperLogoContainer: {
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  paperStoreName: {
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 14,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    color: '#000000',
+    textTransform: 'uppercase',
+  },
+  paperStoreSub: {
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 10,
+    textAlign: 'center',
+    color: '#1F2937',
+    marginTop: 1,
+  },
+  paperDivider: {
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 9,
+    textAlign: 'center',
+    color: '#374151',
+    letterSpacing: -0.5,
+    marginVertical: 4,
+  },
+  paperRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginVertical: 1,
+  },
+  paperItemRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginVertical: 2,
+  },
+  paperText: {
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 11,
+    color: '#000000',
+  },
+  paperTextBold: {
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: '#000000',
+  },
+  paperTextSmall: {
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 9.5,
+    color: '#374151',
+  },
+  paperInstruction: {
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 9.5,
+    color: '#4B5563',
+    fontStyle: 'italic',
+  },
+  paperKotTitle: {
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 12,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    color: '#000000',
+    marginBottom: 4,
+  },
+  paperQrContainer: {
+    alignItems: 'center',
+    marginVertical: 4,
+  },
+  paperQrHeader: {
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 9.5,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    letterSpacing: 0.3,
+    color: '#000000',
+    marginBottom: 4,
+  },
+  paperQrImage: {
+    width: 110,
+    height: 110,
+    backgroundColor: '#FFFFFF',
+  },
+  paperQrUpiText: {
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 8.5,
+    fontWeight: 'bold',
+    color: '#000000',
+    marginTop: 3,
+  },
+  paperQrAppsText: {
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 7.5,
+    color: '#4B5563',
+    marginTop: 1,
+  },
+  paperFooterMsg: {
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 9.5,
+    textAlign: 'center',
+    color: '#1F2937',
+    marginTop: 2,
+  },
+  previewActionRow: {
+    marginTop: 4,
+  },
+  previewPrintBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#DE8626',
+    borderRadius: 10,
+    paddingVertical: 10,
+    shadowColor: '#DE8626',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  previewPrintBtnText: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+  },
   tipsCard: {
-    backgroundColor: '#FFF0DE',
+    backgroundColor: '#FAF7F2',
     borderRadius: Spacing.borderRadius.card,
     padding: Spacing.md,
     borderWidth: 1,

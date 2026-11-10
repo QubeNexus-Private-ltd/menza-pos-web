@@ -561,11 +561,19 @@ export class EscPosBuilder {
       builder.twoColumns('Payment Mode:', data.paymentMode.toUpperCase());
     }
     if (data.tenderedAmount !== undefined && Number(data.tenderedAmount) > 0) {
-      builder.twoColumns('Cash Tendered:', `Rs ${(Number(data.tenderedAmount) || 0).toFixed(2)}`);
-      if (data.changeAmount !== undefined && Number(data.changeAmount) >= 0) {
+      const tenderedNum = Number(data.tenderedAmount) || 0;
+      if (tenderedNum < grandTotalNum) {
+        builder.twoColumns('Advance Paid (UPI):', `Rs ${tenderedNum.toFixed(2)}`);
         builder.bold(true);
-        builder.twoColumns('Change Returned:', `Rs ${(Number(data.changeAmount) || 0).toFixed(2)}`);
+        builder.twoColumns('Balance Cash Due:', `Rs ${(grandTotalNum - tenderedNum).toFixed(2)}`);
         builder.bold(false);
+      } else {
+        builder.twoColumns('Cash Tendered:', `Rs ${tenderedNum.toFixed(2)}`);
+        if (data.changeAmount !== undefined && Number(data.changeAmount) >= 0) {
+          builder.bold(true);
+          builder.twoColumns('Change Returned:', `Rs ${(Number(data.changeAmount) || 0).toFixed(2)}`);
+          builder.bold(false);
+        }
       }
     }
 
@@ -745,6 +753,18 @@ export class EscPosBuilder {
     builder.textSize('normal');
     builder.bold(false);
     builder.separator('=');
+
+    if (data.tenderedAmount !== undefined && Number(data.tenderedAmount) > 0) {
+      const advanceNum = Number(data.tenderedAmount) || 0;
+      const totalNum = Number(data.grandTotal ?? (data as any).totalAmount ?? 0);
+      if (advanceNum < totalNum) {
+        builder.bold(true);
+        builder.twoColumns('Advance Paid (UPI):', `Rs ${advanceNum.toFixed(2)}`);
+        builder.twoColumns('Balance Due (Cash):', `Rs ${(totalNum - advanceNum).toFixed(2)}`);
+        builder.bold(false);
+        builder.separator('-');
+      }
+    }
 
     builder.finish();
     return builder.getBytes();
@@ -948,5 +968,54 @@ export class EscPosBuilder {
     };
 
     return EscPosBuilder.buildKot(testData, paperWidth);
+  }
+
+  /** Format a compact Table QR Sticker for 58mm/80mm thermal printers */
+  static buildTableQrSticker(params: {
+    restaurantName: string;
+    tableNumber: string | number;
+    sectionName?: string;
+    qrUrl: string;
+    isRolling?: boolean;
+    logoBitmap?: { widthBytes: number; heightDots: number; bytes: number[] };
+  }, paperWidth: PaperWidth = '58mm'): number[] {
+    const builder = new EscPosBuilder(paperWidth);
+
+    // Dynamic Store Logo
+    if (params.logoBitmap && params.logoBitmap.bytes && params.logoBitmap.bytes.length > 0) {
+      builder.printBitmap(params.logoBitmap.widthBytes, params.logoBitmap.heightDots, params.logoBitmap.bytes);
+    }
+
+    builder.align('center');
+    builder.bold(true);
+    builder.textSize('normal');
+    builder.textLine(params.restaurantName.trim());
+    builder.separator('=');
+
+    builder.textSize('double-both');
+    builder.textLine(`TABLE #${params.tableNumber}`);
+    builder.textSize('normal');
+
+    if (params.sectionName && params.sectionName.trim()) {
+      builder.textLine(`[ ${params.sectionName.trim().toUpperCase()} ]`);
+    }
+
+    builder.feed(1);
+    builder.qrCode(params.qrUrl, paperWidth === '80mm' ? 8 : 6);
+    builder.feed(1);
+
+    builder.bold(true);
+    builder.textLine('SCAN TO VIEW MENU & ORDER');
+    builder.bold(false);
+    builder.textSize('normal');
+    if (params.isRolling) {
+      builder.textLine('Dynamic QR - Claim window active');
+    } else {
+      builder.textLine('Contactless Dining * Menza POS');
+    }
+
+    builder.feed(2);
+    builder.cut();
+    return builder.getBytes();
   }
 }

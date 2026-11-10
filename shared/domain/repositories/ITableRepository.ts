@@ -1,4 +1,4 @@
-import { TableMaster, TableReservation, RestaurantReservationConfig, FloorSection } from '../models/Table';
+import { TableMaster, TableReservation, RestaurantReservationConfig, FloorSection, TableQrResponseDTO } from '../models/Table';
 
 export interface ITableRepository {
   getSections(restaurantId?: number): Promise<FloorSection[]>;
@@ -22,6 +22,10 @@ export interface ITableRepository {
   ): Promise<boolean>;
   updateTable(tableId: number, updates: Partial<TableMaster>): Promise<boolean>;
   deleteTable(tableId: number): Promise<boolean>;
+
+  // QR Code operations
+  getTableQr(tableId: number, restaurantId?: number, baseUrl?: string): Promise<TableQrResponseDTO | null>;
+  getRollingTableQr(tableId: number, ttlMinutes?: number, baseUrl?: string): Promise<TableQrResponseDTO | null>;
 
   // Reservation / Advance Bookings
   getReservations(restaurantId?: number, date?: string, status?: string): Promise<TableReservation[]>;

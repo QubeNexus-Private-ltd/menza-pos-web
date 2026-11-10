@@ -47,6 +47,7 @@ import { RoleRemoteDataSource } from '../../../data/datasources/RoleRemoteDataSo
 import { RoleRepositoryImpl } from '../../../data/repositories/RoleRepositoryImpl';
 import { isCashierOnly, canManageStaff } from '../../../core/auth/rolePermissions';
 import { useAuthStore } from '../../state/useAuthStore';
+import { FeatureGate } from '../../components/subscription/FeatureGate';
 import { apiClient } from '../../../core/network/apiClient';
 import { useUserLookupByMobile } from '../../hooks/useUserLookupByMobile';
 import { cleanMobile } from '../../../core/utils/formatters';
@@ -121,6 +122,7 @@ export const StaffRoleScreen: React.FC<StaffRoleScreenProps> = ({ onClose }) => 
   const [formRoleId, setFormRoleId] = useState<number>(4);
   const [formEmployeeCode, setFormEmployeeCode] = useState('');
   const [formShift, setFormShift] = useState('');
+  const [formPin, setFormPin] = useState('');
   const {
     loading: staffLookupLoading,
     existingUser: existingStaffUser,
@@ -379,6 +381,7 @@ export const StaffRoleScreen: React.FC<StaffRoleScreenProps> = ({ onClose }) => 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom', 'left', 'right']}>
       <StatusBar barStyle="dark-content" backgroundColor="#FAF7F2" translucent={false} />
+      <FeatureGate feature="staffPinLock" title="Staff Roles & Permissions" planSuggestion="Standard or Pro Plan" onClose={onClose}>
       <View style={styles.container}>
         {/* TOP STREAMLINED UNIFIED HEADER (Identical to HomePage) */}
         <View style={styles.topHeader}>
@@ -907,6 +910,7 @@ export const StaffRoleScreen: React.FC<StaffRoleScreenProps> = ({ onClose }) => 
         {...alertConfig}
         onClose={() => setAlertConfig((prev) => ({ ...prev, visible: false }))}
       />
+      </FeatureGate>
     </SafeAreaView>
   );
 };

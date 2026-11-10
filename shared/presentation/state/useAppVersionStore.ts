@@ -16,6 +16,8 @@ const repository = new AppVersionRepositoryImpl(new AppVersionRemoteDataSource()
 
 export interface AppVersionState {
   updateInfo: AppVersionCheckResponse | null;
+  latestVersion: string | null;
+  latestBuildNumber: number | null;
   isChecking: boolean;
   isModalVisible: boolean;
   dismissedVersion: string | null;
@@ -33,6 +35,8 @@ export interface AppVersionState {
 
 export const useAppVersionStore = create<AppVersionState>((set, get) => ({
   updateInfo: null,
+  latestVersion: null,
+  latestBuildNumber: null,
   isChecking: false,
   isModalVisible: false,
   dismissedVersion: null,
@@ -61,12 +65,16 @@ export const useAppVersionStore = create<AppVersionState>((set, get) => ({
     try {
       set({ isChecking: true, checkError: null });
       logger.info('SYSTEM', 'CHECKING_APP_VERSION', 'Querying backend for app version update requirements', {
+        appType: 'POS_ADMIN',
+        platform: 'android',
         currentVersion: APP_CONSTANTS.APP_VERSION,
         currentBuild: APP_CONSTANTS.APP_BUILD_NUMBER,
         isManualCheck,
       });
 
       const response = await repository.checkVersion({
+        appType: 'POS_ADMIN',
+        platform: 'android',
         currentVersion: APP_CONSTANTS.APP_VERSION,
         currentBuildNumber: APP_CONSTANTS.APP_BUILD_NUMBER,
       });
@@ -90,6 +98,8 @@ export const useAppVersionStore = create<AppVersionState>((set, get) => ({
 
       set({
         updateInfo: response,
+        latestVersion: response.latestVersion,
+        latestBuildNumber: response.latestBuildNumber,
         isModalVisible: shouldShowModal,
         lastCheckedAt: now,
         isChecking: false,

@@ -6,11 +6,9 @@ import { AppVersionCheckRequest, AppVersionCheckResponse } from '../../domain/mo
 
 export class AppVersionRemoteDataSource {
   async checkVersion(request?: Partial<AppVersionCheckRequest>): Promise<AppVersionCheckResponse> {
-    const platform =
-      request?.platform ||
-      (Platform.OS === 'ios' ? 'ios' : Platform.OS === 'web' ? 'web' : 'android');
-
-    const appType = request?.appType || APP_CONSTANTS.APP_TYPE || 'POS_ADMIN';
+    // Explicitly target android platform and POS_ADMIN appType for Menza POS mobile app
+    const platform = (request?.platform || 'android').toLowerCase();
+    const appType = request?.appType || 'POS_ADMIN';
     const currentVersion = request?.currentVersion || APP_CONSTANTS.APP_VERSION || '1.0.0';
     const currentBuildNumber = request?.currentBuildNumber ?? APP_CONSTANTS.APP_BUILD_NUMBER ?? 1;
 

@@ -30,7 +30,7 @@ import {
   Flame,
   ChefHat,
   ArrowUpRight,
-  Receipt,
+  ReceiptText,
   Utensils,
   Layers,
   Sparkles,
@@ -54,6 +54,8 @@ import {
 import { SalesBarChart } from './components/SalesBarChart';
 import { HourlyHeatmapChart } from './components/HourlyHeatmapChart';
 import { SubscriptionRemoteDataSource } from '../../../data/datasources/SubscriptionRemoteDataSource';
+import { FeatureGate } from '../../components/subscription/FeatureGate';
+import { useSubscriptionStore } from '../../state/useSubscriptionStore';
 import { PdfReportGenerator } from '../../../core/utils/pdfReportGenerator';
 
 interface BusinessReportsScreenProps {
@@ -88,7 +90,7 @@ export const BusinessReportsScreen: React.FC<BusinessReportsScreenProps> = ({
   const [exportingPdf, setExportingPdf] = useState(false);
 
   // KDS Entitlement State (Hidden if IsKdsEnabled is false)
-  const [kdsEnabled, setKdsEnabled] = useState<boolean>(Boolean(isKdsAllowed));
+  const [kdsEnabled, setKdsEnabled] = useState<boolean>(Boolean(isKdsAllowed !== undefined ? isKdsAllowed : useSubscriptionStore.getState().hasEntitlement('IsKdsEnabled')));
 
   useEffect(() => {
     if (isKdsAllowed !== undefined) {
@@ -234,7 +236,13 @@ export const BusinessReportsScreen: React.FC<BusinessReportsScreenProps> = ({
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
-      <StatusBar barStyle="dark-content" backgroundColor="#FAF7F2" />
+      <FeatureGate
+        feature="reports"
+        title="Business Reports & BI"
+        planSuggestion="Standard or Pro Plan"
+        onClose={onClose}
+      >
+        <StatusBar barStyle="dark-content" backgroundColor="#FAF7F2" />
 
       {/* 1. TOP STREAMLINED UNIFIED HEADER (Identical to HomePage & POS) */}
       <View style={styles.topHeader}>
@@ -503,7 +511,7 @@ export const BusinessReportsScreen: React.FC<BusinessReportsScreenProps> = ({
                 <View style={styles.bentoCell}>
                   <View style={styles.bentoCellHeader}>
                     <Text style={styles.bentoCellLabel}>GST COLLECTED</Text>
-                    <Receipt size={11} color="#D1D5DB" />
+                    <ReceiptText size={11} color="#D1D5DB" />
                   </View>
                   <Text style={[styles.bentoCellValue, { color: '#D1D5DB' }]}>
                     ₹{tax.toLocaleString('en-IN')}
@@ -633,7 +641,7 @@ export const BusinessReportsScreen: React.FC<BusinessReportsScreenProps> = ({
                   {/* Daily Ledger Table */}
                   <View style={styles.tableWrapper}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-                      <Receipt size={14} color="#DE8626" />
+                      <ReceiptText size={14} color="#DE8626" />
                       <Text style={styles.cardSectionTitle}>DAILY FINANCIAL BREAKDOWN</Text>
                     </View>
                     <View style={styles.dailyTable}>
@@ -758,6 +766,7 @@ export const BusinessReportsScreen: React.FC<BusinessReportsScreenProps> = ({
           <View style={{ height: 32 }} />
         </ScrollView>
       )}
+    </FeatureGate>
     </SafeAreaView>
   );
 };

@@ -14,4 +14,5 @@ export interface AuthResponse {
   bannerUrl?: string;
   restaurants: RestaurantDetail[];
   isTermConditionChecked?: boolean;
+  isPinConfigured?: boolean;
 }

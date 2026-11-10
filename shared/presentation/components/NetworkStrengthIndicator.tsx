@@ -7,6 +7,8 @@ import {
   Alert,
   AppState,
   AppStateStatus,
+  StyleProp,
+  ViewStyle,
 } from 'react-native';
 import {
   Wifi,
@@ -31,12 +33,14 @@ interface NetworkStrengthIndicatorProps {
   size?: number;
   showBadge?: boolean;
   showLatencyLabel?: boolean;
+  style?: StyleProp<ViewStyle>;
 }
 
 export const NetworkStrengthIndicator: React.FC<NetworkStrengthIndicatorProps> = ({
   size = 18,
   showBadge = false,
   showLatencyLabel = false,
+  style,
 }) => {
   const [network, setNetwork] = useState<NetworkState>({
     quality: 'excellent',
@@ -215,6 +219,7 @@ export const NetworkStrengthIndicator: React.FC<NetworkStrengthIndicatorProps> =
       style={[
         styles.iconContainer,
         network.quality === 'offline' && { backgroundColor: '#FEE2E2', borderColor: '#FECACA' },
+        style,
       ]}
       onPress={handlePress}
       activeOpacity={0.75}

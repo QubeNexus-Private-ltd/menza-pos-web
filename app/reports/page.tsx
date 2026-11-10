@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
+import { DashboardMetricsSkeleton, DashboardChartsSkeleton } from '@/components/common/Skeleton';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { ReportRemoteDataSource } from '@shared/data/datasources/ReportRemoteDataSource';
 import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
@@ -45,6 +46,7 @@ export default function ReportsPage() {
   const { activeRestaurant, restaurants } = useAuthStore();
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
+
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [dashboard, setDashboard] = useState<ExecutiveDashboard | null>(null);
@@ -55,6 +57,17 @@ export default function ReportsPage() {
 
   const [dateRange, setDateRange] = useState<'today' | 'week' | 'month'>('week');
   const [trendTab, setTrendTab] = useState<'revenue' | 'orders'>('revenue');
+
+  // Clean slate and show skeleton immediately upon restaurant switch
+  useEffect(() => {
+    setDashboard(null);
+    setSalesSummary(null);
+    setTopItems(null);
+    setHeatmap(null);
+    setOrders([]);
+    setLoading(true);
+  }, [currentRestId]);
+
 
   const loadReportData = useCallback(async (isManualRefresh = false) => {
     if (!currentRestId) return;

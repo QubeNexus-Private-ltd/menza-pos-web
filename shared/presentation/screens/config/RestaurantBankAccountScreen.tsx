@@ -306,8 +306,8 @@ export const RestaurantBankAccountScreen: React.FC<RestaurantBankAccountScreenPr
       if (activeRest) {
         useAuthStore.getState().setActiveRestaurant({
           ...activeRest,
-          bankerUpiId: cleanUpi || res?.upiId,
-          bankerAccountHolderName: cleanHolder || res?.accountHolder,
+          bankerUpiId: cleanUpi || (res as any)?.upiId,
+          bankerAccountHolderName: cleanHolder || (res as any)?.accountHolder,
           printUpiQrOnReceipts,
         } as any);
       }

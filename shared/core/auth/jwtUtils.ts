@@ -64,8 +64,10 @@ export function isJwtExpired(token: string | null | undefined, bufferSeconds: nu
 
   const claims = decodeJwtClaims(token);
   if (!claims || typeof claims.exp !== 'number') {
-    // If no exp claim could be parsed from token string, treat as expired/invalid
-    return true;
+    // If no numeric exp claim exists, do not assume expired on client side.
+    // Client-side session should not be wiped when an exp claim is missing or unparseable;
+    // let server validate authorization through HTTP 401 interceptors.
+    return false;
   }
 
   const expEpochMs = claims.exp * 1000;

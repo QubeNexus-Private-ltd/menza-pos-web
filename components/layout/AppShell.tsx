@@ -577,7 +577,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       {/* 3. Main Workspace Area */}
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Top Streamlined Unified Header (Identical to Menza POS Terminal) */}
-        <header className="sticky top-0 z-30 flex h-16 w-full items-center justify-between border-b border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] px-3 sm:px-4 lg:px-6 transition-colors shadow-xs shrink-0 overflow-x-clip gap-2">
+        <header className="sticky top-0 z-30 flex h-16 w-full items-center justify-between border-b border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#181E24] px-3 sm:px-4 lg:px-5 transition-colors shadow-[0_1px_3px_rgba(0,0,0,0.03)] shrink-0 gap-2 sm:gap-4">
           {/* LEFT: Mobile Toggle + Outlet Logo + Outlet Name & Dropdown + Status Pill & Subtitle */}
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             {/* Mobile Sidebar Hamburger Trigger */}
@@ -630,11 +630,11 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                 </div>
               </div>
             ) : (
-              <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+              <div className="flex items-center gap-2.5 min-w-0">
                 {/* Store Logo Thumbnail */}
                 <div
                   onClick={() => restaurants.length > 1 && setOutletMenuOpen(!outletMenuOpen)}
-                  className={`h-9 w-9 sm:h-10 sm:w-10 relative rounded-xl overflow-hidden border border-[#E7E1DA] dark:border-[#2B3540] bg-amber-500/5 shrink-0 shadow-xs flex items-center justify-center ${
+                  className={`h-9 w-9 relative rounded-xl overflow-hidden border border-[#E7E1DA] dark:border-[#2B3540] bg-amber-500/5 shrink-0 shadow-2xs flex items-center justify-center ${
                     restaurants.length > 1 ? 'cursor-pointer hover:border-[#DE8626] transition-colors' : ''
                   }`}
                   title={restaurants.length > 1 ? 'Switch Outlet' : (activeRestaurant?.restaurantName || 'Outlet Logo')}
@@ -749,7 +749,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                     <button
                       type="button"
                       onClick={() => setOperatingModalOpen(true)}
-                      className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold transition-all cursor-pointer ${
+                      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold tracking-wide transition-all cursor-pointer shrink-0 shadow-2xs ${
                         operatingStatus?.status === 'OPEN' || (!operatingStatus?.status && operatingStatus?.isOpen) || (!operatingStatus && activeRestaurant?.isActive !== false)
                           ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/20'
                           : operatingStatus?.status === 'PAUSED'
@@ -777,7 +777,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                     </button>
 
                     <span className="text-[#8C7A6B] hidden sm:inline">•</span>
-                    <span className="text-[11px] font-medium text-[#667085] dark:text-[#94A3B8] hidden sm:inline truncate max-w-[130px] md:max-w-[220px]">
+                    <span className="text-[11px] font-medium text-[#667085] dark:text-[#94A3B8] hidden sm:inline truncate max-w-[140px] sm:max-w-[180px] md:max-w-[240px]">
                       {getPageSubtitle()}
                     </span>
                   </div>
@@ -790,7 +790,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             {/* Online Wifi Status Indicator */}
             <div
-              className="hidden md:flex items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[11px] font-bold"
+              className="hidden lg:flex h-9 items-center gap-1.5 px-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs font-bold shadow-2xs"
               title={isLiveConnected ? 'Connected to Menza Live Real-Time Gateway' : 'Connecting to Live Gateway...'}
             >
               <span className="relative flex h-2 w-2">
@@ -798,60 +798,53 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
               </span>
               <Wifi className="h-3.5 w-3.5" />
-              <span className="hidden xl:inline">Online</span>
+              <span className="hidden 2xl:inline">Live</span>
             </div>
 
             {/* Today's Sales Telemetry Pill */}
             {!isSuperAdmin && !isSalesPerson && (
               <div
-                title={`Today's Revenue: ₹${todaySales.revenue.toLocaleString('en-IN')} across ${todaySales.orderCount} orders`}
-                className="hidden 2xl:inline-flex h-[36px] items-center gap-2 rounded-xl border border-[#E7E0D6] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3 text-xs shadow-xs"
+                title={`Today's Sales: ₹${todaySales.revenue.toLocaleString('en-IN')} across ${todaySales.orderCount} orders`}
+                className="hidden xl:inline-flex h-9 items-center gap-2 rounded-xl border border-[#E7E0D6] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3 text-xs shadow-2xs"
               >
-                <TrendingUp className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-                <span className="text-[#667085] dark:text-[#94A3B8]">Today:</span>
+                <TrendingUp className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <span className="text-[#667085] dark:text-[#94A3B8] font-medium">Today:</span>
                 <strong className="font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
                   ₹{todaySales.revenue.toLocaleString('en-IN')}
                 </strong>
-                <span className="rounded-full bg-black/5 dark:bg-white/5 px-1.5 py-0.5 text-[10px] font-semibold text-[#667085]">
+                <span className="rounded-md bg-black/5 dark:bg-white/5 px-1.5 py-0.5 text-[10px] font-bold text-[#667085]">
                   {todaySales.orderCount}
                 </span>
               </div>
             )}
 
-            {/* Subscription & Licensing Pill */}
+            {/* Subscription & Licensing Chip */}
             {!isSuperAdmin && !isSalesPerson && currentRestId > 0 && (
               <button
                 type="button"
                 onClick={() => openRenewalModal(undefined, 'renew')}
                 title="Subscription Details & Licensing • Click to View Details, Renew or Explore Plans"
-                className={`group hidden lg:inline-flex h-[36px] items-center gap-2 rounded-xl border pl-2.5 pr-1.5 text-xs font-extrabold transition-all cursor-pointer shadow-xs active:scale-[0.98] ${
+                className={`group hidden 2xl:inline-flex h-9 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-bold transition-all cursor-pointer shadow-2xs active:scale-[0.98] ${
                   isExpired || lifecycleState === 'EXPIRED'
                     ? 'border-red-500/40 bg-red-500/10 text-red-600 ring-1 ring-red-500/30 animate-pulse'
                     : isInGracePeriod || (daysRemaining > 0 && daysRemaining <= 3)
-                    ? 'border-amber-400 bg-[#FFF7EE] dark:bg-amber-950/30 text-amber-900 dark:text-amber-200 ring-1 ring-amber-400/30'
-                    : 'border-[#E7E0D6] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#1C1917] dark:text-[#F3F4F6] hover:border-[#DE8626] hover:shadow-sm'
+                    ? 'border-amber-400 bg-amber-500/10 text-amber-900 dark:text-amber-200 ring-1 ring-amber-400/30'
+                    : 'border-[#E7E0D6] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#1E2930] dark:text-[#F3F4F6] hover:border-[#DE8626]'
                 }`}
               >
-                <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-lg bg-amber-500/15 text-[#DE8626]">
-                  <Crown className="h-3 w-3" />
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="truncate max-w-[85px] sm:max-w-[110px] font-extrabold">
-                    {subscription?.planName || 'Subscription'}
-                  </span>
-                  {daysRemaining > 0 && (
-                    <span className="text-[11px] font-semibold text-[#667085] dark:text-[#94A3B8]">
-                      ({daysRemaining}d)
-                    </span>
-                  )}
-                </div>
-                <span className="rounded-lg bg-amber-500/15 group-hover:bg-[#DE8626] group-hover:text-white px-2 py-0.5 text-[10px] font-extrabold uppercase text-[#DE8626] transition-colors tracking-tight">
-                  Details
+                <Crown className="h-3.5 w-3.5 text-[#DE8626] shrink-0" />
+                <span className="truncate max-w-[100px] font-bold">
+                  {subscription?.planName || 'Plan'}
                 </span>
+                {daysRemaining > 0 && (
+                  <span className="text-[11px] text-[#667085] dark:text-[#94A3B8] font-semibold">
+                    • {daysRemaining}d
+                  </span>
+                )}
               </button>
             )}
 
-            {/* Prepaid Platform Fee Wallet Pill (Identical UX to F:\Menza) */}
+            {/* Prepaid Platform Fee Wallet Pill (Unified h-9 styling) */}
             {!isSuperAdmin && !isSalesPerson && currentRestId > 0 && (
               <WalletBalanceWidget
                 restaurantId={currentRestId}
@@ -860,15 +853,18 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
               />
             )}
 
+            {/* Subtle Vertical Divider */}
+            <div className="hidden sm:block h-5 w-px bg-[#E7E1DA] dark:bg-[#2B3540] mx-0.5" />
+
             {/* Real-time Order Alerts Notification Bell Button */}
             <div className="relative" ref={notifMenuRef}>
               <button
                 type="button"
                 onClick={() => setNotifDrawerOpen(!notifDrawerOpen)}
-                className={`relative flex items-center justify-center h-8 w-8 sm:h-9 sm:w-9 rounded-xl border transition-all ${
+                className={`relative flex items-center justify-center h-9 w-9 rounded-xl border transition-all shadow-2xs ${
                   unreadCount > 0
                     ? 'border-[#DE8626] bg-amber-500/10 text-[#DE8626]'
-                    : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#78716C] hover:border-[#DE8626] hover:text-[#DE8626]'
+                    : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#667085] hover:border-[#DE8626] hover:text-[#DE8626]'
                 }`}
                 title={`Order Notifications, ${unreadCount} unread`}
               >
@@ -1008,11 +1004,11 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
               <button
                 type="button"
                 onClick={() => router.push('/settings/printer')}
-                className="relative flex items-center justify-center h-8 w-8 sm:h-9 sm:w-9 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#78716C] hover:border-[#DE8626] hover:text-[#DE8626] transition-colors shadow-xs"
-                title="Thermal Printer Options & Paper Width"
+                className="relative flex items-center justify-center h-9 w-9 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#667085] hover:border-[#DE8626] hover:text-[#DE8626] transition-colors shadow-2xs"
+                title="Thermal Printer Settings & Status"
               >
                 <Printer className="h-4 w-4" />
-                <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-[#151A20]" />
+                <span className="absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-[#151A20]" />
               </button>
             )}
 
@@ -1020,7 +1016,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
             <button
               type="button"
               onClick={toggleTheme}
-              className="flex items-center justify-center h-8 w-8 sm:h-9 sm:w-9 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#78716C] hover:border-[#DE8626] hover:text-[#DE8626] transition-colors shadow-xs"
+              className="flex items-center justify-center h-9 w-9 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#667085] hover:border-[#DE8626] hover:text-[#DE8626] transition-colors shadow-2xs"
               title={`Switch to ${isDark ? 'Light' : 'Dark'} Mode`}
             >
               {isDark ? <Sun className="h-4 w-4 text-amber-400" /> : <Moon className="h-4 w-4" />}
@@ -1031,7 +1027,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
               type="button"
               onClick={toggleFullscreen}
               title={isFullscreen ? 'Exit Fullscreen' : 'Enter Kiosk Fullscreen Mode'}
-              className="hidden sm:flex items-center justify-center h-8 w-8 sm:h-9 sm:w-9 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#78716C] hover:border-[#DE8626] hover:text-[#DE8626] transition-colors shadow-xs"
+              className="hidden md:flex items-center justify-center h-9 w-9 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#667085] hover:border-[#DE8626] hover:text-[#DE8626] transition-colors shadow-2xs"
             >
               {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
             </button>
@@ -1042,10 +1038,9 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                 type="button"
                 onClick={lockToPinScreen}
                 title="Lock Terminal • Fast Multi-Staff PIN Switch"
-                className="flex items-center gap-1.5 h-8 sm:h-9 px-2.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#78716C] hover:border-[#DE8626] hover:text-[#DE8626] transition-colors shadow-xs"
+                className="flex items-center justify-center h-9 w-9 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#667085] hover:border-red-400 hover:text-red-500 hover:bg-red-500/5 transition-colors shadow-2xs"
               >
-                <Lock className="h-3.5 w-3.5 text-[#DE8626]" />
-                <span className="hidden sm:inline text-xs font-bold">Lock</span>
+                <Lock className="h-3.5 w-3.5" />
               </button>
             )}
 
@@ -1054,7 +1049,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
               <button
                 type="button"
                 onClick={() => router.push('/pos')}
-                className="hidden xl:inline-flex h-[36px] items-center gap-1.5 rounded-xl bg-gradient-to-r from-[#DE8626] to-[#CB741B] px-3 text-xs font-black text-white shadow-md shadow-[#DE8626]/20 hover:from-[#C4721C] hover:to-[#B66415] transition-all hover:scale-[1.02] active:scale-[0.98]"
+                className="hidden 2xl:inline-flex h-9 items-center gap-1.5 rounded-xl bg-gradient-to-r from-[#DE8626] to-[#CB741B] px-3 text-xs font-bold text-white shadow-xs hover:from-[#C4721C] hover:to-[#B66415] transition-all hover:scale-[1.02] active:scale-[0.98]"
               >
                 <ShoppingBag className="h-3.5 w-3.5 stroke-[2.5]" />
                 <span>POS Terminal</span>
@@ -1066,7 +1061,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
               <button
                 type="button"
                 onClick={() => setProfileMenuOpen(!profileMenuOpen)}
-                className="flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-amber-500/10 text-xs font-black text-[#DE8626] hover:border-[#DE8626] transition-all shadow-xs"
+                className="flex h-9 w-9 items-center justify-center rounded-xl border border-[#DE8626]/30 bg-gradient-to-br from-amber-500/10 to-[#DE8626]/20 text-xs font-black text-[#DE8626] hover:border-[#DE8626] transition-all shadow-2xs cursor-pointer"
                 title="User Profile & Quick Actions"
               >
                 {user?.name ? user.name.slice(0, 2).toUpperCase() : 'ME'}

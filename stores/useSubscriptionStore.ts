@@ -70,6 +70,7 @@ interface SubscriptionStoreState {
     razorpaySignature?: string
   ) => Promise<{ success: boolean; isPaid: boolean; message?: string }>;
   canTakeOrders: () => boolean;
+  isZeroCommission: () => boolean;
   hasEntitlement: (configKey: string) => boolean;
   isAppAllowed: (appKey: string) => boolean;
   isFeatureAllowed: (featureKey: string) => boolean;
@@ -316,6 +317,14 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
       return false;
     }
     return true;
+  },
+
+  isZeroCommission: (): boolean => {
+    const { subscription } = get();
+    if (!subscription) return false;
+    const pct = subscription.effectiveCommissionPercentage ?? 0;
+    const flat = subscription.effectiveFlatCommissionPerOrder ?? 0;
+    return pct <= 0 && flat <= 0;
   },
 
   hasEntitlement: (configKey: string): boolean => {

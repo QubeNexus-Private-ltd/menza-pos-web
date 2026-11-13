@@ -29,10 +29,12 @@ import {
   Search,
   Eye,
   X,
+  QrCode,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
 import { TermsConsentCard } from '@/components/common/TermsConsentCard';
+import { StorefrontQrModal } from '@/components/tables/StorefrontQrModal';
 import dynamic from 'next/dynamic';
 
 const OrderSettleModal = dynamic(
@@ -122,6 +124,7 @@ export default function DashboardPage() {
   const [selectedOrder, setSelectedOrder] = useState<OrderMaster | null>(null);
   const [settlingOrder, setSettlingOrder] = useState<OrderMaster | null>(null);
   const [orderSearchQuery, setOrderSearchQuery] = useState('');
+  const [storeQrOpen, setStoreQrOpen] = useState(false);
 
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
@@ -402,6 +405,17 @@ export default function DashboardPage() {
                 <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
                 <span>Refresh</span>
               </button>
+
+              {!isSuperAdmin && (
+                <button
+                  onClick={() => setStoreQrOpen(true)}
+                  className="flex items-center gap-1.5 rounded-xl border border-[#DE8626] bg-amber-500/10 px-3.5 py-2 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 shadow-xs transition-colors"
+                  title="Generate, download or print Store Profile QR Standee"
+                >
+                  <QrCode className="h-4 w-4" />
+                  <span>Store QR</span>
+                </button>
+              )}
 
               {!isSuperAdmin && (
                 <button
@@ -780,6 +794,24 @@ export default function DashboardPage() {
               </div>
 
               <div
+                onClick={() => setStoreQrOpen(true)}
+                className="group cursor-pointer rounded-2xl border border-amber-500/35 bg-gradient-to-br from-amber-500/10 via-[#FAF7F2] to-[#FFFFFF] dark:via-[#1B2127] dark:to-[#1B2127] p-5 shadow-sm hover:shadow-md hover:border-[#DE8626] transition-all"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#DE8626] text-white shadow-md shadow-[#DE8626]/20 group-hover:scale-105 transition-transform">
+                    <QrCode className="h-5 w-5" />
+                  </div>
+                  <span className="rounded-full bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[9px] font-extrabold text-[#DE8626] uppercase">
+                    Store & Tables
+                  </span>
+                </div>
+                <h4 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">QR Codes & Standee</h4>
+                <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-1">
+                  Store Profile QR Standee, customer mobile ordering, and table stickers
+                </p>
+              </div>
+
+              <div
                 onClick={() => router.push('/kitchen')}
                 className="group cursor-pointer rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-5 shadow-sm hover:shadow-md hover:border-[#DE8626] transition-all"
               >
@@ -1026,6 +1058,13 @@ export default function DashboardPage() {
           </div>
             </>
           )}
+          {/* Store Profile Standee QR Modal */}
+          <StorefrontQrModal
+            isOpen={storeQrOpen}
+            onClose={() => setStoreQrOpen(false)}
+            restaurantId={currentRestId}
+            restaurantName={activeRestaurant?.restaurantName || 'Menza Restaurant'}
+          />
         </div>
       </AppShell>
       <TermsConsentCard />

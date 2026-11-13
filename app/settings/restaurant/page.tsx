@@ -20,9 +20,12 @@ import {
   Search,
   X,
   ChevronDown,
+  QrCode,
+  ArrowRight,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
+import { StorefrontQrModal } from '@/components/tables/StorefrontQrModal';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { RestaurantConfigRemoteDataSource } from '@shared/data/datasources/RestaurantConfigRemoteDataSource';
 import { MasterDataRemoteDataSource } from '@shared/data/datasources/MasterDataRemoteDataSource';
@@ -118,6 +121,7 @@ export default function RestaurantConfigPage() {
   const [imageModalVisible, setImageModalVisible] = useState(false);
   const [activeUploadTarget, setActiveUploadTarget] = useState<'imageUrl' | 'logoUrl'>('imageUrl');
   const [customImageUrlInput, setCustomImageUrlInput] = useState('');
+  const [storeQrOpen, setStoreQrOpen] = useState(false);
 
   // Clean slate upon restaurant switch
   useEffect(() => {
@@ -386,6 +390,16 @@ export default function RestaurantConfigPage() {
             >
               <ArrowLeft className="h-4 w-4" />
               <span>Back to Settings</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setStoreQrOpen(true)}
+              className="flex items-center gap-1.5 rounded-xl border border-[#DE8626] bg-amber-500/10 px-3.5 py-2 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 shadow-xs transition-colors"
+              title="Generate, download or print Storefront / Profile QR Standee"
+            >
+              <QrCode className="h-4 w-4" />
+              <span>Store Profile QR</span>
             </button>
           </div>
 
@@ -663,6 +677,42 @@ export default function RestaurantConfigPage() {
                       {dineInPaymentMode === 'POSTPAID' && <div className="h-1.5 w-1.5 rounded-full bg-white" />}
                     </div>
                   </div>
+                </div>
+              </div>
+
+              {/* QR Code Quick Launch & Print Action Banner */}
+              <div className="mt-4 rounded-xl border border-amber-500/30 bg-gradient-to-r from-amber-500/10 via-[#FFF4E5]/50 dark:via-[#2A1E11]/40 to-transparent p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#DE8626] text-white shadow-sm">
+                    <QrCode className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                      Store Profile QR Standee & Dine-in Table QRs
+                    </h4>
+                    <p className="text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                      Download permanent Store Profile QR for social media / counter standee, or generate table-specific QR stickers for diners.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setStoreQrOpen(true)}
+                    className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 rounded-xl bg-[#DE8626] px-3.5 py-2 text-xs font-bold text-white shadow-xs hover:bg-[#C4721C] transition-colors"
+                  >
+                    <QrCode className="h-3.5 w-3.5" />
+                    <span>Store Profile QR</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => router.push('/tables')}
+                    className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-3.5 py-2 text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                  >
+                    <span>Manage Table QRs</span>
+                    <ArrowRight className="h-3.5 w-3.5 text-[#DE8626]" />
+                  </button>
                 </div>
               </div>
             </div>
@@ -977,6 +1027,14 @@ export default function RestaurantConfigPage() {
               </div>
             </div>
           )}
+
+          {/* Storefront / Profile QR Standee Modal */}
+          <StorefrontQrModal
+            isOpen={storeQrOpen}
+            onClose={() => setStoreQrOpen(false)}
+            restaurantId={currentRestId}
+            restaurantName={name.trim() || activeRestaurant?.restaurantName || 'Menza Restaurant'}
+          />
         </div>
       </AppShell>
     </AuthGuard>

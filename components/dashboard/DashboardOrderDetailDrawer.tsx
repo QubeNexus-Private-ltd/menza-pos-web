@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import React, { useState } from 'react';
 import {
@@ -32,6 +32,7 @@ import {
 } from '@/lib/utils/orderStatusEngine';
 import { WebPrinterService } from '@/services/webPrinterService';
 import { WebWhatsAppService } from '@/services/whatsAppService';
+import { WhatsAppShareModal } from '@/components/orders/WhatsAppShareModal';
 import { usePrinterStore } from '@shared/presentation/state/usePrinterStore';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { usePosCatalogStore } from '@/stores/usePosCatalogStore';
@@ -59,6 +60,7 @@ export const DashboardOrderDetailDrawer: React.FC<DashboardOrderDetailDrawerProp
 
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
+  const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
 
   if (!isOpen || !order) return null;
 
@@ -242,24 +244,7 @@ export const DashboardOrderDetailDrawer: React.FC<DashboardOrderDetailDrawerProp
   };
 
   const handleShareWhatsApp = () => {
-    const phone = order.mobileNumber || '';
-    const receiptData = {
-      restaurantName: activeRestaurant?.restaurantName || 'Menza Restaurant',
-      orderId: order.id,
-      customerName: order.customerName,
-      items: Array.isArray(order.items)
-        ? order.items.map((i) => ({
-            itemName: i.itemName,
-            quantity: i.quantity,
-            price: Number(i.unitPrice || 0),
-          }))
-        : [],
-      grandTotal: Number(order.totalAmount || 0),
-      paymentMode: order.paymentMode || 'CASH',
-    };
-
-    const url = WebWhatsAppService.getWhatsAppReceiptUrl(phone, receiptData);
-    window.open(url, '_blank', 'noopener,noreferrer');
+    setShowWhatsAppModal(true);
   };
 
   return (
@@ -538,6 +523,14 @@ export const DashboardOrderDetailDrawer: React.FC<DashboardOrderDetailDrawerProp
           )}
         </div>
       </div>
+
+      {showWhatsAppModal && (
+        <WhatsAppShareModal
+          isOpen={showWhatsAppModal}
+          onClose={() => setShowWhatsAppModal(false)}
+          order={order}
+        />
+      )}
     </div>
   );
 };

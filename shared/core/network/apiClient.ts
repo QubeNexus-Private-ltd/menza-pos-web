@@ -285,13 +285,22 @@ apiClient.interceptors.request.use(
     const token = (globalThis as any).__MENZA_AUTH_TOKEN__ || storeState.token;
     const activeRestId = (globalThis as any).__MENZA_ACTIVE_REST_ID__ || storeState.activeRestaurant?.restaurantId;
 
-    const isAuthRoute = config.url?.includes('/Auth/');
+    const anonymousAuthRoutes = [
+      '/Auth/Login',
+      '/Auth/GenerateOtp',
+      '/Auth/VerifyOtp',
+      '/Auth/RefreshToken',
+      '/Auth/StaffPinLogin',
+      '/Auth/ResetPinWithOtp',
+      '/Auth/Ping',
+    ];
+    const isAnonymousAuthRoute = anonymousAuthRoutes.some((route) => config.url?.includes(route));
 
-    if (token && !isAuthRoute) {
+    if (token && !isAnonymousAuthRoute) {
       config.headers.Authorization = `Bearer ${token}`;
     }
 
-    if (activeRestId && !isAuthRoute && typeof activeRestId === 'number' && !isNaN(activeRestId)) {
+    if (activeRestId && !isAnonymousAuthRoute && typeof activeRestId === 'number' && !isNaN(activeRestId)) {
       config.headers['X-Active-Restaurant-Id'] = activeRestId.toString();
       config.headers['X-Restaurant-Id'] = activeRestId.toString();
     }

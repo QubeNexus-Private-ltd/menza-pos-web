@@ -60,20 +60,66 @@ export class RoleRemoteDataSource {
 
   async toggleRoleStatus(userRoleId: number, isActive: boolean, restaurantId?: number, userId?: number): Promise<boolean> {
     const targetRestId = restaurantId || (globalThis as any).__MENZA_ACTIVE_REST_ID__ || 0;
+    const headers = targetRestId > 0 ? { 'X-Restaurant-Id': targetRestId.toString() } : {};
+    const targetUserId = userId || userRoleId;
+    let lastError: any = null;
+
     try {
-      const targetUserId = userId || userRoleId;
       const response = await apiClient.put(
-        `/Role/Staff/ActiveDiactive?userId=${targetUserId}&restaurantId=${targetRestId}&isActive=${isActive}`
+        `/Role/Staff/ActiveDiactive?userId=${targetUserId}&restaurantId=${targetRestId}&isActive=${isActive}`,
+        null,
+        { headers }
       );
-      return response.status === 200;
-    } catch {
-      try {
-        const response = await apiClient.put(`/Role/ActiveDiactive?userRoleId=${userRoleId}&isActive=${isActive}`);
-        return response.status === 200;
-      } catch {
+      if (response.status === 200) {
+        const list = inMemoryStaffStore[targetRestId];
+        if (list) {
+          const item = list.find((s) => s.id === userRoleId || s.userId === targetUserId);
+          if (item) item.isActive = isActive;
+        }
         return true;
       }
+    } catch (err: any) {
+      lastError = err;
+      if (err?.response?.status === 401 || err?.response?.status === 403) {
+        const msg = err?.response?.data?.message || 'Access denied: Only Owner or Admin can activate or deactivate staff.';
+        throw new Error(typeof msg === 'string' ? msg : 'Access denied: Only Owner or Admin can activate or deactivate staff.');
+      }
     }
+
+    try {
+      const response = await apiClient.put(
+        `/Staff/ActiveDiactive?userId=${targetUserId}&restaurantId=${targetRestId}&isActive=${isActive}`,
+        null,
+        { headers }
+      );
+      if (response.status === 200) {
+        const list = inMemoryStaffStore[targetRestId];
+        if (list) {
+          const item = list.find((s) => s.id === userRoleId || s.userId === targetUserId);
+          if (item) item.isActive = isActive;
+        }
+        return true;
+      }
+    } catch (err: any) {
+      lastError = err;
+      if (err?.response?.status === 401 || err?.response?.status === 403) {
+        const msg = err?.response?.data?.message || 'Access denied: Only Owner or Admin can activate or deactivate staff.';
+        throw new Error(typeof msg === 'string' ? msg : 'Access denied: Only Owner or Admin can activate or deactivate staff.');
+      }
+    }
+
+    try {
+      const response = await apiClient.put(`/Role/ActiveDiactive?userRoleId=${userRoleId}&isActive=${isActive}`);
+      if (response.status === 200) {
+        return true;
+      }
+    } catch (err: any) {
+      lastError = err;
+    }
+
+    const serverMsg = lastError?.response?.data?.message || lastError?.response?.data;
+    const msg = typeof serverMsg === 'string' ? serverMsg : (lastError?.message || 'Failed to update staff status.');
+    throw new Error(msg);
   }
 
   private deduplicateStaff(list: StaffMember[]): StaffMember[] {
@@ -100,9 +146,20 @@ export class RoleRemoteDataSource {
     const targetRestId = restaurantId || (globalThis as any).__MENZA_ACTIVE_REST_ID__ || 0;
 
     try {
-      const response = await apiClient.get(`/Role/Staff?restaurantId=${targetRestId}`, {
-        headers: targetRestId > 0 ? { 'X-Restaurant-Id': targetRestId.toString() } : {},
-      });
+      let response: any = null;
+      try {
+        response = await apiClient.get(`/Role/Staff?restaurantId=${targetRestId}`, {
+          headers: targetRestId > 0 ? { 'X-Restaurant-Id': targetRestId.toString() } : {},
+        });
+      } catch (err: any) {
+        if (err?.response?.status === 404) {
+          response = await apiClient.get(`/Staff?restaurantId=${targetRestId}`, {
+            headers: targetRestId > 0 ? { 'X-Restaurant-Id': targetRestId.toString() } : {},
+          });
+        } else {
+          throw err;
+        }
+      }
       const data = response.data;
       const list = Array.isArray(data) ? data : (data?.items || data?.data || []);
 
@@ -138,26 +195,35 @@ export class RoleRemoteDataSource {
   }
 
   async registerStaffMember(request: CreateStaffRequest): Promise<StaffMember> {
-    const targetRestId = request.restaurantId || (globalThis as any).__MENZA_ACTIVE_REST_ID__ || 1;
+    const targetRestId = request.restaurantId || (globalThis as any).__MENZA_ACTIVE_REST_ID__ || 0;
+    if (targetRestId <= 0) {
+      throw new Error('Restaurant ID is required to register staff members.');
+    }
     const cleanMobile = (request.mobile || '').replace(/\D/g, '').slice(-10);
     const cleanName = (request.name || '').trim();
 
+    const headers = { 'X-Restaurant-Id': targetRestId.toString() };
+    const payload = {
+      name: cleanName,
+      mobile: cleanMobile,
+      email: request.email?.trim() || null,
+      roleId: request.roleId,
+      restaurantId: targetRestId,
+      employeeCode: request.employeeCode?.trim() || undefined,
+      shift: request.shift?.trim() || undefined,
+    };
+
     try {
-      const response = await apiClient.post(
-        '/Role/Staff',
-        {
-          name: cleanName,
-          mobile: cleanMobile,
-          email: request.email?.trim() || null,
-          roleId: request.roleId,
-          restaurantId: targetRestId,
-          employeeCode: request.employeeCode?.trim() || undefined,
-          shift: request.shift?.trim() || undefined,
-        },
-        {
-          headers: targetRestId > 0 ? { 'X-Restaurant-Id': targetRestId.toString() } : {},
+      let response: any = null;
+      try {
+        response = await apiClient.post('/Role/Staff', payload, { headers });
+      } catch (err: any) {
+        if (err?.response?.status === 404) {
+          response = await apiClient.post('/Staff', payload, { headers });
+        } else {
+          throw err;
         }
-      );
+      }
 
       if (response.data) {
         const item = response.data;
@@ -190,55 +256,111 @@ export class RoleRemoteDataSource {
     }
   }
 
-  async updateStaffMember(staffId: number, updates: Partial<CreateStaffRequest>): Promise<StaffMember> {
-    const targetRestId = updates.restaurantId || (globalThis as any).__MENZA_ACTIVE_REST_ID__ || 1;
-    const cleanMobile = updates.mobile ? updates.mobile.replace(/\D/g, '').slice(-10) : undefined;
-
-    try {
-      const response = await apiClient.put(
-        `/Role/Staff/${staffId}`,
-        {
-          name: updates.name?.trim(),
-          mobile: cleanMobile,
-          email: updates.email?.trim() || null,
-          roleId: updates.roleId,
-          restaurantId: targetRestId,
-          employeeCode: updates.employeeCode?.trim() || undefined,
-          shift: updates.shift?.trim() || undefined,
-        },
-        {
-          headers: targetRestId > 0 ? { 'X-Restaurant-Id': targetRestId.toString() } : {},
-        }
-      );
-
-      if (response.data) {
-        const item = response.data;
-        const updatedStaff: StaffMember = {
-          id: Number(item.id || staffId),
-          userId: Number(item.userId || staffId),
-          name: String(item.name || updates.name),
-          mobile: String(item.mobile || cleanMobile || ''),
-          email: item.email || updates.email || undefined,
-          roleId: Number(item.roleId || updates.roleId || 4),
-          roleName: String(item.roleName || ROLE_NAME_MAP[updates.roleId || 4] || 'Staff'),
-          restaurantId: targetRestId,
-          employeeCode: item.employeeCode || updates.employeeCode || undefined,
-          shift: item.shift || updates.shift || undefined,
-          isActive: Boolean(item.isActive ?? true),
-          createdAt: item.createdAt || new Date().toISOString(),
-        };
-
-        const list = inMemoryStaffStore[targetRestId] || [];
-        const idx = list.findIndex((s) => s.id === staffId || s.userId === staffId);
-        if (idx >= 0) list[idx] = updatedStaff;
-        return updatedStaff;
-      }
-    } catch (err: any) {
-      console.warn('PUT /Role/Staff failed, updating local store', err?.message);
+  async updateStaffMember(
+    staffId: number,
+    updates: Partial<CreateStaffRequest> & { restaurantId?: number; userId?: number; isActive?: boolean }
+  ): Promise<StaffMember> {
+    const targetRestId = updates.restaurantId || (globalThis as any).__MENZA_ACTIVE_REST_ID__ || 0;
+    if (targetRestId <= 0) {
+      throw new Error('Restaurant ID is required to update staff details.');
     }
 
+    const cleanMobile = updates.mobile ? updates.mobile.replace(/\D/g, '').slice(-10) : undefined;
+    const headers = { 'X-Restaurant-Id': targetRestId.toString() };
+    const payload = {
+      name: updates.name?.trim(),
+      mobile: cleanMobile,
+      email: updates.email?.trim() || null,
+      roleId: updates.roleId,
+      restaurantId: targetRestId,
+      employeeCode: updates.employeeCode?.trim() || undefined,
+      shift: updates.shift?.trim() || undefined,
+      isActive: updates.isActive ?? true,
+    };
+
+    let serverError: any = null;
+    let responseData: any = null;
+
+    // 1. Primary endpoint: PUT /Role/Staff/{id}
+    try {
+      const res = await apiClient.put(`/Role/Staff/${staffId}`, payload, { headers });
+      if (res.data) responseData = res.data;
+    } catch (err: any) {
+      serverError = err;
+      const statusCode = err?.response?.status;
+      // If 403 Forbidden (Only Owner allowed) or 400 Bad Request, do not hide error
+      if (statusCode === 403 || statusCode === 401) {
+        const msg = err?.response?.data?.message || err?.response?.data || 'Access denied: Only the restaurant Owner can modify staff.';
+        throw new Error(typeof msg === 'string' ? msg : 'Access denied: Only the restaurant Owner can modify staff.');
+      }
+    }
+
+    // 2. Fallback: PUT /Staff/{id}
+    if (!responseData) {
+      try {
+        const res = await apiClient.put(`/Staff/${staffId}`, payload, { headers });
+        if (res.data) responseData = res.data;
+      } catch (err: any) {
+        const statusCode = err?.response?.status;
+        if (statusCode === 403 || statusCode === 401) {
+          const msg = err?.response?.data?.message || err?.response?.data || 'Access denied: Only the restaurant Owner can modify staff.';
+          throw new Error(typeof msg === 'string' ? msg : 'Access denied: Only the restaurant Owner can modify staff.');
+        }
+      }
+    }
+
+    // 3. Fallback: if staffId was UserRestaurantRole.Id and updates.userId exists
+    if (!responseData && updates.userId && updates.userId !== staffId) {
+      try {
+        const res = await apiClient.put(`/Role/Staff/${updates.userId}`, payload, { headers });
+        if (res.data) responseData = res.data;
+      } catch (err: any) {
+        const statusCode = err?.response?.status;
+        if (statusCode === 403 || statusCode === 401) {
+          const msg = err?.response?.data?.message || err?.response?.data || 'Access denied: Only the restaurant Owner can modify staff.';
+          throw new Error(typeof msg === 'string' ? msg : 'Access denied: Only the restaurant Owner can modify staff.');
+        }
+      }
+    }
+
+    if (responseData) {
+      const item = responseData;
+      const updatedStaff: StaffMember = {
+        id: Number(item.id || staffId),
+        userId: Number(item.userId || updates.userId || staffId),
+        name: String(item.name || updates.name),
+        mobile: String(item.mobile || cleanMobile || ''),
+        email: item.email || updates.email || undefined,
+        roleId: Number(item.roleId || updates.roleId || 4),
+        roleName: String(item.roleName || ROLE_NAME_MAP[updates.roleId || 4] || 'Staff'),
+        restaurantId: targetRestId,
+        employeeCode: item.employeeCode || updates.employeeCode || undefined,
+        shift: item.shift || updates.shift || undefined,
+        isActive: Boolean(item.isActive ?? updates.isActive ?? true),
+        createdAt: item.createdAt || new Date().toISOString(),
+      };
+
+      const list = inMemoryStaffStore[targetRestId] || [];
+      const idx = list.findIndex((s) => s.id === staffId || s.userId === staffId || (updates.userId && s.userId === updates.userId));
+      if (idx >= 0) {
+        list[idx] = updatedStaff;
+      } else {
+        list.push(updatedStaff);
+      }
+      inMemoryStaffStore[targetRestId] = list;
+      return updatedStaff;
+    }
+
+    // If server error exists and not 404, rethrow
+    if (serverError && serverError?.response?.status && serverError.response.status !== 404) {
+      const serverMsg = serverError?.response?.data?.message || serverError?.response?.data;
+      const msg = typeof serverMsg === 'string' ? serverMsg : (serverError?.message || 'Failed to update staff record on server.');
+      throw new Error(msg);
+    }
+
+    // Local fallback for offline/disconnected operation
     const staffList = inMemoryStaffStore[targetRestId] || [];
-    const index = staffList.findIndex((s) => s.id === staffId || s.userId === staffId);
+    const index = staffList.findIndex((s) => s.id === staffId || s.userId === staffId || (updates.userId && s.userId === updates.userId));
 
     if (index >= 0) {
       const existing = staffList[index];
@@ -251,30 +373,92 @@ export class RoleRemoteDataSource {
         email: updates.email !== undefined ? updates.email.trim() : existing.email,
         roleId: updates.roleId || existing.roleId,
         roleName: updatedRoleName,
+        restaurantId: targetRestId,
         employeeCode: updates.employeeCode?.trim() || existing.employeeCode,
         shift: updates.shift || existing.shift,
+        isActive: updates.isActive !== undefined ? updates.isActive : existing.isActive,
       };
 
       staffList[index] = updatedStaff;
       return updatedStaff;
     }
 
-    throw new Error('Staff member not found');
+    throw new Error(serverError?.response?.data?.message || serverError?.message || 'Staff member not found');
   }
 
-  async deleteStaffMember(staffId: number, restaurantId?: number): Promise<boolean> {
-    const targetRestId = restaurantId || (globalThis as any).__MENZA_ACTIVE_REST_ID__ || 1;
-    try {
-      await apiClient.delete(`/Role/Staff/${staffId}?restaurantId=${targetRestId}`, {
-        headers: targetRestId > 0 ? { 'X-Restaurant-Id': targetRestId.toString() } : {},
-      });
-    } catch {
-      // Continue removing locally
+  async deleteStaffMember(staffId: number, restaurantId?: number, userId?: number): Promise<boolean> {
+    const targetRestId = restaurantId || (globalThis as any).__MENZA_ACTIVE_REST_ID__ || 0;
+    if (targetRestId <= 0) {
+      throw new Error('Restaurant ID is required to remove staff member.');
     }
 
-    for (const restId in inMemoryStaffStore) {
-      inMemoryStaffStore[restId] = inMemoryStaffStore[restId].filter((s) => s.id !== staffId && s.userId !== staffId);
+    const headers = { 'X-Restaurant-Id': targetRestId.toString() };
+    let deleteSuccess = false;
+    let lastError: any = null;
+
+    // 1. Primary endpoint: DELETE /Role/Staff/{id}?restaurantId={targetRestId}
+    try {
+      await apiClient.delete(`/Role/Staff/${staffId}?restaurantId=${targetRestId}`, { headers });
+      deleteSuccess = true;
+    } catch (err: any) {
+      lastError = err;
+      const status = err?.response?.status;
+      if (status === 403 || status === 401) {
+        const msg = err?.response?.data?.message || err?.response?.data || 'Access denied: Only the restaurant Owner can delete staff.';
+        throw new Error(typeof msg === 'string' ? msg : 'Access denied: Only the restaurant Owner can delete staff.');
+      }
     }
+
+    // 2. Secondary endpoint: DELETE /Staff/{id}?restaurantId={targetRestId}
+    if (!deleteSuccess) {
+      try {
+        await apiClient.delete(`/Staff/${staffId}?restaurantId=${targetRestId}`, { headers });
+        deleteSuccess = true;
+      } catch (err: any) {
+        lastError = err;
+        const status = err?.response?.status;
+        if (status === 403 || status === 401) {
+          const msg = err?.response?.data?.message || err?.response?.data || 'Access denied: Only the restaurant Owner can delete staff.';
+          throw new Error(typeof msg === 'string' ? msg : 'Access denied: Only the restaurant Owner can delete staff.');
+        }
+      }
+    }
+
+    // 3. Fallback: if staffId was UserRestaurantRole.Id and userId is available
+    if (!deleteSuccess && userId && userId !== staffId) {
+      try {
+        await apiClient.delete(`/Role/Staff/${userId}?restaurantId=${targetRestId}`, { headers });
+        deleteSuccess = true;
+      } catch (err: any) {
+        lastError = err;
+      }
+    }
+
+    // 4. Fallback: Deactivate role via ActiveDiactive endpoint
+    if (!deleteSuccess) {
+      const targetUserId = userId || staffId;
+      try {
+        await apiClient.put(`/Role/Staff/ActiveDiactive?userId=${targetUserId}&restaurantId=${targetRestId}&isActive=false`, null, { headers });
+        deleteSuccess = true;
+      } catch (err: any) {
+        lastError = err;
+      }
+    }
+
+    // If server rejected with explicit non-404 error and delete did not succeed, raise the error
+    if (!deleteSuccess && lastError && lastError?.response?.status && lastError.response.status !== 404) {
+      const serverMsg = lastError?.response?.data?.message || lastError?.response?.data;
+      const msg = typeof serverMsg === 'string' ? serverMsg : (lastError?.message || 'Could not remove staff member.');
+      throw new Error(msg);
+    }
+
+    // Evict from in-memory stores
+    for (const restId in inMemoryStaffStore) {
+      inMemoryStaffStore[restId] = inMemoryStaffStore[restId].filter(
+        (s) => s.id !== staffId && s.userId !== staffId && (!userId || (s.userId !== userId && s.id !== userId))
+      );
+    }
+
     return true;
   }
 }

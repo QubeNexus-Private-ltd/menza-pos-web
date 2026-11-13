@@ -14,8 +14,8 @@ export class RoleRepositoryImpl implements IRoleRepository {
     return await this.remoteDataSource.assignRole(request);
   }
 
-  async toggleRoleStatus(userRoleId: number, isActive: boolean): Promise<boolean> {
-    return await this.remoteDataSource.toggleRoleStatus(userRoleId, isActive);
+  async toggleRoleStatus(userRoleId: number, isActive: boolean, restaurantId?: number, userId?: number): Promise<boolean> {
+    return await this.remoteDataSource.toggleRoleStatus(userRoleId, isActive, restaurantId, userId);
   }
 
   async getStaffMembers(restaurantId: number): Promise<StaffMember[]> {
@@ -26,12 +26,15 @@ export class RoleRepositoryImpl implements IRoleRepository {
     return await this.remoteDataSource.registerStaffMember(staff);
   }
 
-  async updateStaffMember(staffId: number, staff: Partial<CreateStaffRequest>): Promise<StaffMember> {
+  async updateStaffMember(
+    staffId: number,
+    staff: Partial<CreateStaffRequest> & { restaurantId?: number; userId?: number; isActive?: boolean }
+  ): Promise<StaffMember> {
     return await this.remoteDataSource.updateStaffMember(staffId, staff);
   }
 
-  async deleteStaffMember(staffId: number): Promise<boolean> {
-    return await this.remoteDataSource.deleteStaffMember(staffId);
+  async deleteStaffMember(staffId: number, restaurantId?: number, userId?: number): Promise<boolean> {
+    return await this.remoteDataSource.deleteStaffMember(staffId, restaurantId, userId);
   }
 }
 

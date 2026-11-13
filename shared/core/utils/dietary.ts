@@ -1,5 +1,5 @@
 /**
- * Dietary Utility Engine for Menza POS (Shared)
+ * Dietary Utility Engine for Menza POS
  * Normalizes Vegetarian vs Non-Vegetarian indicators across all database,
  * API DTO, network, and UI state formats.
  */
@@ -49,27 +49,23 @@ export function parseDietaryIsVeg(val: any, defaultIfUnknown: boolean = true): b
       s === 'non_veg' ||
       s === 'nonvegetarian' ||
       s === 'non-vegetarian' ||
-      s === 'non veg' ||
       s === 'egg' ||
-      s === 'meat' ||
-      s === 'chicken' ||
-      s === 'fish' ||
-      s === 'mutton'
+      s === 'n'
     ) {
       return false;
     }
-
     if (
       s === 'true' ||
       s === '1' ||
       s === 'veg' ||
       s === 'vegetarian' ||
       s === 'pure-veg' ||
-      s === 'pureveg'
+      s === 'pureveg' ||
+      s === 'y'
     ) {
       return true;
     }
   }
 
-  return defaultIfUnknown;
+  return Boolean(val);
 }

@@ -27,11 +27,14 @@ import {
   AlertCircle,
   Check,
   ChevronDown,
+  Scale,
   User,
   X,
 } from 'lucide-react-native';
 import { useAuthStore } from '../../state/useAuthStore';
 import { extractApiErrorMessage } from '../../../core/utils/errorSanitizer';
+import { TermsAndConditionsModal } from '../legal/TermsAndConditionsModal';
+import { PrivacyPolicyModal } from '../legal/PrivacyPolicyModal';
 
 interface RecentStaff {
   mobile: string;
@@ -102,6 +105,8 @@ export const PinLockScreen: React.FC = () => {
   const [isVerifying, setIsVerifying] = useState(false);
   const [currentTime, setCurrentTime] = useState<string>('');
   const [showHelpModal, setShowHelpModal] = useState(false);
+  const [termsModalVisible, setTermsModalVisible] = useState(false);
+  const [privacyModalVisible, setPrivacyModalVisible] = useState(false);
   const [recentStaff, setRecentStaff] = useState<RecentStaff[]>([]);
 
   // Shake animation for incorrect PIN
@@ -639,6 +644,27 @@ export const PinLockScreen: React.FC = () => {
               </View>
             </View>
           )}
+
+          {/* Legal Terms & Privacy Notice */}
+          <View style={styles.termsFooterLink}>
+            <Scale size={13} color="#A8A29E" style={{ marginRight: 5, marginTop: 1 }} />
+            <Text style={styles.termsFooterText}>
+              By signing in, you agree to Menza's{' '}
+              <Text
+                onPress={() => setTermsModalVisible(true)}
+                style={styles.termsFooterHighlight}
+              >
+                Terms & Conditions
+              </Text>
+              {' '}and{' '}
+              <Text
+                onPress={() => setPrivacyModalVisible(true)}
+                style={styles.termsFooterHighlight}
+              >
+                Privacy Policy
+              </Text>
+            </Text>
+          </View>
         </View>
       </ScrollView>
 
@@ -690,6 +716,20 @@ export const PinLockScreen: React.FC = () => {
           </View>
         </View>
       </Modal>
+
+      {/* Terms and Conditions Modal */}
+      <TermsAndConditionsModal
+        visible={termsModalVisible}
+        onClose={() => setTermsModalVisible(false)}
+        onOpenPrivacyPolicy={() => setPrivacyModalVisible(true)}
+      />
+
+      {/* Privacy Policy & DPDP Data Protection Modal */}
+      <PrivacyPolicyModal
+        visible={privacyModalVisible}
+        onClose={() => setPrivacyModalVisible(false)}
+        onOpenTerms={() => setTermsModalVisible(true)}
+      />
     </SafeAreaView>
   );
 };
@@ -1311,5 +1351,23 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     color: '#FFFFFF',
+  },
+  termsFooterLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 16,
+    paddingHorizontal: 8,
+  },
+  termsFooterText: {
+    fontSize: 11,
+    color: '#78716C',
+    textAlign: 'center',
+    lineHeight: 16,
+  },
+  termsFooterHighlight: {
+    color: '#D96B14',
+    fontWeight: '700',
+    textDecorationLine: 'underline',
   },
 });

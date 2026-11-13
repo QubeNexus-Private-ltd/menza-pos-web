@@ -38,12 +38,26 @@ import { TopSellingDishesChart } from '@/components/analytics/TopSellingDishesCh
 import { CategoryBreakdownChart } from '@/components/analytics/CategoryBreakdownChart';
 import { HourlyRushChart } from '@/components/analytics/HourlyRushChart';
 import { PaymentBreakdownChart, PaymentModeMetric } from '@/components/analytics/PaymentBreakdownChart';
+import {
+  printConsolidatedLedger,
+  printDailySalesLedger,
+  printHourlyRushReport,
+  printPaymentSettlementSlip,
+  printMenuItemLedger,
+} from '@/services/reportPrintService';
 
 const reportDataSource = new ReportRemoteDataSource();
 const orderDataSource = new OrderRemoteDataSource();
 
+function getLocalDateString(d: Date = new Date()): string {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export default function ReportsPage() {
-  const { activeRestaurant, restaurants } = useAuthStore();
+  const { activeRestaurant, restaurants, user, activeStaffName } = useAuthStore();
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
 
@@ -57,6 +71,8 @@ export default function ReportsPage() {
 
   const [dateRange, setDateRange] = useState<'today' | 'week' | 'month'>('week');
   const [trendTab, setTrendTab] = useState<'revenue' | 'orders'>('revenue');
+  const [hourlyDate, setHourlyDate] = useState<string>(() => getLocalDateString());
+  const [hourlyLoading, setHourlyLoading] = useState(false);
 
   // Clean slate and show skeleton immediately upon restaurant switch
   useEffect(() => {
@@ -83,16 +99,16 @@ export default function ReportsPage() {
 
       const now = new Date();
       let fromDateStr: string | undefined;
-      const toDateStr = now.toISOString().split('T')[0];
+      const toDateStr = getLocalDateString(now);
 
       if (dateRange === 'week') {
         const d = new Date();
         d.setDate(d.getDate() - 7);
-        fromDateStr = d.toISOString().split('T')[0];
+        fromDateStr = getLocalDateString(d);
       } else if (dateRange === 'month') {
         const d = new Date();
         d.setDate(d.getDate() - 30);
-        fromDateStr = d.toISOString().split('T')[0];
+        fromDateStr = getLocalDateString(d);
       } else {
         fromDateStr = toDateStr;
       }
@@ -101,8 +117,8 @@ export default function ReportsPage() {
         reportDataSource.getExecutiveDashboard(currentRestId),
         reportDataSource.getDatewiseSalesSummary(currentRestId, fromDateStr, toDateStr),
         reportDataSource.getTopSellingItems(currentRestId, fromDateStr, toDateStr, 15),
-        reportDataSource.getHourlySalesHeatmap(currentRestId, toDateStr),
-        orderDataSource.getTodayOrders(currentRestId, 'ALL', 1, 50),
+        reportDataSource.getHourlySalesHeatmap(currentRestId, hourlyDate),
+        orderDataSource.getTodayOrders(currentRestId, 'ALL', 1, 250, undefined, fromDateStr, toDateStr),
       ]);
 
       if (dashRes.status === 'fulfilled' && dashRes.value) setDashboard(dashRes.value);
@@ -116,11 +132,93 @@ export default function ReportsPage() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [currentRestId, dateRange]);
+  }, [currentRestId, dateRange, hourlyDate]);
 
   useEffect(() => {
     loadReportData();
   }, [loadReportData]);
+
+  // Dedicated loader when user picks a different date for Hourly Rush Telemetry
+  const loadHourlyTelemetry = useCallback(async (dateStr: string) => {
+    if (!currentRestId) return;
+    setHourlyLoading(true);
+    try {
+      const res = await reportDataSource.getHourlySalesHeatmap(currentRestId, dateStr);
+      if (res) setHeatmap(res);
+    } catch (err) {
+      console.warn('Failed to load hourly telemetry for date', dateStr, err);
+    } finally {
+      setHourlyLoading(false);
+    }
+  }, [currentRestId]);
+
+  const handleHourlyDateChange = (newDate: string) => {
+    setHourlyDate(newDate);
+    loadHourlyTelemetry(newDate);
+  };
+
+  // Live order aggregation fallback: if server returns 0 orders for today, aggregate loaded orders
+  const effectiveHeatmap = useMemo(() => {
+    const hasServerOrders = (heatmap?.hourlySlots || []).some((s) => (s.ordersCount || 0) > 0);
+    if (hasServerOrders) return heatmap;
+
+    const todayStr = getLocalDateString();
+    if (hourlyDate !== todayStr || !orders || orders.length === 0) return heatmap;
+
+    // Create 24 slots
+    const slots = Array.from({ length: 24 }, (_, hour) => {
+      const nextHour = (hour + 1) % 24;
+      return {
+        hour,
+        hourLabel: `${String(hour).padStart(2, '0')}:00 - ${String(nextHour).padStart(2, '0')}:00`,
+        ordersCount: 0,
+        totalSales: 0,
+        completedOrders: 0,
+      };
+    });
+
+    let totalSales = 0;
+    let totalOrders = 0;
+
+    orders.forEach((o) => {
+      const rawDate = o.createdAt || o.settledDateUtc;
+      if (!rawDate) return;
+      const d = new Date(rawDate);
+      if (isNaN(d.getTime())) return;
+
+      if (getLocalDateString(d) === todayStr) {
+        const h = d.getHours();
+        if (h >= 0 && h < 24) {
+          const amt = Number(o.totalAmount || 0);
+          slots[h].ordersCount += 1;
+          slots[h].totalSales += amt;
+          totalSales += amt;
+          totalOrders += 1;
+
+          const st = (o.status || '').toLowerCase();
+          if (['completed', 'served', 'settled', 'delivered'].includes(st)) {
+            slots[h].completedOrders += 1;
+          }
+        }
+      }
+    });
+
+    if (totalOrders === 0) return heatmap;
+
+    const sorted = [...slots].sort((a, b) => b.totalSales - a.totalSales || b.ordersCount - a.ordersCount);
+    const peak = sorted[0];
+
+    return {
+      restaurantId: currentRestId,
+      date: todayStr,
+      totalDaySales: totalSales,
+      totalDayOrders: totalOrders,
+      peakHourLabel: peak && peak.ordersCount > 0 ? peak.hourLabel : '',
+      peakHourOrdersCount: peak ? peak.ordersCount : 0,
+      peakHourSales: peak ? peak.totalSales : 0,
+      hourlySlots: slots,
+    };
+  }, [heatmap, orders, hourlyDate, currentRestId]);
 
   // Compute Payment Modes Breakdown from orders
   const paymentBreakdown = useMemo(() => {
@@ -128,11 +226,16 @@ export default function ReportsPage() {
     let grandTotal = 0;
 
     orders.forEach((o) => {
-      const mode = (o.paymentMode || 'CASH').toUpperCase();
+      // Exclude void / cancelled orders from settled payment collections
+      const st = (o.status || '').toLowerCase();
+      if (st === 'cancelled' || st === 'void') return;
+
+      const rawMode = o.paymentMode || (o as any).PaymentMode || 'CASH';
+      const mode = rawMode.trim().toUpperCase() || 'CASH';
       if (!modesMap[mode]) {
         modesMap[mode] = { count: 0, total: 0 };
       }
-      const amt = Number(o.totalAmount || 0);
+      const amt = Number(o.totalAmount || o.paidAmount || o.subtotal || 0);
       modesMap[mode].count += 1;
       modesMap[mode].total += amt;
       grandTotal += amt;
@@ -151,8 +254,151 @@ export default function ReportsPage() {
     };
   }, [orders]);
 
-  const handlePrint = () => {
-    window.print();
+  const [printingDoc, setPrintingDoc] = useState<string | null>(null);
+
+  // Restaurant metadata for printing
+  const restaurantMeta = useMemo(() => {
+    const rest = activeRestaurant || (restaurants.length > 0 ? restaurants[0] : null);
+    return {
+      name: rest?.restaurantName || 'Menza Restaurant',
+      address: rest?.address || undefined,
+      city: rest?.city || undefined,
+      state: rest?.state || undefined,
+      phone: (rest as any)?.contactNumber || (rest as any)?.ownerMobile || undefined,
+      gstin: (rest as any)?.gstNumber || (rest as any)?.gstin || undefined,
+      logoUrl: (rest as any)?.logoUrl || undefined,
+    };
+  }, [activeRestaurant, restaurants]);
+
+  // Current calculated date range labels
+  const { currentFromDate, currentToDate, currentPeriodLabel } = useMemo(() => {
+    const now = new Date();
+    const toDate = getLocalDateString(now);
+    let fromDate = toDate;
+    let label = 'Today';
+
+    if (dateRange === 'week') {
+      const d = new Date();
+      d.setDate(d.getDate() - 7);
+      fromDate = getLocalDateString(d);
+      label = 'Last 7 Days';
+    } else if (dateRange === 'month') {
+      const d = new Date();
+      d.setDate(d.getDate() - 30);
+      fromDate = getLocalDateString(d);
+      label = 'Last 30 Days';
+    }
+
+    return {
+      currentFromDate: fromDate,
+      currentToDate: toDate,
+      currentPeriodLabel: label,
+    };
+  }, [dateRange]);
+
+  const staffName = user?.name || (user as any)?.fullName || activeStaffName || 'Store Manager';
+
+  // 1. Overall Consolidated Print
+  const handlePrintConsolidatedLedger = async () => {
+    setPrintingDoc('consolidated');
+    try {
+      await printConsolidatedLedger({
+        restaurant: restaurantMeta,
+        periodLabel: currentPeriodLabel,
+        fromDate: currentFromDate,
+        toDate: currentToDate,
+        generatedBy: staffName,
+        dashboard,
+        salesSummary,
+        topItems,
+        heatmap: effectiveHeatmap,
+        paymentBreakdown: {
+          metrics: paymentBreakdown.metrics,
+          grandTotal: paymentBreakdown.grandTotal,
+          totalCount: paymentBreakdown.metrics.reduce((acc, m) => acc + m.count, 0),
+        },
+      });
+    } catch (e) {
+      console.warn('Print error', e);
+    } finally {
+      setPrintingDoc(null);
+    }
+  };
+
+  // 2. Section 1: Daily Sales & Revenue Ledger Print
+  const handlePrintDailySales = async () => {
+    setPrintingDoc('sales');
+    try {
+      await printDailySalesLedger({
+        restaurant: restaurantMeta,
+        periodLabel: currentPeriodLabel,
+        fromDate: currentFromDate,
+        toDate: currentToDate,
+        generatedBy: staffName,
+        salesSummary,
+        dashboard,
+      });
+    } catch (e) {
+      console.warn('Print error', e);
+    } finally {
+      setPrintingDoc(null);
+    }
+  };
+
+  // 3. Section 2: Hourly Rush & Shift Telemetry Print
+  const handlePrintHourlyRush = async () => {
+    setPrintingDoc('hourly');
+    try {
+      await printHourlyRushReport({
+        restaurant: restaurantMeta,
+        dateLabel: hourlyDate === getLocalDateString() ? 'Today' : hourlyDate,
+        generatedBy: staffName,
+        heatmap: effectiveHeatmap,
+      });
+    } catch (e) {
+      console.warn('Print error', e);
+    } finally {
+      setPrintingDoc(null);
+    }
+  };
+
+  // 4. Section 3: Cashier Payment Settlement Slip (A4 or Thermal)
+  const handlePrintPaymentSettlement = async (isThermal: boolean = false) => {
+    setPrintingDoc(isThermal ? 'payment-thermal' : 'payment-a4');
+    try {
+      await printPaymentSettlementSlip({
+        restaurant: restaurantMeta,
+        dateLabel: currentPeriodLabel,
+        generatedBy: staffName,
+        metrics: paymentBreakdown.metrics,
+        grandTotal: paymentBreakdown.grandTotal,
+        totalCount: paymentBreakdown.metrics.reduce((acc, m) => acc + m.count, 0),
+        isThermal,
+      });
+    } catch (e) {
+      console.warn('Print error', e);
+    } finally {
+      setPrintingDoc(null);
+    }
+  };
+
+  // 5. Section 4: Menu Item & Dish Performance Ledger
+  const handlePrintMenuItemLedger = async () => {
+    setPrintingDoc('menu');
+    try {
+      await printMenuItemLedger({
+        restaurant: restaurantMeta,
+        periodLabel: currentPeriodLabel,
+        fromDate: currentFromDate,
+        toDate: currentToDate,
+        generatedBy: staffName,
+        topItems,
+      });
+    } catch (e) {
+      console.warn('Print error', e);
+    } finally {
+      setPrintingDoc(null);
+    }
   };
 
   return (
@@ -204,12 +450,19 @@ export default function ReportsPage() {
                 <span>{refreshing ? 'Syncing...' : 'Sync'}</span>
               </button>
 
+              {/* OVERALL PRINT: Consolidated Executive Business Ledger */}
               <button
-                onClick={handlePrint}
-                className="flex items-center gap-2 rounded-xl border border-[#DE8626] bg-amber-500/10 px-3.5 py-2 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-colors shadow-xs"
+                onClick={handlePrintConsolidatedLedger}
+                disabled={printingDoc === 'consolidated'}
+                className="flex items-center gap-2 rounded-xl border border-[#DE8626] bg-amber-500/10 px-3.5 py-2 text-xs font-extrabold text-[#DE8626] hover:bg-amber-500/20 transition-all shadow-xs disabled:opacity-50"
+                title="Print Full Audit & Business Ledger (A4 Statement)"
               >
-                <Printer className="h-4 w-4" />
-                <span>Print Ledger</span>
+                {printingDoc === 'consolidated' ? (
+                  <RefreshCw className="h-4 w-4 animate-spin text-[#DE8626]" />
+                ) : (
+                  <Printer className="h-4 w-4" />
+                )}
+                <span>Print Consolidated Ledger</span>
               </button>
             </div>
           </div>
@@ -290,29 +543,46 @@ export default function ReportsPage() {
                 </p>
               </div>
 
-              {/* View Switcher: Revenue vs Orders */}
-              <div className="inline-flex rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] p-1 bg-[#FAF7F2] dark:bg-[#151A20] text-xs">
+              {/* View Switcher & Section Print Button */}
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] p-1 bg-[#FAF7F2] dark:bg-[#151A20] text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setTrendTab('revenue')}
+                    className={`px-3 py-1.5 font-bold rounded-lg transition-all ${
+                      trendTab === 'revenue'
+                        ? 'bg-white dark:bg-[#1B2127] text-[#DE8626] shadow-xs'
+                        : 'text-[#667085] hover:text-[#1E2930] dark:hover:text-[#F3F4F6]'
+                    }`}
+                  >
+                    Revenue Trends (₹)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTrendTab('orders')}
+                    className={`px-3 py-1.5 font-bold rounded-lg transition-all ${
+                      trendTab === 'orders'
+                        ? 'bg-white dark:bg-[#1B2127] text-[#DE8626] shadow-xs'
+                        : 'text-[#667085] hover:text-[#1E2930] dark:hover:text-[#F3F4F6]'
+                    }`}
+                  >
+                    Order Tickets (Qty)
+                  </button>
+                </div>
+
                 <button
                   type="button"
-                  onClick={() => setTrendTab('revenue')}
-                  className={`px-3 py-1.5 font-bold rounded-lg transition-all ${
-                    trendTab === 'revenue'
-                      ? 'bg-white dark:bg-[#1B2127] text-[#DE8626] shadow-xs'
-                      : 'text-[#667085] hover:text-[#1E2930] dark:hover:text-[#F3F4F6]'
-                  }`}
+                  onClick={handlePrintDailySales}
+                  disabled={printingDoc === 'sales'}
+                  className="flex items-center gap-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-3 py-2 text-xs font-bold text-[#667085] hover:text-[#DE8626] dark:hover:text-[#DE8626] transition-colors shadow-2xs disabled:opacity-50"
+                  title="Print Datewise Sales & Tax Ledger (A4 Statement)"
                 >
-                  Revenue Trends (₹)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTrendTab('orders')}
-                  className={`px-3 py-1.5 font-bold rounded-lg transition-all ${
-                    trendTab === 'orders'
-                      ? 'bg-white dark:bg-[#1B2127] text-[#DE8626] shadow-xs'
-                      : 'text-[#667085] hover:text-[#1E2930] dark:hover:text-[#F3F4F6]'
-                  }`}
-                >
-                  Order Tickets (Qty)
+                  {printingDoc === 'sales' ? (
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin text-[#DE8626]" />
+                  ) : (
+                    <Printer className="h-3.5 w-3.5" />
+                  )}
+                  <span>Print Sales Ledger</span>
                 </button>
               </div>
             </div>
@@ -368,34 +638,128 @@ export default function ReportsPage() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Hourly Rush Heatmap */}
             <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-5 shadow-sm space-y-4">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
                   <Clock className="h-5 w-5 text-[#DE8626]" />
-                  <h3 className="text-base font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
-                    Hourly Rush Telemetry
-                  </h3>
+                  <div>
+                    <h3 className="text-base font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                      Hourly Rush Telemetry
+                    </h3>
+                    <p className="text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                      24-hour traffic & shift patterns
+                    </p>
+                  </div>
                 </div>
-                <span className="text-xs text-[#667085] dark:text-[#94A3B8]">Today's hourly peak</span>
+
+                {/* Day selector & quick pills */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex items-center gap-1.5 bg-[#F5F2EB] dark:bg-[#1E252B] p-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] text-xs">
+                    <button
+                      type="button"
+                      onClick={() => handleHourlyDateChange(getLocalDateString())}
+                      className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                        hourlyDate === getLocalDateString()
+                          ? 'bg-white dark:bg-[#2B3540] text-[#DE8626] shadow-xs'
+                          : 'text-[#667085] dark:text-[#94A3B8] hover:text-[#1E2930]'
+                      }`}
+                    >
+                      Today
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const y = new Date();
+                        y.setDate(y.getDate() - 1);
+                        handleHourlyDateChange(getLocalDateString(y));
+                      }}
+                      className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                        hourlyDate === getLocalDateString(new Date(Date.now() - 86400000))
+                          ? 'bg-white dark:bg-[#2B3540] text-[#DE8626] shadow-xs'
+                          : 'text-[#667085] dark:text-[#94A3B8] hover:text-[#1E2930]'
+                      }`}
+                    >
+                      Yesterday
+                    </button>
+                    <div className="h-4 w-[1px] bg-[#E7E1DA] dark:bg-[#2B3540]" />
+                    <input
+                      type="date"
+                      value={hourlyDate}
+                      max={getLocalDateString()}
+                      onChange={(e) => e.target.value && handleHourlyDateChange(e.target.value)}
+                      className="bg-transparent border-0 text-xs font-semibold text-[#1E2930] dark:text-[#F3F4F6] focus:outline-hidden px-1.5 cursor-pointer"
+                      title="Select custom date for hourly telemetry"
+                    />
+                    {hourlyLoading && <RefreshCw className="h-3.5 w-3.5 animate-spin text-[#DE8626] mr-1" />}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handlePrintHourlyRush}
+                    disabled={printingDoc === 'hourly'}
+                    className="flex items-center gap-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-2.5 py-1.5 text-xs font-bold text-[#667085] hover:text-[#DE8626] dark:hover:text-[#DE8626] transition-colors shadow-2xs disabled:opacity-50"
+                    title="Print Hourly Shift Telemetry (A4 Statement)"
+                  >
+                    {printingDoc === 'hourly' ? (
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin text-[#DE8626]" />
+                    ) : (
+                      <Printer className="h-3.5 w-3.5" />
+                    )}
+                    <span>Print Rush</span>
+                  </button>
+                </div>
               </div>
 
               <HourlyRushChart
-                slots={heatmap?.hourlySlots || []}
-                peakHourLabel={heatmap?.peakHourLabel}
-                peakHourOrders={heatmap?.peakHourOrdersCount}
+                slots={effectiveHeatmap?.hourlySlots || []}
+                peakHourLabel={effectiveHeatmap?.peakHourLabel}
+                peakHourOrders={effectiveHeatmap?.peakHourOrdersCount}
+                peakHourSales={effectiveHeatmap?.peakHourSales}
+                dateLabel={hourlyDate === getLocalDateString() ? 'Today' : hourlyDate}
                 height={210}
               />
             </div>
 
             {/* Payment Modes Breakdown */}
             <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-5 shadow-sm space-y-4">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
                   <CreditCard className="h-5 w-5 text-[#DE8626]" />
-                  <h3 className="text-base font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
-                    Payment Mode Breakdown
-                  </h3>
+                  <div>
+                    <h3 className="text-base font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                      Payment Mode Breakdown
+                    </h3>
+                    <p className="text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                      Settled receipts & register reconciliation
+                    </p>
+                  </div>
                 </div>
-                <span className="text-xs text-[#667085] dark:text-[#94A3B8]">Settled receipts</span>
+
+                {/* Print options: A4 statement or 80mm POS slip */}
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handlePrintPaymentSettlement(false)}
+                    disabled={printingDoc === 'payment-a4'}
+                    className="flex items-center gap-1 rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF8F5] dark:bg-[#1E252B] px-2.5 py-1 text-xs font-bold text-[#667085] hover:text-[#DE8626] dark:hover:text-[#DE8626] transition-colors shadow-2xs disabled:opacity-50"
+                    title="Print A4 Cashier Settlement Statement"
+                  >
+                    {printingDoc === 'payment-a4' ? (
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin text-[#DE8626]" />
+                    ) : (
+                      <Printer className="h-3.5 w-3.5" />
+                    )}
+                    <span>Print Slip</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handlePrintPaymentSettlement(true)}
+                    disabled={printingDoc === 'payment-thermal'}
+                    className="flex items-center gap-1 rounded-lg border border-amber-300 dark:border-amber-900/40 bg-amber-500/10 px-2 py-1 text-[11px] font-bold text-[#DE8626] hover:bg-amber-500/20 transition-colors shadow-2xs disabled:opacity-50"
+                    title="Print 80mm Thermal Receipt Slip (POS Counter)"
+                  >
+                    <span>80mm</span>
+                  </button>
+                </div>
               </div>
 
               <PaymentBreakdownChart
@@ -407,14 +771,33 @@ export default function ReportsPage() {
 
           {/* SECTION 4: Top Revenue Dishes Detailed Table */}
           <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-5 shadow-sm space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <Flame className="h-5 w-5 text-[#DE8626]" />
-                <h3 className="text-base font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
-                  Menu Item Revenue Ledger
-                </h3>
+                <div>
+                  <h3 className="text-base font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                    Menu Item Revenue Ledger
+                  </h3>
+                  <p className="text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                    Full dish volume & category contribution details
+                  </p>
+                </div>
               </div>
-              <span className="text-xs text-[#667085]">Full item performance details</span>
+
+              <button
+                type="button"
+                onClick={handlePrintMenuItemLedger}
+                disabled={printingDoc === 'menu'}
+                className="flex items-center gap-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-3 py-1.5 text-xs font-bold text-[#667085] hover:text-[#DE8626] dark:hover:text-[#DE8626] transition-colors shadow-2xs disabled:opacity-50"
+                title="Print Menu Item & Dish Performance Ledger (A4 Statement)"
+              >
+                {printingDoc === 'menu' ? (
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin text-[#DE8626]" />
+                ) : (
+                  <Printer className="h-3.5 w-3.5" />
+                )}
+                <span>Print Dish Ledger</span>
+              </button>
             </div>
 
             {!topItems?.items || topItems.items.length === 0 ? (

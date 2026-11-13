@@ -239,6 +239,7 @@ export const LoginScreen: React.FC = () => {
   const handleVerifyOtp = async (codeOverride?: string) => {
     if (isVerifyingRef.current || loading) return;
 
+    Keyboard.dismiss();
     const codeToVerify = codeOverride || otpCode;
     if (codeToVerify.length !== 6) {
       setErrorMsg('Please enter the 6-digit verification code.');
@@ -536,7 +537,8 @@ export const LoginScreen: React.FC = () => {
                           onBlur={() => setFocusedInput(null)}
                           placeholder="Enter 6-digit OTP"
                           placeholderTextColor="#9CA3AF"
-                          keyboardType="number-pad"
+                          keyboardType="numeric"
+                          inputMode="numeric"
                           autoComplete="sms-otp"
                           textContentType="oneTimeCode"
                           importantForAutofill="yes"

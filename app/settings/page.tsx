@@ -19,6 +19,7 @@ import {
   Globe,
   Sparkles,
   CheckCircle2,
+  QrCode,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
@@ -157,6 +158,12 @@ export default function SettingsHubPage() {
       icon: Store,
       title: 'Restaurant Profile & Taxes',
       desc: 'Configure outlet name, address, GST rates, service charges, and store hours',
+    },
+    {
+      href: '/tables',
+      icon: QrCode,
+      title: 'Store Profile & Table QR Codes',
+      desc: 'Download permanent Store Profile QR standee or generate table-specific dine-in QR stickers',
     },
     {
       href: '/settings/printer',

@@ -39,6 +39,7 @@ import {
   Wifi,
   BellRing,
   Lock,
+  ShieldAlert,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 
@@ -139,6 +140,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
     if (pathname === '/sales/restaurants') return 'Acquired Stores Directory';
     if (pathname === '/sales/onboard' || pathname === '/superadmin/onboard') return isSalesPerson ? 'Onboard Store • Partner Attribution' : 'Onboard Store • Platform Directory';
     if (pathname === '/superadmin/sales') return 'Sales Partner & Commission Governance';
+    if (pathname === '/superadmin/blocked-devices') return 'Anti-Fraud & Device Governance';
     if (pathname === '/orders') return 'Orders Hub • Live Stream';
     if (pathname === '/kitchen') return 'Kitchen Display • Live KDS';
     if (pathname === '/tables') return 'Floor Tables • Dining Grid';
@@ -402,6 +404,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
         { href: '/superadmin/sales', label: 'Sales Partners', icon: Users },
         { href: '/superadmin/onboard', label: 'Onboard Store', icon: Store },
         { href: '/superadmin/plans', label: 'Plans & Pricing', icon: Crown },
+        { href: '/superadmin/blocked-devices', label: 'Anti-Fraud', icon: ShieldAlert },
         { href: '/settings', label: 'Settings', icon: Settings },
       ]
     : isSalesPerson

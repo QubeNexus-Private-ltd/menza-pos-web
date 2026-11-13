@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
@@ -100,6 +100,7 @@ import { GildedAlertModal, GildedAlertConfig } from '@/components/common/GildedA
 
 import { WebPrinterService } from '@/services/webPrinterService';
 import { WebWhatsAppService } from '@/services/whatsAppService';
+import { WhatsAppShareModal } from '@/components/orders/WhatsAppShareModal';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { usePrinterStore } from '@shared/presentation/state/usePrinterStore';
 import { useNotificationStore } from '@shared/presentation/state/useNotificationStore';
@@ -354,6 +355,7 @@ export default function PosPage() {
 
 
   // Gilded Alert Modal State
+  const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
   const [alertConfig, setAlertConfig] = useState<GildedAlertConfig>({
     visible: false,
     title: '',
@@ -1756,28 +1758,9 @@ export default function PosPage() {
     showAlert('Guest Check Printed', `Proforma bill for Table T-${selectedTable.tableNumber} sent to printer.`, 'success');
   };
 
-  const handleShareWhatsApp = async () => {
+  const handleShareWhatsApp = () => {
     if (!orderSuccessData) return;
-    let phone = orderSuccessData.customerPhone;
-    if (!phone) {
-      const entered = window.prompt('Enter 10-digit customer WhatsApp number:');
-      if (!entered) return;
-      phone = entered.replace(/[^0-9]/g, '').slice(-10);
-    }
-    if (!phone || phone.length < 10) {
-      showAlert('Invalid Mobile', 'Please enter a valid 10-digit mobile number', 'warning');
-      return;
-    }
-
-    const url = WebWhatsAppService.getWhatsAppReceiptUrl(phone, {
-      restaurantName: restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant',
-      orderId: orderSuccessData.orderId,
-      customerName: orderSuccessData.customerName,
-      items: orderSuccessData.items,
-      grandTotal: orderSuccessData.grandTotal,
-      paymentMode: orderSuccessData.paymentMode,
-    });
-    window.open(url, '_blank');
+    setShowWhatsAppModal(true);
   };
 
   const storeDisplayName =
@@ -3411,6 +3394,23 @@ export default function PosPage() {
             onClose={() => setPrinterModalOpen(false)}
             restaurantName={storeDisplayName}
           />
+
+          {/* WhatsApp Share Modal */}
+          {showWhatsAppModal && orderSuccessData && (
+            <WhatsAppShareModal
+              isOpen={showWhatsAppModal}
+              onClose={() => setShowWhatsAppModal(false)}
+              order={orderSuccessData}
+              receiptData={{
+                restaurantName: storeDisplayName,
+                orderId: orderSuccessData.orderId,
+                customerName: orderSuccessData.customerName,
+                items: orderSuccessData.items || [],
+                grandTotal: orderSuccessData.grandTotal,
+                paymentMode: orderSuccessData.paymentMode,
+              }}
+            />
+          )}
 
           {/* Gilded Alert Modal */}
           <GildedAlertModal

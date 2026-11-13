@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import React, { useState, useEffect } from 'react';
 import {
@@ -22,6 +22,7 @@ import { OrderMaster } from '@shared/domain/models/Order';
 import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
 import { WebPrinterService } from '@/services/webPrinterService';
 import { WebWhatsAppService } from '@/services/whatsAppService';
+import { WhatsAppShareModal } from './WhatsAppShareModal';
 import { usePrinterStore } from '@shared/presentation/state/usePrinterStore';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { usePosCatalogStore } from '@/stores/usePosCatalogStore';
@@ -226,6 +227,8 @@ export function OrderSettleModal({
     };
   };
 
+  const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
+
   const handlePrintReceipt = () => {
     WebPrinterService.printReceipt(buildReceiptData(), paperWidth).catch((err) =>
       console.warn('Print receipt error:', err)
@@ -233,31 +236,7 @@ export function OrderSettleModal({
   };
 
   const handleShareWhatsApp = () => {
-    let phone = order.mobileNumber;
-    if (!phone) {
-      const entered = window.prompt('Enter customer 10-digit WhatsApp phone:');
-      if (!entered) return;
-      phone = entered.replace(/[^0-9]/g, '').slice(-10);
-    }
-    if (!phone || phone.length < 10) {
-      alert('Please enter a valid 10-digit mobile number');
-      return;
-    }
-
-    const url = WebWhatsAppService.getWhatsAppReceiptUrl(phone, {
-      restaurantName: activeRestaurant?.restaurantName || 'Menza Restaurant',
-      orderId: order.id,
-      customerName: order.customerName,
-      items: (order.items || []).map((it) => ({
-        itemName: it.itemName,
-        quantity: it.quantity,
-        price: it.unitPrice,
-      })),
-      grandTotal: payableAmount,
-      paymentMode,
-    });
-
-    window.open(url, '_blank');
+    setShowWhatsAppModal(true);
   };
 
   return (
@@ -640,6 +619,14 @@ export function OrderSettleModal({
           </div>
         )}
       </div>
+
+      {showWhatsAppModal && (
+        <WhatsAppShareModal
+          isOpen={showWhatsAppModal}
+          onClose={() => setShowWhatsAppModal(false)}
+          order={order}
+        />
+      )}
     </div>
   );
 }

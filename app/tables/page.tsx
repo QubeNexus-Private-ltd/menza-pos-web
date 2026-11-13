@@ -27,6 +27,9 @@ import {
   GitMerge,
   BellRing,
   Droplets,
+  Search,
+  Edit2,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
@@ -83,6 +86,16 @@ export default function TablesPage() {
   );
   const [loading, setLoading] = useState(!hasCachedTables);
   const [selectedSection, setSelectedSection] = useState<string>('ALL');
+  const [selectedStatusFilter, setSelectedStatusFilter] = useState<'ALL' | 'AVAILABLE' | 'OCCUPIED' | 'BILLED' | 'CLEANING'>('ALL');
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Edit Table Modal
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editTable, setEditTable] = useState<TableMaster | null>(null);
+  const [editTableNumber, setEditTableNumber] = useState('');
+  const [editSeatingCapacity, setEditSeatingCapacity] = useState('4');
+  const [editSectionName, setEditSectionName] = useState('Main Dining');
+  const [savingEdit, setSavingEdit] = useState(false);
 
   // Add Table Modal
   const [addModalOpen, setAddModalOpen] = useState(false);
@@ -97,6 +110,8 @@ export default function TablesPage() {
   const [loadingActiveOrder, setLoadingActiveOrder] = useState(false);
   const [qrTable, setQrTable] = useState<TableMaster | null>(null);
   const [storefrontQrOpen, setStorefrontQrOpen] = useState(false);
+  const [tableQrPickerOpen, setTableQrPickerOpen] = useState(false);
+  const [tableQrSearch, setTableQrSearch] = useState('');
   const [settlingOrder, setSettlingOrder] = useState<OrderMaster | null>(null);
 
   // Table Shift / Transfer Modal
@@ -285,12 +300,6 @@ export default function TablesPage() {
     return ['ALL', ...list];
   }, [tables]);
 
-  // Filtered tables
-  const filteredTables = useMemo(() => {
-    if (selectedSection === 'ALL') return tables;
-    return tables.filter((t) => (t.sectionName || 'Main Dining') === selectedSection);
-  }, [tables, selectedSection]);
-
   // Handle Add Table
   const handleAddTable = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -315,6 +324,50 @@ export default function TablesPage() {
     }
   };
 
+  // Handle Edit Table
+  const handleOpenEditTable = (tbl: TableMaster) => {
+    setEditTable(tbl);
+    setEditTableNumber(String(tbl.tableNumber || tbl.tableName || ''));
+    setEditSeatingCapacity(String(tbl.seatingCapacity || 4));
+    setEditSectionName(tbl.sectionName || 'Main Dining');
+    setEditModalOpen(true);
+  };
+
+  const handleUpdateTable = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editTable || !editTableNumber.trim()) return;
+
+    try {
+      setSavingEdit(true);
+      await tableDataSource.updateTable(editTable.id, {
+        tableNumber: editTableNumber.trim(),
+        tableName: editTableNumber.trim(),
+        seatingCapacity: parseInt(editSeatingCapacity, 10) || 4,
+        sectionName: editSectionName.trim() || 'Main Dining',
+      });
+      setEditModalOpen(false);
+      setEditTable(null);
+      if (actionTable && actionTable.id === editTable.id) {
+        setActionTable((prev) =>
+          prev
+            ? {
+                ...prev,
+                tableNumber: editTableNumber.trim(),
+                tableName: editTableNumber.trim(),
+                seatingCapacity: parseInt(editSeatingCapacity, 10) || 4,
+                sectionName: editSectionName.trim() || 'Main Dining',
+              }
+            : null
+        );
+      }
+      await loadData();
+    } catch (err: any) {
+      alert(err?.message || 'Failed to update table');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
   // Set of terminal (inactive) order statuses
   const TERMINAL_ORDER_STATUSES = useMemo(
     () => new Set(['COMPLETED', 'SETTLED', 'CANCELLED', 'REJECTED', 'VOID', 'PAID']),
@@ -336,6 +389,77 @@ export default function TablesPage() {
     },
     [activeOrders, TERMINAL_ORDER_STATUSES]
   );
+
+  // Real-time Floor Telemetry Stats
+  const floorStats = useMemo(() => {
+    let totalSeats = 0;
+    let available = 0;
+    let occupied = 0;
+    let billed = 0;
+    let cleaning = 0;
+
+    tables.forEach((t) => {
+      totalSeats += t.seatingCapacity || 4;
+      const activeOrder = getOrderForTable(t);
+      const statusUpper = (t.status || '').toUpperCase();
+      const isOcc = Boolean(activeOrder) || Boolean(t.activeOrderId) || statusUpper === 'OCCUPIED';
+      const isBil = !isOcc && statusUpper === 'BILLED';
+      const isCln = !isOcc && statusUpper === 'CLEANING';
+
+      if (isOcc) occupied++;
+      else if (isBil) billed++;
+      else if (isCln) cleaning++;
+      else available++;
+    });
+
+    return {
+      totalTables: tables.length,
+      totalSeats,
+      available,
+      occupied,
+      billed,
+      cleaning,
+    };
+  }, [tables, getOrderForTable]);
+
+  // Multi-dimensional Filtered Tables (Section, Status & Search Query)
+  const filteredTables = useMemo(() => {
+    return tables.filter((tbl) => {
+      // 1. Section Filter
+      if (selectedSection !== 'ALL') {
+        const sec = tbl.sectionName || 'Main Dining';
+        if (sec.toLowerCase() !== selectedSection.toLowerCase()) return false;
+      }
+
+      // 2. Status Filter
+      const activeOrder = getOrderForTable(tbl);
+      const statusUpper = (tbl.status || '').toUpperCase();
+      const isOccupied = Boolean(activeOrder) || Boolean(tbl.activeOrderId) || statusUpper === 'OCCUPIED';
+      const isBilled = !isOccupied && statusUpper === 'BILLED';
+      const isCleaning = !isOccupied && statusUpper === 'CLEANING';
+      const isAvailable = !isOccupied && !isBilled && !isCleaning;
+
+      if (selectedStatusFilter === 'AVAILABLE' && !isAvailable) return false;
+      if (selectedStatusFilter === 'OCCUPIED' && !isOccupied) return false;
+      if (selectedStatusFilter === 'BILLED' && !isBilled) return false;
+      if (selectedStatusFilter === 'CLEANING' && !isCleaning) return false;
+
+      // 3. Search Query Filter
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const matchNum =
+          String(tbl.tableNumber || '').toLowerCase().includes(q) ||
+          `t-${tbl.tableNumber}`.toLowerCase().includes(q);
+        const matchSec = (tbl.sectionName || '').toLowerCase().includes(q);
+        const matchCustomer = activeOrder?.customerName?.toLowerCase().includes(q);
+        const matchOrderId = String(activeOrder?.id || '').includes(q);
+
+        if (!matchNum && !matchSec && !matchCustomer && !matchOrderId) return false;
+      }
+
+      return true;
+    });
+  }, [tables, selectedSection, selectedStatusFilter, searchQuery, getOrderForTable]);
 
   const handleSelectTable = async (tbl: TableMaster) => {
     setActionTable(tbl);
@@ -528,25 +652,21 @@ export default function TablesPage() {
     }
   };
 
-  const occupiedCount = tables.filter((t) => {
-    const st = (t.status || '').toUpperCase();
-    return st === 'OCCUPIED' || st === 'BILLED' || Boolean(t.activeOrderId) || Boolean(getOrderForTable(t));
-  }).length;
-
   return (
     <AuthGuard>
       <AppShell>
         <FeatureGate feature="tableConfiguration" title="Table & Floor Layout Designer" planSuggestion="Dine-In Pro">
-        <div className="p-4 sm:p-6 lg:p-8 space-y-6 max-w-7xl mx-auto">
+        <div className="p-3 sm:p-6 lg:p-8 space-y-5 max-w-7xl mx-auto">
           {/* Header */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-[#1E2930] dark:text-[#F3F4F6]">
                   Floor & Table Management
                 </h1>
-                <span className="rounded-full bg-emerald-500/10 px-3 py-0.5 text-xs font-bold text-emerald-600">
-                  {occupiedCount} Occupied / {tables.length} Total
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-3 py-0.5 text-xs font-bold text-emerald-700 dark:text-emerald-400">
+                  <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                  <span>Live Floor Plan</span>
                 </span>
               </div>
               <p className="mt-1 text-xs sm:text-sm text-[#667085] dark:text-[#94A3B8]">
@@ -554,19 +674,35 @@ export default function TablesPage() {
               </p>
             </div>
 
-            <div className="flex items-center gap-2 sm:gap-3">
+            <div className="flex items-center gap-2 overflow-x-auto scrollbar-none pb-1 sm:pb-0">
               <button
                 onClick={() => setStorefrontQrOpen(true)}
-                className="flex items-center gap-1.5 rounded-xl border border-[#DE8626] bg-amber-500/10 px-3.5 py-2 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-colors"
+                className="flex items-center gap-1.5 shrink-0 rounded-xl border border-[#DE8626] bg-amber-500/10 px-3 py-2 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 shadow-2xs transition-colors"
+                title="Generate, download or print Store Profile QR Standee"
               >
                 <QrCode className="h-4 w-4" />
-                <span>Store Standee QR</span>
+                <span className="whitespace-nowrap">Store Profile QR</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  if (tables.length > 0) {
+                    setTableQrPickerOpen(true);
+                  } else {
+                    alert('No tables configured yet. Please add a table first.');
+                  }
+                }}
+                className="flex items-center gap-1.5 shrink-0 rounded-xl border border-[#DE8626]/50 bg-white dark:bg-[#1B2127] px-3 py-2 text-xs font-bold text-[#DE8626] hover:bg-amber-500/10 shadow-2xs transition-colors"
+                title="Select a table to view, print or share its dine-in QR sticker"
+              >
+                <QrCode className="h-4 w-4" />
+                <span className="whitespace-nowrap">Table QRs</span>
               </button>
 
               <button
                 onClick={() => loadData(true)}
                 disabled={loading}
-                className="flex items-center gap-2 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-3.5 py-2 text-xs font-semibold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5"
+                className="flex items-center gap-1.5 shrink-0 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-3 py-2 text-xs font-semibold text-[#1E2930] dark:text-[#F3F4F6] hover:bg-black/5 transition-colors"
               >
                 <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
                 <span>Sync</span>
@@ -574,40 +710,320 @@ export default function TablesPage() {
 
               <button
                 onClick={() => setAddModalOpen(true)}
-                className="flex items-center gap-2 rounded-xl bg-[#DE8626] px-4 py-2 text-xs font-bold text-white shadow-md shadow-[#DE8626]/20 hover:bg-[#C4721C] transition-colors"
+                className="flex items-center gap-1.5 shrink-0 rounded-xl bg-[#DE8626] px-3.5 py-2 text-xs font-bold text-white shadow-md shadow-[#DE8626]/20 hover:bg-[#C4721C] transition-colors"
               >
                 <Plus className="h-4 w-4" />
-                <span>Add Table</span>
+                <span className="whitespace-nowrap">Add Table</span>
               </button>
             </div>
           </div>
 
-          {/* Section Filter Tabs */}
-          <div className="flex items-center gap-2 overflow-x-auto scrollbar-none pb-1">
-            {sections.map((sec) => (
-              <button
-                key={sec}
-                onClick={() => setSelectedSection(sec)}
-                className={`shrink-0 rounded-xl px-3.5 sm:px-4 py-2 text-xs font-bold transition-all ${
-                  selectedSection === sec
-                    ? 'bg-[#DE8626] text-white shadow-sm shadow-[#DE8626]/20'
-                    : 'border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] text-[#667085] dark:text-[#94A3B8] hover:border-[#DE8626]'
-                }`}
-              >
-                {sec === 'ALL' ? `All Floor (${tables.length})` : sec}
-              </button>
-            ))}
+          {/* Operational Status Telemetry Cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-3">
+            {/* Total Floor */}
+            <div
+              onClick={() => setSelectedStatusFilter('ALL')}
+              className={`cursor-pointer rounded-2xl border p-3 sm:p-4 transition-all ${
+                selectedStatusFilter === 'ALL'
+                  ? 'border-[#DE8626] bg-amber-500/10 shadow-sm ring-1 ring-[#DE8626]'
+                  : 'border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] hover:border-[#DE8626]/50'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-[#667085] dark:text-[#94A3B8] uppercase tracking-wider">
+                  Total Floor
+                </span>
+                <TableIcon className="h-4 w-4 text-[#DE8626]" />
+              </div>
+              <div className="mt-2 flex items-baseline justify-between">
+                <span className="text-xl sm:text-2xl font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                  {floorStats.totalTables}
+                </span>
+                <span className="text-[11px] font-bold text-[#667085] dark:text-[#94A3B8]">
+                  {floorStats.totalSeats} seats
+                </span>
+              </div>
+            </div>
+
+            {/* Available */}
+            <div
+              onClick={() => setSelectedStatusFilter(selectedStatusFilter === 'AVAILABLE' ? 'ALL' : 'AVAILABLE')}
+              className={`cursor-pointer rounded-2xl border p-3 sm:p-4 transition-all ${
+                selectedStatusFilter === 'AVAILABLE'
+                  ? 'border-emerald-500 bg-emerald-500/10 shadow-sm ring-1 ring-emerald-500'
+                  : 'border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] hover:border-emerald-500/50'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                  Available
+                </span>
+                <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+              </div>
+              <div className="mt-2 flex items-baseline justify-between">
+                <span className="text-xl sm:text-2xl font-black text-emerald-600 dark:text-emerald-400">
+                  {floorStats.available}
+                </span>
+                <span className="text-[10px] font-medium text-emerald-700/80 dark:text-emerald-400/80">
+                  Vacant
+                </span>
+              </div>
+            </div>
+
+            {/* Occupied */}
+            <div
+              onClick={() => setSelectedStatusFilter(selectedStatusFilter === 'OCCUPIED' ? 'ALL' : 'OCCUPIED')}
+              className={`cursor-pointer rounded-2xl border p-3 sm:p-4 transition-all ${
+                selectedStatusFilter === 'OCCUPIED'
+                  ? 'border-amber-500 bg-amber-500/10 shadow-sm ring-1 ring-amber-500'
+                  : 'border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] hover:border-amber-500/50'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-amber-700 dark:text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+                  Dining
+                </span>
+                <Utensils className="h-4 w-4 text-[#DE8626]" />
+              </div>
+              <div className="mt-2 flex items-baseline justify-between">
+                <span className="text-xl sm:text-2xl font-black text-[#DE8626]">
+                  {floorStats.occupied}
+                </span>
+                <span className="text-[10px] font-medium text-amber-700/80 dark:text-amber-400/80">
+                  Active
+                </span>
+              </div>
+            </div>
+
+            {/* Billed */}
+            <div
+              onClick={() => setSelectedStatusFilter(selectedStatusFilter === 'BILLED' ? 'ALL' : 'BILLED')}
+              className={`cursor-pointer rounded-2xl border p-3 sm:p-4 transition-all ${
+                selectedStatusFilter === 'BILLED'
+                  ? 'border-yellow-500 bg-yellow-500/10 shadow-sm ring-1 ring-yellow-500'
+                  : 'border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] hover:border-yellow-500/50'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-yellow-700 dark:text-yellow-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <span className="h-2 w-2 rounded-full bg-yellow-500" />
+                  Billed
+                </span>
+                <Receipt className="h-4 w-4 text-yellow-600" />
+              </div>
+              <div className="mt-2 flex items-baseline justify-between">
+                <span className="text-xl sm:text-2xl font-black text-yellow-600 dark:text-yellow-400">
+                  {floorStats.billed}
+                </span>
+                <span className="text-[10px] font-medium text-yellow-700/80 dark:text-yellow-400/80">
+                  Pending pay
+                </span>
+              </div>
+            </div>
+
+            {/* Cleaning */}
+            <div
+              onClick={() => setSelectedStatusFilter(selectedStatusFilter === 'CLEANING' ? 'ALL' : 'CLEANING')}
+              className={`cursor-pointer rounded-2xl border p-3 sm:p-4 col-span-2 sm:col-span-1 transition-all ${
+                selectedStatusFilter === 'CLEANING'
+                  ? 'border-blue-500 bg-blue-500/10 shadow-sm ring-1 ring-blue-500'
+                  : 'border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] hover:border-blue-500/50'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-blue-700 dark:text-blue-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <span className="h-2 w-2 rounded-full bg-blue-500" />
+                  Turnover
+                </span>
+                <Sparkles className="h-4 w-4 text-blue-600" />
+              </div>
+              <div className="mt-2 flex items-baseline justify-between">
+                <span className="text-xl sm:text-2xl font-black text-blue-600 dark:text-blue-400">
+                  {floorStats.cleaning}
+                </span>
+                <span className="text-[10px] font-medium text-blue-700/80 dark:text-blue-400/80">
+                  Cleaning
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Live Service Requests Action Center */}
+          {serviceRequests.length > 0 && (
+            <div className="rounded-2xl border border-amber-500/40 bg-gradient-to-r from-amber-500/15 via-rose-500/10 to-amber-500/5 p-4 shadow-sm animate-in fade-in duration-200">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-500 text-white shadow-md animate-bounce">
+                    <BellRing className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-extrabold text-[#1E2930] dark:text-[#F3F4F6] flex items-center gap-2">
+                      <span>Active Guest Calls ({serviceRequests.length})</span>
+                      <span className="h-2 w-2 rounded-full bg-rose-500 animate-ping" />
+                    </h3>
+                    <p className="text-xs text-[#667085] dark:text-[#94A3B8]">
+                      Guests at dining tables have called for assistance or requested bills
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  {serviceRequests.slice(0, 3).map((req, idx) => (
+                    <div
+                      key={idx}
+                      className="flex items-center gap-2 rounded-xl border border-white/60 dark:border-white/10 bg-white/80 dark:bg-[#1B2127]/90 px-3 py-1.5 text-xs font-bold shadow-2xs"
+                    >
+                      <span className="text-[#DE8626]">T-{req.tableName || req.tableId}</span>
+                      <span className="text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                        {req.requestType === 'REQUEST_BILL' ? 'Pre-Bill' : req.requestType === 'REQUEST_WATER' ? 'Water' : 'Waiter'}
+                      </span>
+                      <button
+                        onClick={() => handleResolveService(req.tableId, req.requestId)}
+                        className="rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-700 dark:text-emerald-400 px-2 py-0.5 text-[10px] font-extrabold transition-colors"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  ))}
+                  {serviceRequests.length > 3 && (
+                    <span className="text-xs font-bold text-[#DE8626]">
+                      +{serviceRequests.length - 3} more
+                    </span>
+                  )}
+                  <button
+                    onClick={() => setServiceRequests([])}
+                    className="rounded-xl border border-[#DE8626]/40 bg-amber-500/10 px-3 py-1.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-colors"
+                  >
+                    Clear All
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Controls: Search, Status Filters & Section Tabs */}
+          <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-3 sm:p-4 shadow-2xs space-y-3">
+            <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+              {/* Search Bar */}
+              <div className="relative flex-1 max-w-md">
+                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-[#667085]" />
+                <input
+                  type="text"
+                  placeholder="Search table #, section or guest name..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] pl-10 pr-9 py-2 text-xs font-semibold text-[#1E2930] dark:text-[#F3F4F6] placeholder:text-[#94A3B8] outline-none focus:border-[#DE8626] transition-colors"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-[#667085] hover:bg-black/5"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {/* Status Filter Chips */}
+              <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none pb-1 md:pb-0">
+                {(['ALL', 'AVAILABLE', 'OCCUPIED', 'BILLED', 'CLEANING'] as const).map((status) => {
+                  const isActive = selectedStatusFilter === status;
+                  const label =
+                    status === 'ALL'
+                      ? `All (${tables.length})`
+                      : status === 'AVAILABLE'
+                      ? `Available (${floorStats.available})`
+                      : status === 'OCCUPIED'
+                      ? `Dining (${floorStats.occupied})`
+                      : status === 'BILLED'
+                      ? `Billed (${floorStats.billed})`
+                      : `Cleaning (${floorStats.cleaning})`;
+
+                  return (
+                    <button
+                      key={status}
+                      onClick={() => setSelectedStatusFilter(status)}
+                      className={`shrink-0 rounded-xl px-3 py-1.5 text-xs font-bold transition-all ${
+                        isActive
+                          ? 'bg-[#DE8626] text-white shadow-xs'
+                          : 'border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#667085] dark:text-[#94A3B8] hover:border-[#DE8626]'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Section Tabs */}
+            <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none pt-2 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60">
+              <span className="text-[11px] font-bold text-[#667085] dark:text-[#94A3B8] uppercase mr-1 shrink-0 flex items-center gap-1">
+                <SlidersHorizontal className="h-3 w-3" />
+                <span>Sections:</span>
+              </span>
+              {sections.map((sec) => {
+                const isSelected = selectedSection === sec;
+                const count = sec === 'ALL' ? tables.length : tables.filter((t) => (t.sectionName || 'Main Dining') === sec).length;
+                return (
+                  <button
+                    key={sec}
+                    onClick={() => setSelectedSection(sec)}
+                    className={`shrink-0 rounded-xl px-3 py-1 text-xs font-bold transition-all ${
+                      isSelected
+                        ? 'bg-amber-500/15 border border-[#DE8626] text-[#DE8626]'
+                        : 'border border-transparent text-[#667085] dark:text-[#94A3B8] hover:bg-black/5 dark:hover:bg-white/5'
+                    }`}
+                  >
+                    {sec === 'ALL' ? `All Sections (${count})` : `${sec} (${count})`}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           {/* Tables Grid */}
           {loading ? (
             <TablesFloorSkeleton count={12} />
           ) : filteredTables.length === 0 ? (
-            <div className="rounded-2xl sm:rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-12 sm:p-16 text-center text-xs text-[#667085]">
-              No tables configured in this section. Click "Add Table" to set up your floor plan.
+            <div className="rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-12 sm:p-16 text-center space-y-3">
+              <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-500/10 text-[#DE8626] mx-auto">
+                <TableIcon className="h-7 w-7" />
+              </div>
+              <h3 className="text-base font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                {tables.length === 0 ? 'No Dining Tables Configured' : 'No Tables Match Filters'}
+              </h3>
+              <p className="text-xs text-[#667085] dark:text-[#94A3B8] max-w-sm mx-auto">
+                {tables.length === 0
+                  ? 'Set up your restaurant floor plan by adding tables with their seating capacities and dining sections.'
+                  : `No tables found for status "${selectedStatusFilter}" or search "${searchQuery}".`}
+              </p>
+              <div className="pt-2 flex items-center justify-center gap-2">
+                {searchQuery || selectedStatusFilter !== 'ALL' || selectedSection !== 'ALL' ? (
+                  <button
+                    onClick={() => {
+                      setSearchQuery('');
+                      setSelectedStatusFilter('ALL');
+                      setSelectedSection('ALL');
+                    }}
+                    className="rounded-xl border border-[#DE8626] bg-amber-500/10 px-4 py-2 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-colors"
+                  >
+                    Reset Filters
+                  </button>
+                ) : null}
+                <button
+                  onClick={() => setAddModalOpen(true)}
+                  className="rounded-xl bg-[#DE8626] px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-[#C4721C] transition-colors flex items-center gap-1.5"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>Add Table</span>
+                </button>
+              </div>
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2.5 sm:gap-3.5 md:gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3 sm:gap-4">
               {filteredTables.map((tbl) => {
                 const activeOrder = getOrderForTable(tbl);
                 const statusUpper = (tbl.status || '').toUpperCase();
@@ -624,33 +1040,38 @@ export default function TablesPage() {
                 const hasWaterRequest = activeServiceReq?.requestType === 'REQUEST_WATER';
                 const hasWaiterCall = activeServiceReq?.requestType === 'CALL_WAITER';
 
+                const elapsedMins = activeOrder?.createdAt
+                  ? Math.max(0, Math.floor((Date.now() - new Date(activeOrder.createdAt).getTime()) / 60000))
+                  : 0;
+
                 return (
                   <div
                     key={tbl.id}
                     onClick={() => handleSelectTable(tbl)}
-                    className={`group relative flex flex-col justify-between rounded-2xl sm:rounded-3xl border p-3 sm:p-4 shadow-2xs hover:shadow-md transition-all cursor-pointer select-none ${
+                    className={`group relative flex flex-col justify-between rounded-3xl border p-3.5 sm:p-4 shadow-2xs hover:shadow-lg transition-all duration-200 cursor-pointer select-none bg-white dark:bg-[#1B2127] ${
                       hasBillRequest
-                        ? 'border-rose-500 ring-2 ring-rose-500/30 bg-rose-500/[0.03]'
+                        ? 'border-rose-500 ring-2 ring-rose-500/30 bg-rose-500/[0.04]'
                         : hasWaterRequest
-                        ? 'border-sky-500 ring-2 ring-sky-500/30 bg-sky-500/[0.03]'
+                        ? 'border-sky-500 ring-2 ring-sky-500/30 bg-sky-500/[0.04]'
                         : hasWaiterCall
-                        ? 'border-amber-500 ring-2 ring-amber-500/30 bg-amber-500/[0.03]'
+                        ? 'border-amber-500 ring-2 ring-amber-500/30 bg-amber-500/[0.04]'
                         : isOccupied
-                        ? 'border-amber-400/80 bg-gradient-to-br from-amber-500/10 to-[#FFFFFF] dark:to-[#1B2127] hover:border-[#DE8626]'
+                        ? 'border-amber-400/80 bg-gradient-to-b from-amber-500/[0.06] to-white dark:to-[#1B2127] hover:border-[#DE8626]'
                         : isBilled
-                        ? 'border-amber-500/80 bg-amber-500/5 hover:border-amber-500'
+                        ? 'border-yellow-400/80 bg-gradient-to-b from-yellow-500/[0.06] to-white dark:to-[#1B2127] hover:border-yellow-500'
                         : isCleaning
-                        ? 'border-blue-400/80 bg-blue-500/5 hover:border-blue-500'
-                        : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] hover:border-[#DE8626]'
+                        ? 'border-blue-400/80 bg-gradient-to-b from-blue-500/[0.06] to-white dark:to-[#1B2127] hover:border-blue-500'
+                        : 'border-[#E7E1DA] dark:border-[#2B3540] hover:border-[#DE8626]'
                     }`}
                   >
+                    {/* Top Header Row */}
                     <div>
-                      {/* Top Header: Seating & Status */}
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="flex items-center gap-1 text-[11px] font-semibold text-[#667085] dark:text-[#94A3B8]">
-                          <Users className="h-3 w-3" />
+                      <div className="flex items-center justify-between gap-1 mb-2.5">
+                        <span className="flex items-center gap-1 text-[11px] font-bold text-[#667085] dark:text-[#94A3B8]">
+                          <Users className="h-3.5 w-3.5 text-[#DE8626]" />
                           <span>{tbl.seatingCapacity || 4}p</span>
                         </span>
+
                         <div className="flex items-center gap-1.5">
                           <button
                             type="button"
@@ -658,65 +1079,74 @@ export default function TablesPage() {
                               e.stopPropagation();
                               setQrTable(tbl);
                             }}
-                            title="Print Table QR Sticker"
-                            className="rounded-lg p-1 text-[#667085] hover:bg-amber-500/10 hover:text-[#DE8626] transition-colors"
+                            title={`Generate & Print QR for Table T-${tbl.tableNumber}`}
+                            className="flex items-center gap-1 rounded-lg border border-[#DE8626]/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-[#DE8626] hover:bg-amber-500/20 hover:border-[#DE8626] transition-colors"
                           >
-                            <QrCode className="h-3.5 w-3.5" />
+                            <QrCode className="h-3 w-3" />
+                            <span>QR</span>
                           </button>
+
                           <span
-                            className={`rounded-full px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wider ${
+                            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wider ${
                               isBilled
-                                ? 'bg-amber-500 text-white'
+                                ? 'bg-yellow-500 text-white shadow-2xs'
                                 : isCleaning
-                                ? 'bg-blue-500 text-white'
+                                ? 'bg-blue-500 text-white shadow-2xs'
                                 : isOccupied
-                                ? 'bg-red-500 text-white'
-                                : 'bg-emerald-500/10 text-emerald-600'
+                                ? 'bg-amber-500 text-white shadow-2xs'
+                                : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30'
                             }`}
                           >
-                            {tbl.status || (isOccupied ? 'Occupied' : 'Available')}
+                            <span
+                              className={`h-1.5 w-1.5 rounded-full ${
+                                isBilled
+                                  ? 'bg-white'
+                                  : isCleaning
+                                  ? 'bg-white'
+                                  : isOccupied
+                                  ? 'bg-white animate-pulse'
+                                  : 'bg-emerald-500'
+                              }`}
+                            />
+                            {isBilled ? 'Billed' : isCleaning ? 'Cleaning' : isOccupied ? `${elapsedMins}m` : 'Available'}
                           </span>
                         </div>
                       </div>
 
-                      {/* Large Table Number & Live Service Request Badge */}
+                      {/* Main Table Identifier & Section */}
                       <div className="my-2">
-                        <div className="flex items-center justify-between">
-                          <h3 className="text-xl font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                        <div className="flex items-baseline justify-between">
+                          <h3 className="text-xl sm:text-2xl font-black text-[#1E2930] dark:text-[#F3F4F6] tracking-tight group-hover:text-[#DE8626] transition-colors">
                             T-{tbl.tableNumber}
                           </h3>
+
                           {isOccupied && activeOrder && (
-                            (() => {
-                              const elapsedMins = activeOrder.createdAt
-                                ? Math.max(0, Math.floor((Date.now() - new Date(activeOrder.createdAt).getTime()) / 60000))
-                                : 0;
-                              return (
-                                <span
-                                  className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold border ${
-                                    elapsedMins < 20
-                                      ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
-                                      : elapsedMins < 45
-                                      ? 'bg-amber-500/10 text-[#DE8626] border-amber-500/20'
-                                      : 'bg-red-500/10 text-red-600 border-red-500/20 animate-pulse'
-                                  }`}
-                                  title={`Seated ${elapsedMins} mins ago`}
-                                >
-                                  <Clock className="h-2.5 w-2.5" />
-                                  <span>{elapsedMins}m</span>
-                                </span>
-                              );
-                            })()
+                            <span className="text-[10px] font-extrabold text-[#DE8626] bg-amber-500/10 px-2 py-0.5 rounded-md">
+                              #{activeOrder.id}
+                            </span>
                           )}
                         </div>
 
+                        <p className="text-[11px] font-semibold text-[#667085] dark:text-[#94A3B8] truncate mt-0.5">
+                          {tbl.sectionName || 'Main Dining'}
+                        </p>
+
+                        {/* Customer Name or Order items preview */}
+                        {isOccupied && activeOrder && (
+                          <p className="text-[10px] text-[#667085] dark:text-[#94A3B8] truncate mt-1 font-medium">
+                            {activeOrder.customerName ? `Guest: ${activeOrder.customerName}` : `${activeOrder.items?.length || 0} dishes ordered`}
+                          </p>
+                        )}
+
+                        {/* Live Service Request Alert Badge */}
                         {activeServiceReq && (
                           <div
-                            className={`my-1.5 flex items-center gap-1.5 rounded-xl px-2 py-0.5 text-[10px] font-extrabold border animate-pulse ${
+                            className={`mt-2 flex items-center gap-1.5 rounded-xl px-2.5 py-1 text-[10px] font-black border animate-pulse ${
                               hasBillRequest
-                                ? 'border-rose-500/40 bg-rose-500/15 text-rose-600 dark:text-rose-400'
+                                ? 'border-rose-500/50 bg-rose-500/15 text-rose-600 dark:text-rose-400'
                                 : hasWaterRequest
-                                ? 'border-sky-500/40 bg-sky-500/15 text-sky-600 dark:text-sky-400'
-                                : 'border-amber-500/40 bg-amber-500/15 text-[#DE8626]'
+                                ? 'border-sky-500/50 bg-sky-500/15 text-sky-600 dark:text-sky-400'
+                                : 'border-amber-500/50 bg-amber-500/15 text-[#DE8626]'
                             }`}
                           >
                             {hasBillRequest ? (
@@ -737,43 +1167,93 @@ export default function TablesPage() {
                             )}
                           </div>
                         )}
-
-                        <p className="text-[10px] text-[#667085] dark:text-[#94A3B8] truncate">
-                          {tbl.sectionName || 'Main Dining'}
-                        </p>
                       </div>
                     </div>
 
-                    {/* Bottom Status / Order Info */}
-                    <div className="pt-3 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60 mt-2">
+                    {/* Bottom Status / Order Info & Actions */}
+                    <div className="pt-2.5 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60 mt-2">
                       {isOccupied && activeOrder ? (
-                        <div className="flex items-center justify-between text-xs">
+                        <div className="flex items-center justify-between gap-1.5">
                           <div>
-                            <span className="font-extrabold text-[#DE8626] block">
+                            <span className="text-xs sm:text-sm font-black text-[#DE8626] block">
                               ₹{activeOrder.totalAmount || 0}
                             </span>
-                            <span className="text-[10px] text-[#667085] truncate block">
-                              #{activeOrder.id} • {activeOrder.status || 'Active'}
+                            <span className="text-[9px] text-[#667085] block truncate">
+                              {activeOrder.items?.length || 0} items
                             </span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const targetId = tbl.id;
+                                const activeId = activeOrder?.id;
+                                router.push(`/pos?tableId=${targetId}${activeId ? `&orderId=${activeId}` : ''}`);
+                              }}
+                              className="rounded-xl border border-[#DE8626] bg-amber-500/10 hover:bg-amber-500/20 text-[#DE8626] px-2 py-1 text-[10px] font-bold transition-colors"
+                              title="Add more dishes in POS"
+                            >
+                              + POS
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSettlingOrder(activeOrder);
+                              }}
+                              className="rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white px-2 py-1 text-[10px] font-bold shadow-xs transition-colors flex items-center gap-0.5"
+                              title="Settle Bill and Free Table"
+                            >
+                              <Receipt className="h-3 w-3" />
+                              <span>Settle</span>
+                            </button>
+                          </div>
+                        </div>
+                      ) : isBilled ? (
+                        <div className="flex items-center justify-between text-xs">
+                          <div>
+                            <span className="text-xs font-bold text-yellow-600 block">
+                              ₹{activeOrder?.totalAmount || 0}
+                            </span>
+                            <span className="text-[9px] text-[#667085] block">Awaiting Cashier</span>
                           </div>
                           <button
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
-                              setSettlingOrder(activeOrder);
+                              if (activeOrder) setSettlingOrder(activeOrder);
+                              else handleSelectTable(tbl);
                             }}
-                            className="flex items-center gap-1 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1.5 text-[11px] font-bold shadow-xs transition-colors"
-                            title="Settle Bill and Free Table"
+                            className="rounded-xl bg-yellow-500 hover:bg-yellow-600 text-white px-2.5 py-1 text-[10px] font-bold transition-colors"
                           >
-                            <Receipt className="h-3 w-3" />
-                            <span>Settle</span>
+                            Settle
                           </button>
                         </div>
+                      ) : isCleaning ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleFreeTable(tbl.id, false);
+                          }}
+                          className="w-full flex items-center justify-center gap-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white py-1.5 text-[10px] font-bold transition-colors shadow-2xs"
+                        >
+                          <Sparkles className="h-3 w-3" />
+                          <span>Mark Clean</span>
+                        </button>
                       ) : (
-                        <div className="flex items-center justify-between text-xs text-[#667085] dark:text-[#94A3B8] group-hover:text-[#DE8626]">
-                          <span className="text-[11px] font-semibold">Seat Guests</span>
-                          <ArrowRight className="h-3 w-3 group-hover:translate-x-0.5 transition-transform" />
-                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            router.push(`/pos?tableId=${tbl.id}`);
+                          }}
+                          className="w-full flex items-center justify-center gap-1.5 rounded-xl border border-dashed border-[#DE8626]/60 bg-amber-500/5 hover:bg-[#DE8626] text-[#DE8626] hover:text-white py-1.5 text-[10px] sm:text-[11px] font-bold transition-all"
+                        >
+                          <Plus className="h-3 w-3" />
+                          <span>Seat Guests (POS)</span>
+                        </button>
                       )}
                     </div>
                   </div>
@@ -1084,11 +1564,27 @@ export default function TablesPage() {
                         setActionTable(null);
                         setQrTable(target);
                       }}
-                      className="flex-1 flex items-center justify-center gap-1.5 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] py-2 text-xs font-semibold text-[#667085] hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                      className="flex-1 flex items-center justify-center gap-1.5 rounded-2xl border border-[#DE8626] bg-amber-500/10 py-2.5 text-xs font-bold text-[#DE8626] hover:bg-amber-500/20 transition-colors shadow-2xs"
+                      title="Generate dynamic 15-min rolling QR or physical table sticker"
                     >
-                      <QrCode className="h-3.5 w-3.5" />
-                      <span>QR Sticker</span>
+                      <QrCode className="h-4 w-4" />
+                      <span>Table QR</span>
                     </button>
+
+                    {!isOccupied && !isBilled && (
+                      <button
+                        onClick={() => {
+                          const target = actionTable;
+                          setActionTable(null);
+                          handleOpenEditTable(target);
+                        }}
+                        className="flex items-center justify-center gap-1.5 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] px-3.5 py-2 text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6] hover:text-[#DE8626] hover:border-[#DE8626] transition-colors"
+                        title="Edit Table Details"
+                      >
+                        <Edit2 className="h-3.5 w-3.5 text-[#DE8626]" />
+                        <span>Edit</span>
+                      </button>
+                    )}
 
                     {!isOccupied && !isBilled && (
                       <button
@@ -1118,11 +1614,21 @@ export default function TablesPage() {
 
         {/* 2. Add New Table Modal */}
         {addModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
             <div className="w-full max-w-sm rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-6 shadow-2xl">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">Add Dining Table</h3>
-                <button onClick={() => setAddModalOpen(false)} className="rounded-lg p-1 text-[#667085]">
+                <div className="flex items-center gap-2">
+                  <div className="rounded-xl bg-amber-500/15 p-2 text-[#DE8626]">
+                    <Plus className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">Add Dining Table</h3>
+                    <p className="text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                      Create a new table for guest dining & QR ordering
+                    </p>
+                  </div>
+                </div>
+                <button onClick={() => setAddModalOpen(false)} className="rounded-lg p-1 text-[#667085] hover:bg-black/5">
                   <X className="h-4 w-4" />
                 </button>
               </div>
@@ -1194,6 +1700,101 @@ export default function TablesPage() {
           </div>
         )}
 
+        {/* 2b. Edit Dining Table Modal */}
+        {editModalOpen && editTable && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+            <div className="w-full max-w-sm rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-6 shadow-2xl">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <div className="rounded-xl bg-amber-500/15 p-2 text-[#DE8626]">
+                    <Edit2 className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                      Edit Table T-{editTable.tableNumber}
+                    </h3>
+                    <p className="text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                      Update table label, capacity or floor section
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setEditModalOpen(false);
+                    setEditTable(null);
+                  }}
+                  className="rounded-lg p-1 text-[#667085] hover:bg-black/5"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <form onSubmit={handleUpdateTable} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-[#667085] uppercase mb-1">
+                    Table Number / Label *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editTableNumber}
+                    onChange={(e) => setEditTableNumber(e.target.value)}
+                    className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3.5 py-2 text-xs font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-[#667085] uppercase mb-1">
+                    Seating Capacity (Guests) *
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min="1"
+                    max="50"
+                    value={editSeatingCapacity}
+                    onChange={(e) => setEditSeatingCapacity(e.target.value)}
+                    className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3.5 py-2 text-xs font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-[#667085] uppercase mb-1">
+                    Floor Section *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editSectionName}
+                    onChange={(e) => setEditSectionName(e.target.value)}
+                    className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3.5 py-2 text-xs font-medium text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
+                  />
+                </div>
+
+                <div className="pt-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditModalOpen(false);
+                      setEditTable(null);
+                    }}
+                    className="flex-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] py-2.5 text-xs font-semibold text-[#667085]"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingEdit}
+                    className="flex-1 rounded-xl bg-[#DE8626] py-2.5 text-xs font-bold text-white shadow-md hover:bg-[#C4721C] disabled:opacity-50"
+                  >
+                    {savingEdit ? 'Saving...' : 'Save Changes'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
         {/* 3. Table QR Sticker Modal */}
         {qrTable && (
           <TableQrModal
@@ -1214,6 +1815,118 @@ export default function TablesPage() {
             restaurantId={currentRestId}
             restaurantName={activeRestaurant?.restaurantName || 'Menza Restaurant'}
           />
+        )}
+
+        {/* 4b. Table QR Selector Modal (Header Quick Action) */}
+        {tableQrPickerOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+            <div className="w-full max-w-lg rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-6 shadow-2xl flex flex-col max-h-[85vh]">
+              <div className="flex items-center justify-between pb-3 border-b border-[#E7E1DA] dark:border-[#2B3540]">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-500/15 text-[#DE8626]">
+                    <QrCode className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-[#1E2930] dark:text-[#F3F4F6]">
+                      Generate Dine-in Table QR
+                    </h3>
+                    <p className="text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                      Select a dining table to view, download, or print its QR ordering sticker
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setTableQrPickerOpen(false);
+                    setTableQrSearch('');
+                  }}
+                  className="rounded-lg p-1.5 text-[#667085] hover:bg-black/5"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              {/* Search Bar */}
+              <div className="my-3">
+                <input
+                  type="text"
+                  placeholder="Filter tables by number or section..."
+                  value={tableQrSearch}
+                  onChange={(e) => setTableQrSearch(e.target.value)}
+                  className="w-full rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] px-3.5 py-2 text-xs font-semibold text-[#1E2930] dark:text-[#F3F4F6] outline-none focus:border-[#DE8626]"
+                />
+              </div>
+
+              {/* Table List / Grid */}
+              <div className="overflow-y-auto max-h-80 space-y-2 py-1 pr-1">
+                {(() => {
+                  const q = tableQrSearch.toLowerCase().trim();
+                  const matched = tables.filter(
+                    (t) =>
+                      !q ||
+                      String(t.tableNumber).toLowerCase().includes(q) ||
+                      (t.sectionName || '').toLowerCase().includes(q)
+                  );
+
+                  if (matched.length === 0) {
+                    return (
+                      <div className="rounded-2xl border border-dashed border-[#E7E1DA] dark:border-[#2B3540] p-8 text-center text-xs text-[#667085]">
+                        No tables matched your search.
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                      {matched.map((tbl) => (
+                        <button
+                          key={tbl.id}
+                          type="button"
+                          onClick={() => {
+                            setTableQrPickerOpen(false);
+                            setTableQrSearch('');
+                            setQrTable(tbl);
+                          }}
+                          className="group flex flex-col items-start justify-between rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-3 text-left hover:border-[#DE8626] hover:bg-amber-500/5 transition-all"
+                        >
+                          <div className="flex w-full items-center justify-between mb-1.5">
+                            <span className="text-base font-extrabold text-[#1E2930] dark:text-[#F3F4F6] group-hover:text-[#DE8626]">
+                              T-{tbl.tableNumber}
+                            </span>
+                            <span className="flex items-center gap-1 rounded-lg bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-bold text-[#DE8626]">
+                              <QrCode className="h-3 w-3" />
+                              <span>QR</span>
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-[#667085] dark:text-[#94A3B8]">
+                            {tbl.sectionName || 'Main Dining'} • {tbl.seatingCapacity || 4} Seats
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Bottom Footer with Store QR Alternative */}
+              <div className="mt-3 pt-3 border-t border-[#E7E1DA] dark:border-[#2B3540] flex items-center justify-between text-xs">
+                <span className="text-[11px] text-[#667085] dark:text-[#94A3B8]">
+                  Looking for the general store standee?
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTableQrPickerOpen(false);
+                    setStorefrontQrOpen(true);
+                  }}
+                  className="font-bold text-[#DE8626] hover:underline flex items-center gap-1 text-[11px]"
+                >
+                  <QrCode className="h-3.5 w-3.5" />
+                  <span>Generate Store Profile QR</span>
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* 5. Order Settlement Modal */}

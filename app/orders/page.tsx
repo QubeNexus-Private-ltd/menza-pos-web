@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
@@ -47,6 +47,7 @@ import { usePosCatalogStore } from '@/stores/usePosCatalogStore';
 import { OrderMaster, OrderItem } from '@shared/domain/models/Order';
 import { WebPrinterService } from '@/services/webPrinterService';
 import { WebWhatsAppService } from '@/services/whatsAppService';
+import { WhatsAppShareModal } from '@/components/orders/WhatsAppShareModal';
 import { WebOrderHistoryService } from '@/services/orderHistoryService';
 import { ReceiptData } from '@shared/core/printer/EscPosBuilder';
 import {
@@ -118,6 +119,7 @@ export default function OrdersPage() {
   const [settlingOrder, setSettlingOrder] = useState<OrderMaster | null>(null);
   const [viewingOrder, setViewingOrder] = useState<OrderMaster | null>(null);
   const [receiptModalOrder, setReceiptModalOrder] = useState<OrderMaster | null>(null);
+  const [whatsAppModalOrder, setWhatsAppModalOrder] = useState<OrderMaster | null>(null);
   const [orderTimeline, setOrderTimeline] = useState<Array<{ id?: number; action: string; description: string; createdDateUtc?: string }> | null>(null);
   const [loadingTimeline, setLoadingTimeline] = useState(false);
   const [printingOrderId, setPrintingOrderId] = useState<number | null>(null);
@@ -462,24 +464,7 @@ export default function OrdersPage() {
 
   // WhatsApp share
   const handleShareWhatsApp = (order: OrderMaster) => {
-    const phone = order.mobileNumber || '';
-    const receiptData = {
-      restaurantName: activeRestaurant?.restaurantName || 'Menza Restaurant',
-      orderId: order.id,
-      customerName: order.customerName,
-      items: Array.isArray(order.items)
-        ? order.items.map((i) => ({
-            itemName: i.itemName,
-            quantity: i.quantity,
-            price: Number(i.unitPrice || 0),
-          }))
-        : [],
-      grandTotal: Number(order.totalAmount || 0),
-      paymentMode: order.paymentMode || 'CASH',
-    };
-
-    const url = WebWhatsAppService.getWhatsAppReceiptUrl(phone, receiptData);
-    window.open(url, '_blank', 'noopener,noreferrer');
+    setWhatsAppModalOrder(order);
   };
 
   // Filtered Live Orders
@@ -1659,6 +1644,15 @@ export default function OrdersPage() {
               await loadOrders();
               setSettlingOrder(null);
             }}
+          />
+        )}
+
+        {/* 4. WHATSAPP SHARE MODAL */}
+        {whatsAppModalOrder && (
+          <WhatsAppShareModal
+            isOpen={Boolean(whatsAppModalOrder)}
+            onClose={() => setWhatsAppModalOrder(null)}
+            order={whatsAppModalOrder}
           />
         )}
       </AppShell>

@@ -1,7 +1,7 @@
 const DEFAULT_API_BASE_URL =
-  'https://menzaposapi20260927220419-efbdafa3buaccge8.centralindia-01.azurewebsites.net/api';
+  'https://menzaapiprod.azurewebsites.net/api';
 const DEFAULT_CUSTOMER_ORDERING_BASE_URL =
-  'https://menza-order-web.vercel.app';
+  'https://menzaorder.co.in';
 
 export const APP_CONSTANTS = {
   APP_NAME:
@@ -10,11 +10,11 @@ export const APP_CONSTANTS = {
     process.env.APP_NAME ||
     'Menza',
   APP_TAGLINE: 'Smart Multi-Tenant Restaurant Suite',
-  APP_VERSION: '1.0.0',
-  APP_BUILD_NUMBER: 1,
+  APP_VERSION: '1.0.3',
+  APP_BUILD_NUMBER: 10,
   APP_TYPE: 'POS_ADMIN',
   DEFAULT_STORE_URL:
-    'https://play.google.com/store/apps/details?id=com.anonymous.MenzaAdmin',
+    'https://play.google.com/store/apps/details?id=com.qubenexus.menzapos',
   // Live Azure Web API Endpoint (Configurable via .env, Vercel & EAS)
   API_BASE_URL:
     process.env.NEXT_PUBLIC_API_BASE_URL ||

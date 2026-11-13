@@ -150,6 +150,18 @@ export const isOwnerUser = (
   return roles.some((r) => r === 'owner' || r.includes('owner') || r.includes('tenant_admin'));
 };
 
+/**
+ * Checks if the user has the Admin role.
+ */
+export const isAdminUser = (
+  user: User | null,
+  activeRestaurant?: RestaurantDetail | null
+): boolean => {
+  if (!user && !activeRestaurant) return false;
+  const roles = extractUserRoles(user, activeRestaurant || null);
+  return roles.some((r) => r === 'admin' || r.includes('admin'));
+};
+
 /** 
  * Check if user has permission to edit store configuration.
  * Only Store Owners, Admins, and SuperAdmins can modify store configuration.
@@ -163,13 +175,17 @@ export const canEditStoreConfig = (
   return !isCashierOnly(user, activeRestaurant);
 };
 
-/** Check if user has permission to add, edit, or delete staff members & permissions */
+/** Check if user has permission to add, edit, or delete staff members & permissions (Owner, Admin, or SuperAdmin) */
 export const canManageStaff = (
   user: User | null,
   activeRestaurant: RestaurantDetail | null
 ): boolean => {
   if (!user) return false;
-  return !isCashierOnly(user, activeRestaurant);
+  return (
+    isOwnerUser(user, activeRestaurant) ||
+    isAdminUser(user, activeRestaurant) ||
+    isSuperAdminUser(user, activeRestaurant)
+  );
 };
 
 /**

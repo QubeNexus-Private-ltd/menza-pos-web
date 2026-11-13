@@ -1,7 +1,7 @@
-import { parseDietaryIsVeg } from '../../core/utils/dietary';
 import { apiClient } from '../../core/network/apiClient';
 import { Category } from '../../domain/models/Category';
 import { MenuItem } from '../../domain/models/Item';
+import { parseDietaryIsVeg } from '../../core/utils/dietary';
 
 export class CatalogRemoteDataSource {
   async getCategories(restaurantId?: number, onlyWithItems: boolean = true): Promise<Category[]> {

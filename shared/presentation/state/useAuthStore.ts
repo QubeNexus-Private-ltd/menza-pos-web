@@ -81,7 +81,12 @@ interface AuthState {
   setAuthMode: (mode: 'pin' | 'otp' | 'setup_pin' | 'forgot_pin') => void;
   setIsPinConfigured: (status: boolean) => void;
   completePinSetup: (pin: string) => Promise<boolean>;
-  resetPinWithOtp: (mobile: string, otpCode: string, newPin: string) => Promise<{ success: boolean; message?: string }>;
+  resetPinWithOtp: (mobile: string, otpCode: string, newPin: string) => Promise<{
+    success: boolean;
+    message?: string;
+    staffName?: string;
+    preservedSession?: boolean;
+  }>;
 
   // Staff PIN Actions
   lockToPinScreen: () => void;
@@ -726,22 +731,34 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   setStaffPin: async (pin: string, targetUserId?: number) => {
-    await SessionStorage.saveStaffPin(pin);
-    await SessionStorage.savePinLockEnabled(true);
-    set({ staffPin: pin, isPinLockEnabled: true });
-
-    // Sync to backend if user ID is known
+    // 1. Sync to database if user ID is known
     const targetId = targetUserId || get().user?.id;
     if (targetId) {
       try {
-        await new AuthRemoteDataSource().setStaffPin(targetId, pin);
-        logger.auth('STAFF_PIN_SYNCED_BACKEND', `Staff PIN saved to database for user ${targetId}`);
-      } catch (err) {
-        logger.api('API_ERROR', 'Failed to sync staff PIN to database, saved locally', { error: String(err) });
+        const synced = await new AuthRemoteDataSource().setStaffPin(targetId, pin);
+        if (!synced) {
+          logger.auth('POS_PIN_UNLOCK_FAILED', `Failed to sync staff PIN to database for user ${targetId}`);
+        } else {
+          logger.auth('STAFF_PIN_SYNCED_BACKEND', `Staff PIN saved to database for user ${targetId}`);
+        }
+      } catch (err: any) {
+        logger.api('API_ERROR', 'Failed to sync staff PIN to database', { error: String(err) });
+        const serverMsg = extractApiErrorMessage(err);
+        const status = err?.response?.status;
+        if (status && status >= 400 && status < 500) {
+          throw new Error(serverMsg || err?.message || 'Failed to update PIN on server.');
+        }
       }
     }
 
-    logger.auth('STAFF_PIN_CONFIGURED', 'Staff PIN updated');
+    // 2. Only update terminal local fallback PIN if setting for current user or no targetId specified
+    if (!targetUserId || targetUserId === get().user?.id) {
+      await SessionStorage.saveStaffPin(pin);
+      await SessionStorage.savePinLockEnabled(true);
+      set({ staffPin: pin, isPinLockEnabled: true });
+    }
+
+    logger.auth('STAFF_PIN_CONFIGURED', `Staff PIN updated for target ${targetId || 'local'}`);
     return true;
   },
 
@@ -771,8 +788,24 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   resetPinWithOtp: async (mobile: string, otpCode: string, newPin: string) => {
     try {
-      const authData = await new AuthRemoteDataSource().resetPinWithOtp(mobile, otpCode, newPin);
+      const cleanMobile = String(mobile || '').replace(/[^0-9]/g, '').slice(-10);
+      const authData = await new AuthRemoteDataSource().resetPinWithOtp(cleanMobile, otpCode, newPin);
       if (authData && authData.token) {
+        const currentState = get();
+        // If POS terminal was already authenticated with an active session (e.g. store owner / manager)
+        // and locked in Store/Shift Mode, preserve the store owner session!
+        if (currentState.isAuthenticated && currentState.token && currentState.user) {
+          await SessionStorage.saveRememberedMobile(cleanMobile);
+          set({
+            rememberedMobile: cleanMobile,
+            authMode: 'pin',
+            isPinLocked: true,
+          });
+          logger.auth('STAFF_PIN_CONFIGURED', `Staff PIN reset with OTP for ${authData.name}. Terminal owner session preserved.`);
+          return { success: true, staffName: authData.name, preservedSession: true };
+        }
+
+        // If whole app was unauthenticated (fresh install / initial login / owner recovery):
         get().setAuthData(
           authData.token,
           authData.refreshToken,
@@ -792,7 +825,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         markTerminalUnlocked();
         set({ isPinConfigured: true, isPinLocked: false, staffPin: newPin, authMode: 'pin' });
         logger.auth('STAFF_PIN_CONFIGURED', `Staff PIN successfully reset with OTP for ${authData.name}`);
-        return { success: true };
+        return { success: true, staffName: authData.name, preservedSession: false };
       }
       return { success: false, message: 'Failed to reset PIN. Invalid response from server.' };
     } catch (err: any) {

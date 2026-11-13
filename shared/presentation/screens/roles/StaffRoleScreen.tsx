@@ -13,6 +13,7 @@ import {
   StatusBar,
   Dimensions,
   Image,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -36,6 +37,7 @@ import {
   CheckCircle2,
   Lock,
   Crown,
+  KeyRound,
 } from 'lucide-react-native';
 import { Typography } from '../../../core/theme/typography';
 import { Spacing } from '../../../core/theme/spacing';
@@ -45,7 +47,8 @@ import { RoleMaster } from '../../../domain/models/Role';
 import { StaffMember } from '../../../domain/models/StaffMember';
 import { RoleRemoteDataSource } from '../../../data/datasources/RoleRemoteDataSource';
 import { RoleRepositoryImpl } from '../../../data/repositories/RoleRepositoryImpl';
-import { isCashierOnly, canManageStaff } from '../../../core/auth/rolePermissions';
+import { AuthRemoteDataSource } from '../../../data/datasources/AuthRemoteDataSource';
+import { isCashierOnly, canManageStaff, isOwnerUser, isAdminUser, isSuperAdminUser } from '../../../core/auth/rolePermissions';
 import { useAuthStore } from '../../state/useAuthStore';
 import { FeatureGate } from '../../components/subscription/FeatureGate';
 import { apiClient } from '../../../core/network/apiClient';
@@ -54,6 +57,7 @@ import { cleanMobile } from '../../../core/utils/formatters';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const roleRepository = new RoleRepositoryImpl(new RoleRemoteDataSource());
+const authRemoteDataSource = new AuthRemoteDataSource();
 
 const getRoleVisualConfig = (roleName: string) => {
   const name = (roleName || '').toLowerCase();
@@ -98,7 +102,9 @@ const StaffCardSkeleton: React.FC = () => (
 export const StaffRoleScreen: React.FC<StaffRoleScreenProps> = ({ onClose }) => {
   const { activeRestaurant, user } = useAuthStore();
   const activeRestId = activeRestaurant?.restaurantId || (globalThis as any).__MENZA_ACTIVE_REST_ID__ || 0;
-  const cashierRestricted = isCashierOnly(user, activeRestaurant) || !canManageStaff(user, activeRestaurant);
+  const canManage = canManageStaff(user, activeRestaurant);
+  const isOwner = canManage;
+  const cashierRestricted = !canManage;
 
   const [activeTab, setActiveTab] = useState<'directory' | 'roles'>('directory');
   const [roles, setRoles] = useState<RoleMaster[]>([]);
@@ -123,6 +129,12 @@ export const StaffRoleScreen: React.FC<StaffRoleScreenProps> = ({ onClose }) => 
   const [formEmployeeCode, setFormEmployeeCode] = useState('');
   const [formShift, setFormShift] = useState('');
   const [formPin, setFormPin] = useState('');
+
+  // Quick Staff PIN Modal State
+  const [pinModalVisible, setPinModalVisible] = useState(false);
+  const [targetStaffForPin, setTargetStaffForPin] = useState<StaffMember | null>(null);
+  const [staffNewPin, setStaffNewPin] = useState('');
+  const [savingStaffPin, setSavingStaffPin] = useState(false);
   const {
     loading: staffLookupLoading,
     existingUser: existingStaffUser,
@@ -187,8 +199,8 @@ export const StaffRoleScreen: React.FC<StaffRoleScreenProps> = ({ onClose }) => 
   };
 
   const handleOpenRegisterModal = (preselectedRoleId?: number) => {
-    if (cashierRestricted) {
-      showAlert('Permission Denied', 'Cashiers do not have permission to register new staff members.', 'warning');
+    if (cashierRestricted || !canManage) {
+      showAlert('Permission Denied', 'Only the restaurant Owner or Admin can register new staff members.', 'warning');
       return;
     }
     const defaultRoleId = preselectedRoleId || roles[0]?.id || 4;
@@ -200,13 +212,18 @@ export const StaffRoleScreen: React.FC<StaffRoleScreenProps> = ({ onClose }) => 
     setFormRoleId(defaultRoleId);
     setFormEmployeeCode('');
     setFormShift('');
+    setFormPin('');
     resetStaffLookup();
     setModalVisible(true);
   };
 
   const handleOpenEditModal = (staff: StaffMember) => {
-    if (cashierRestricted) {
-      showAlert('Permission Denied', 'Cashiers do not have permission to edit staff details.', 'warning');
+    if (cashierRestricted || !canManage) {
+      showAlert('Permission Denied', 'Only the restaurant Owner or Admin can edit staff details.', 'warning');
+      return;
+    }
+    if (staff.restaurantId && staff.restaurantId !== activeRestId) {
+      showAlert('Permission Denied', 'You can only edit staff belonging to your restaurant.', 'danger');
       return;
     }
     setIsEditing(true);
@@ -217,12 +234,13 @@ export const StaffRoleScreen: React.FC<StaffRoleScreenProps> = ({ onClose }) => 
     setFormRoleId(staff.roleId);
     setFormEmployeeCode(staff.employeeCode || '');
     setFormShift(staff.shift || '');
+    setFormPin('');
     setModalVisible(true);
   };
 
   const handleSaveStaff = async () => {
-    if (cashierRestricted) {
-      showAlert('Permission Denied', 'Cashiers cannot modify staff members or role permissions.', 'danger');
+    if (cashierRestricted || !canManage) {
+      showAlert('Permission Denied', 'Only the restaurant Owner or Admin can modify staff members or role assignments.', 'danger');
       return;
     }
     if (!formName.trim()) {
@@ -241,11 +259,19 @@ export const StaffRoleScreen: React.FC<StaffRoleScreenProps> = ({ onClose }) => 
       const cleanEmail = formEmail.trim() || undefined;
 
       if (isEditing && editingStaffId) {
+        const currentStaff = staffMembers.find((s) => s.id === editingStaffId || s.userId === editingStaffId);
+        if (currentStaff?.restaurantId && currentStaff.restaurantId !== activeRestId) {
+          showAlert('Permission Denied', 'You can only modify staff belonging to your restaurant.', 'danger');
+          return;
+        }
+
         await roleRepository.updateStaffMember(editingStaffId, {
           name: formName.trim(),
           mobile: formMobile.trim(),
           email: cleanEmail,
           roleId: formRoleId,
+          restaurantId: activeRestId,
+          userId: currentStaff?.userId,
           employeeCode: cleanEmployeeCode,
           shift: cleanShift,
         });
@@ -267,7 +293,21 @@ export const StaffRoleScreen: React.FC<StaffRoleScreenProps> = ({ onClose }) => 
               : s
           )
         );
+
+        if (formPin && /^\d{4}$/.test(formPin)) {
+          const targetUserId = currentStaff?.userId || currentStaff?.id || editingStaffId;
+          try {
+            await authRemoteDataSource.setStaffPin(targetUserId, formPin);
+          } catch (pinErr) {
+            console.warn('Could not sync staff PIN on edit:', pinErr);
+          }
+        }
+
         showAlert('Staff Updated', `Staff details for ${formName} updated successfully.`, 'success');
+        setModalVisible(false);
+        // Synchronize directory with backend database
+        await loadData();
+        return;
       } else {
         const selectedRoleObj = roles.find((r) => r.id === formRoleId);
         const newStaff = await roleRepository.registerStaffMember({
@@ -279,6 +319,16 @@ export const StaffRoleScreen: React.FC<StaffRoleScreenProps> = ({ onClose }) => 
           employeeCode: cleanEmployeeCode,
           shift: cleanShift,
         });
+
+        const targetUserId = newStaff?.userId || newStaff?.id;
+        if (targetUserId) {
+          const initialPin = formPin && /^\d{4}$/.test(formPin) ? formPin : '1234';
+          try {
+            await authRemoteDataSource.setStaffPin(targetUserId, initialPin);
+          } catch (pinErr) {
+            console.warn('Could not sync initial staff PIN:', pinErr);
+          }
+        }
 
         const createdRecord: StaffMember = {
           id: newStaff?.id || Date.now(),
@@ -305,6 +355,9 @@ export const StaffRoleScreen: React.FC<StaffRoleScreenProps> = ({ onClose }) => 
           return Array.from(map.values());
         });
         showAlert('Staff Registered', `New staff member ${formName} registered with PIN access.`, 'success');
+        setModalVisible(false);
+        await loadData();
+        return;
       }
 
       setModalVisible(false);
@@ -315,23 +368,75 @@ export const StaffRoleScreen: React.FC<StaffRoleScreenProps> = ({ onClose }) => 
     }
   };
 
-  const handleToggleStaffStatus = async (staff: StaffMember) => {
-    if (cashierRestricted) {
-      showAlert('Permission Denied', 'Cashiers cannot modify staff active status.', 'warning');
+  const handleOpenPinModal = (staff: StaffMember) => {
+    if (cashierRestricted || !canManage) {
+      showAlert('Permission Denied', 'Only the restaurant Owner or Admin can modify staff PIN.', 'warning');
       return;
     }
-    const newStatus = !staff.isActive;
+    if (staff.restaurantId && staff.restaurantId !== activeRestId) {
+      showAlert('Permission Denied', 'You can only modify staff belonging to your restaurant.', 'danger');
+      return;
+    }
+    setTargetStaffForPin(staff);
+    setStaffNewPin('');
+    setPinModalVisible(true);
+  };
+
+  const handleSaveStaffPin = async () => {
+    if (!/^\d{4}$/.test(staffNewPin)) {
+      showAlert('Invalid PIN', 'Staff PIN must be exactly 4 numeric digits (e.g. 1234).', 'warning');
+      return;
+    }
+    if (!targetStaffForPin) return;
+
+    try {
+      setSavingStaffPin(true);
+      const targetId = targetStaffForPin.userId || targetStaffForPin.id;
+      await authRemoteDataSource.setStaffPin(targetId, staffNewPin);
+      showAlert('PIN Updated', `4-digit PIN for ${targetStaffForPin.name} has been updated successfully.`, 'success');
+      setPinModalVisible(false);
+      setStaffNewPin('');
+      setTargetStaffForPin(null);
+    } catch (err: any) {
+      showAlert('Error', err?.message || 'Failed to update staff PIN.', 'danger');
+    } finally {
+      setSavingStaffPin(false);
+    }
+  };
+
+  const handleToggleStaffStatus = async (staff: StaffMember) => {
+    if (cashierRestricted || !canManage) {
+      showAlert('Permission Denied', 'Only the restaurant Owner or Admin can modify staff active status.', 'warning');
+      return;
+    }
+    if (staff.restaurantId && staff.restaurantId !== activeRestId) {
+      showAlert('Permission Denied', 'You can only modify staff belonging to your restaurant.', 'danger');
+      return;
+    }
+    const previousStatus = staff.isActive;
+    const newStatus = !previousStatus;
+    // Optimistic UI update
     setStaffMembers((prev) => prev.map((s) => (s.id === staff.id ? { ...s, isActive: newStatus } : s)));
     try {
-      await roleRepository.toggleRoleStatus(staff.id, newStatus);
-    } catch (err) {
-      console.warn('Could not sync status toggle with API');
+      const success = await roleRepository.toggleRoleStatus(staff.id, newStatus, activeRestId, staff.userId);
+      if (!success) {
+        throw new Error('Failed to update staff status on server.');
+      }
+      await loadData();
+    } catch (err: any) {
+      // Revert optimistic update on failure
+      setStaffMembers((prev) => prev.map((s) => (s.id === staff.id ? { ...s, isActive: previousStatus } : s)));
+      showAlert('Status Update Failed', err?.message || 'Could not update staff status on server.', 'danger');
     }
   };
 
   const handleDeleteStaff = (staff: StaffMember) => {
-    if (cashierRestricted) {
-      showAlert('Permission Denied', 'Cashiers cannot delete staff members.', 'danger');
+    if (cashierRestricted || !canManage) {
+      showAlert('Permission Denied', 'Only the restaurant Owner or Admin can delete staff members.', 'danger');
+      return;
+    }
+    if (staff.restaurantId && staff.restaurantId !== activeRestId) {
+      showAlert('Permission Denied', 'You can only remove staff belonging to your restaurant.', 'danger');
       return;
     }
     showAlert(
@@ -342,9 +447,11 @@ export const StaffRoleScreen: React.FC<StaffRoleScreenProps> = ({ onClose }) => 
       'Cancel',
       async () => {
         try {
-          await roleRepository.deleteStaffMember(staff.id);
-          setStaffMembers((prev) => prev.filter((s) => s.id !== staff.id));
+          await roleRepository.deleteStaffMember(staff.id, activeRestId, staff.userId);
+          setStaffMembers((prev) => prev.filter((s) => s.id !== staff.id && s.userId !== staff.id));
           showAlert('Staff Removed', `${staff.name} has been removed from this outlet.`, 'success');
+          // Re-sync directory from server
+          await loadData();
         } catch (err: any) {
           showAlert('Delete Failed', err?.message || 'Could not remove staff member.', 'danger');
         }
@@ -510,9 +617,9 @@ export const StaffRoleScreen: React.FC<StaffRoleScreenProps> = ({ onClose }) => 
                   <Lock size={15} color="#DE8626" />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.permissionBannerTitle}>Cashier Access (Read-Only Directory)</Text>
+                  <Text style={styles.permissionBannerTitle}>Owner & Admin Staff Directory</Text>
                   <Text style={styles.permissionBannerDesc}>
-                    You can view team members and assignments. Adding, editing, and deleting staff is restricted to Store Owners & Admins.
+                    You have view-only access. Registering, editing, and modifying staff is strictly restricted to the Restaurant Owner or Admin of this outlet.
                   </Text>
                 </View>
               </View>
@@ -653,6 +760,13 @@ export const StaffRoleScreen: React.FC<StaffRoleScreenProps> = ({ onClose }) => 
 
                         {!cashierRestricted && (
                           <View style={{ flexDirection: 'row', gap: 6, marginTop: 4 }}>
+                            <TouchableOpacity
+                              onPress={() => handleOpenPinModal(item)}
+                              style={styles.iconActionBtn}
+                              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                            >
+                              <KeyRound size={13} color="#D97706" />
+                            </TouchableOpacity>
                             <TouchableOpacity
                               onPress={() => handleOpenEditModal(item)}
                               style={styles.iconActionBtn}
@@ -875,6 +989,17 @@ export const StaffRoleScreen: React.FC<StaffRoleScreenProps> = ({ onClose }) => 
                   onChangeText={setFormShift}
                 />
 
+                <Text style={styles.inputLabel}>STAFF 4-DIGIT PIN (OPTIONAL)</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder="e.g. 1234 (Default is 1234)"
+                  placeholderTextColor="#9CA3AF"
+                  keyboardType="numeric"
+                  maxLength={4}
+                  value={formPin}
+                  onChangeText={(t) => setFormPin(t.replace(/[^0-9]/g, '').slice(0, 4))}
+                />
+
                 <TouchableOpacity
                   style={styles.saveStaffCta}
                   onPress={handleSaveStaff}
@@ -900,6 +1025,80 @@ export const StaffRoleScreen: React.FC<StaffRoleScreenProps> = ({ onClose }) => 
                   </LinearGradient>
                 </TouchableOpacity>
               </ScrollView>
+            </View>
+          </View>
+        </Modal>
+
+        {/* QUICK STAFF PIN MODAL */}
+        <Modal
+          visible={pinModalVisible}
+          animationType="fade"
+          transparent
+          onRequestClose={() => setPinModalVisible(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { maxWidth: 380 }]}>
+              <View style={styles.modalHeader}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <KeyRound size={20} color="#D97706" />
+                  <Text style={styles.modalTitle}>Set Staff PIN</Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => setPinModalVisible(false)}
+                  style={styles.modalCloseCircle}
+                  disabled={savingStaffPin}
+                >
+                  <X size={18} color="#7C6F62" />
+                </TouchableOpacity>
+              </View>
+
+              <Text style={{ fontSize: 13, color: '#667085', marginTop: 8, marginBottom: 16 }}>
+                Set a 4-digit unlock PIN for <Text style={{ fontWeight: '700', color: '#1E2930' }}>{targetStaffForPin?.name}</Text> ({targetStaffForPin?.roleName}).
+              </Text>
+
+              <Text style={styles.inputLabel}>NEW 4-DIGIT PIN</Text>
+              <TextInput
+                style={[
+                  styles.modalInput,
+                  {
+                    fontSize: 20,
+                    textAlign: 'center',
+                    letterSpacing: Platform.OS === 'ios' ? 6 : 2,
+                  },
+                ]}
+                placeholder="••••"
+                placeholderTextColor="#9CA3AF"
+                keyboardType="numeric"
+                maxLength={4}
+                value={staffNewPin}
+                onChangeText={(t) => setStaffNewPin(t.replace(/[^0-9]/g, '').slice(0, 4))}
+                cursorColor="#DE8626"
+                selectionColor="rgba(222, 134, 38, 0.25)"
+                autoFocus
+              />
+
+              <TouchableOpacity
+                style={[styles.saveStaffCta, (staffNewPin.length !== 4 || savingStaffPin) && { opacity: 0.5 }]}
+                onPress={handleSaveStaffPin}
+                disabled={staffNewPin.length !== 4 || savingStaffPin}
+                activeOpacity={0.88}
+              >
+                <LinearGradient
+                  colors={['#DE8626', '#EA580C']}
+                  style={styles.saveStaffCtaGradient}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                >
+                  {savingStaffPin ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <CheckCircle2 size={16} color="#FFFFFF" />
+                      <Text style={styles.saveStaffCtaText}>SAVE STAFF PIN</Text>
+                    </>
+                  )}
+                </LinearGradient>
+              </TouchableOpacity>
             </View>
           </View>
         </Modal>

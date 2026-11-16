@@ -365,6 +365,14 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
 
       const entitlements = subscription.entitlements || [];
       const k = configKey.toLowerCase();
+      if (k === 'isinventory' || k === 'isinventoryenabled' || k === 'inventory' || k === 'aiinventory' || k === 'stockmanagement') {
+        const match = entitlements.find((e: any) => {
+          const ek = (e.configKey || e.ConfigKey || '').toLowerCase();
+          return ek === 'isinventoryenabled' || ek === 'isinventory';
+        });
+        if (match) return Boolean(match.isAllowed ?? (match as any).IsAllowed);
+        return Boolean(subscription.isInventory || subscription.isInventoryEnabled);
+      }
       if (k === 'iskdsenabled' || k === 'iskdsappenabled' || k === 'iscaptainmenzaappenabled') {
         const match = entitlements.find((e: any) => {
           const ek = (e.configKey || e.ConfigKey || '').toLowerCase();

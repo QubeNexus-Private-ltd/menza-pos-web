@@ -329,14 +329,25 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
 
   hasEntitlement: (configKey: string): boolean => {
     const { subscription, lifecycleState, isExpired, isNoSubscription, hasLoaded } = get();
+    const k = configKey.toLowerCase();
     if (!hasLoaded) {
+      if (k === 'isinventory' || k === 'isinventoryenabled' || k === 'inventory' || k === 'aiinventory' || k === 'stockmanagement') {
+        return false;
+      }
       return true;
     }
     if (isNoSubscription || !subscription || lifecycleState === 'NONE' || lifecycleState === 'EXPIRED' || isExpired) {
       return false;
     }
     const entitlements = subscription.entitlements || [];
-    const k = configKey.toLowerCase();
+    if (k === 'isinventory' || k === 'isinventoryenabled' || k === 'inventory' || k === 'aiinventory' || k === 'stockmanagement') {
+      const match = entitlements.find((e: any) => {
+        const ek = (e.configKey || e.ConfigKey || '').toLowerCase();
+        return ek === 'isinventoryenabled' || ek === 'isinventory';
+      });
+      if (match) return Boolean(match.isAllowed ?? (match as any).IsAllowed);
+      return Boolean(subscription.isInventory || subscription.isInventoryEnabled);
+    }
     if (k === 'iskdsenabled' || k === 'iskdsappenabled' || k === 'iscaptainmenzaappenabled') {
       const match = entitlements.find((e: any) => {
         const ek = (e.configKey || e.ConfigKey || '').toLowerCase();
@@ -374,12 +385,17 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
 
   isFeatureAllowed: (featureKey: string): boolean => {
     const { subscription, lifecycleState, isExpired, isNoSubscription, hasLoaded } = get();
-    if (!hasLoaded) return true;
+    const k = featureKey.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!hasLoaded) {
+      if (k === 'inventory' || k === 'aiinventory' || k === 'stockmanagement' || k === 'isinventory' || k === 'isinventoryenabled') {
+        return false;
+      }
+      return true;
+    }
     if (isNoSubscription || !subscription || lifecycleState === 'NONE' || lifecycleState === 'EXPIRED' || isExpired) {
       return false;
     }
     const feats = subscription.features;
-    const k = featureKey.toLowerCase().replace(/[^a-z0-9]/g, '');
     if (feats && typeof feats === 'object') {
       for (const [key, val] of Object.entries(feats)) {
         if (key.toLowerCase().replace(/[^a-z0-9]/g, '') === k) {
@@ -406,6 +422,15 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
     }
     if (k === 'reports') {
       return subscription.isReportsEnabled ?? true;
+    }
+    if (k === 'inventory' || k === 'aiinventory' || k === 'stockmanagement' || k === 'isinventory' || k === 'isinventoryenabled') {
+      if (subscription.isInventory !== undefined && subscription.isInventory) return true;
+      if (subscription.isInventoryEnabled !== undefined && subscription.isInventoryEnabled) return true;
+      const ent = subscription.entitlements?.find((e: any) => {
+        const ek = (e.configKey || e.ConfigKey || '').toLowerCase();
+        return ek === 'isinventoryenabled' || ek === 'isinventory';
+      });
+      return ent ? Boolean(ent.isAllowed ?? (ent as any).IsAllowed) : false;
     }
     return get().hasEntitlement(featureKey);
   },

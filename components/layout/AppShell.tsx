@@ -104,6 +104,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
     daysRemaining,
     isInGracePeriod,
     openRenewalModal,
+    isFeatureAllowed,
   } = useSubscriptionStore();
   const {
     unreadCount,
@@ -422,11 +423,14 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
         { href: '/reservations', label: 'Reservations', icon: CalendarDays },
         { href: '/tables', label: 'Floor Tables', icon: Table },
         { href: '/menu', label: 'Menu Catalog', icon: UtensilsCrossed },
+        { href: '/inventory', label: 'AI Inventory', icon: Sparkles },
         { href: '/wallet', label: 'Prepaid Wallet', icon: Wallet },
         { href: '/reports', label: 'Analytics', icon: BarChart3 },
         { href: '/staff', label: 'Staff & Roles', icon: Users },
         { href: '/settings', label: 'Settings', icon: Settings },
       ];
+
+  const isInventoryAllowed = isFeatureAllowed('inventory');
 
   const mobileNavItems = isSuperAdmin
     ? navItems
@@ -530,6 +534,12 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
                   }`}
                 />
                 <span>{item.label}</span>
+                {item.href === '/inventory' && !isInventoryAllowed && (
+                  <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.5 text-[9px] font-bold text-amber-600 dark:text-amber-400">
+                    <Lock className="w-2.5 h-2.5" />
+                    PRO
+                  </span>
+                )}
                 {item.highlight && !isActive && (
                   <span className="ml-auto rounded-full bg-[#DE8626] px-2 py-0.5 text-[10px] font-bold text-white uppercase">
                     Sale

@@ -16,7 +16,7 @@ import {
 } from 'react-native';
 import {
   X,
-  Receipt,
+  ReceiptIndianRupee as Receipt,
   Check,
   CreditCard,
   IndianRupee,

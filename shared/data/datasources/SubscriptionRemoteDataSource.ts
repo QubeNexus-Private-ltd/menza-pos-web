@@ -50,6 +50,8 @@ export class SubscriptionRemoteDataSource {
           allowDelivery: checkEntitlement('IsDeliveryEnabled', false),
           allowKds: checkEntitlement('IsKdsEnabled', false),
           allowOnlinePayment: checkEntitlement('AllowOnlinePayment', true),
+          isInventory: Boolean(item.isInventory ?? item.IsInventory ?? checkEntitlement('IsInventoryEnabled', false)),
+          isInventoryEnabled: Boolean(item.isInventoryEnabled ?? item.IsInventoryEnabled ?? item.isInventory ?? item.IsInventory ?? checkEntitlement('IsInventoryEnabled', false)),
           isActive: Boolean(item.isActive ?? item.IsActive ?? true),
           entitlements: entitlements.map((e: any) => ({
             id: e.id || e.Id,
@@ -111,6 +113,10 @@ export class SubscriptionRemoteDataSource {
         MaxCommissionCapPerOrder: plan.maxCommissionCapPerOrder || 0,
         includedWalletCredit: plan.includedWalletCredit || 0,
         IncludedWalletCredit: plan.includedWalletCredit || 0,
+        isInventory: Boolean(plan.isInventory ?? false),
+        IsInventory: Boolean(plan.isInventory ?? false),
+        isInventoryEnabled: Boolean(plan.isInventoryEnabled ?? plan.isInventory ?? false),
+        IsInventoryEnabled: Boolean(plan.isInventoryEnabled ?? plan.isInventory ?? false),
         isActive: plan.isActive ?? true,
         IsActive: plan.isActive ?? true,
         entitlements: mappedEntitlements,
@@ -606,6 +612,47 @@ export class SubscriptionRemoteDataSource {
           queuedRenewalDays,
           isTableOrder: tableOrderFlag,
           allowTableOrdering: tableOrderFlag,
+          isInventory: Boolean(
+            activeItem.isInventory ??
+            activeItem.IsInventory ??
+            activeItem.isInventoryEnabled ??
+            activeItem.IsInventoryEnabled ??
+            matchedPlan?.isInventory ??
+            matchedPlan?.isInventoryEnabled ??
+            false
+          ),
+          isInventoryEnabled: Boolean(
+            activeItem.isInventoryEnabled ??
+            activeItem.IsInventoryEnabled ??
+            activeItem.isInventory ??
+            activeItem.IsInventory ??
+            matchedPlan?.isInventoryEnabled ??
+            matchedPlan?.isInventory ??
+            false
+          ),
+          features: {
+            ...(matchedPlan?.features || {}),
+            ...(activeItem.features || activeItem.Features || {}),
+            inventory: Boolean(
+              activeItem.isInventory ??
+              activeItem.IsInventory ??
+              activeItem.isInventoryEnabled ??
+              activeItem.IsInventoryEnabled ??
+              matchedPlan?.isInventory ??
+              matchedPlan?.isInventoryEnabled ??
+              false
+            ),
+            isInventoryEnabled: Boolean(
+              activeItem.isInventoryEnabled ??
+              activeItem.IsInventoryEnabled ??
+              activeItem.isInventory ??
+              activeItem.IsInventory ??
+              matchedPlan?.isInventoryEnabled ??
+              matchedPlan?.isInventory ??
+              false
+            ),
+          },
+          applications: activeItem.applications || activeItem.Applications || matchedPlan?.applications || {},
         };
       }
 

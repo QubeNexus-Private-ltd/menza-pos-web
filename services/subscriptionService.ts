@@ -9,11 +9,11 @@ export class SubscriptionService {
       const list = Array.isArray(data) ? data : (data?.items || data?.data || []);
       return list.map((item: any) => {
         const entitlements = item.entitlements || item.Entitlements || [];
-        const checkEntitlement = (key: string) => {
+        const checkEntitlement = (key: string, defaultVal: boolean = true) => {
           const e = entitlements.find(
             (x: any) => (x.configKey || x.ConfigKey || '').toLowerCase() === key.toLowerCase()
           );
-          return e ? Boolean(e.isAllowed ?? e.IsAllowed) : true;
+          return e ? Boolean(e.isAllowed ?? e.IsAllowed) : defaultVal;
         };
         const price = Number(item.price ?? item.Price ?? 0);
         const discountAmount = Number(item.discountAmount ?? item.DiscountAmount ?? 0);
@@ -52,6 +52,8 @@ export class SubscriptionService {
           allowKds: checkEntitlement('IsKdsEnabled'),
           allowOnlinePayment: checkEntitlement('AllowOnlinePayment'),
           allowSmsNotifications: checkEntitlement('IsSmsNotificationsEnabled'),
+          isInventory: Boolean(item.isInventory ?? item.IsInventory ?? checkEntitlement('IsInventoryEnabled', false)),
+          isInventoryEnabled: Boolean(item.isInventoryEnabled ?? item.IsInventoryEnabled ?? item.isInventory ?? item.IsInventory ?? checkEntitlement('IsInventoryEnabled', false)),
           isActive: Boolean(item.isActive ?? item.IsActive ?? true),
           entitlements: entitlements.map((e: any) => ({
             id: e.id || e.Id,
@@ -237,6 +239,27 @@ export class SubscriptionService {
           restaurantName: activeItem.restaurantName || activeItem.RestaurantName || undefined,
           restaurantGstNumber: activeItem.restaurantGstNumber || activeItem.RestaurantGstNumber || undefined,
           platformGst: activeItem.platformGst || activeItem.PlatformGst || undefined,
+          isInventory: Boolean(activeItem.isInventory ?? activeItem.IsInventory ?? false),
+          isInventoryEnabled: Boolean(activeItem.isInventoryEnabled ?? activeItem.IsInventoryEnabled ?? activeItem.isInventory ?? activeItem.IsInventory ?? false),
+          features: activeItem.features || activeItem.Features || {},
+          applications: activeItem.applications || activeItem.Applications || {},
+          isMobilePosEnabled: Boolean(activeItem.isMobilePosEnabled ?? activeItem.IsMobilePosEnabled ?? true),
+          isPosWebEnabled: Boolean(activeItem.isPosWebEnabled ?? activeItem.IsPosWebEnabled ?? true),
+          isWaiterAppEnabled: Boolean(activeItem.isWaiterAppEnabled ?? activeItem.IsWaiterAppEnabled ?? false),
+          isKdsAppEnabled: Boolean(activeItem.isKdsAppEnabled ?? activeItem.IsKdsAppEnabled ?? false),
+          isPosOrderWebEnabled: Boolean(activeItem.isPosOrderWebEnabled ?? activeItem.IsPosOrderWebEnabled ?? false),
+          isPosTerminalEnabled: Boolean(activeItem.isPosTerminalEnabled ?? activeItem.IsPosTerminalEnabled ?? true),
+          isTableConfigurationEnabled: Boolean(activeItem.isTableConfigurationEnabled ?? activeItem.IsTableConfigurationEnabled ?? true),
+          isReservationEnabled: Boolean(activeItem.isReservationEnabled ?? activeItem.IsReservationEnabled ?? false),
+          isMenuOrderingEnabled: Boolean(activeItem.isMenuOrderingEnabled ?? activeItem.IsMenuOrderingEnabled ?? true),
+          isStaffPinLockEnabled: Boolean(activeItem.isStaffPinLockEnabled ?? activeItem.IsStaffPinLockEnabled ?? true),
+          isReportsEnabled: Boolean(activeItem.isReportsEnabled ?? activeItem.IsReportsEnabled ?? true),
+          allowTableOrdering: Boolean(activeItem.allowTableOrdering ?? activeItem.AllowTableOrdering ?? activeItem.isTableOrderingEnabled ?? activeItem.IsTableOrderingEnabled ?? true),
+          allowCounterOrdering: Boolean(activeItem.allowCounterOrdering ?? activeItem.AllowCounterOrdering ?? activeItem.isCounterOrderingEnabled ?? activeItem.IsCounterOrderingEnabled ?? true),
+          allowSelfPickup: Boolean(activeItem.allowSelfPickup ?? activeItem.AllowSelfPickup ?? activeItem.isSelfPickupEnabled ?? activeItem.IsSelfPickupEnabled ?? true),
+          allowDelivery: Boolean(activeItem.allowDelivery ?? activeItem.AllowDelivery ?? activeItem.isDeliveryEnabled ?? activeItem.IsDeliveryEnabled ?? false),
+          allowKds: Boolean(activeItem.allowKds ?? activeItem.AllowKds ?? activeItem.isKdsEnabled ?? activeItem.IsKdsEnabled ?? false),
+          isKdsEnabled: Boolean(activeItem.isKdsEnabled ?? activeItem.IsKdsEnabled ?? false),
         };
       }
 

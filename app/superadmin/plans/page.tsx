@@ -259,6 +259,16 @@ const DEFAULT_ENTITLEMENTS: DynamicEntitlementState[] = [
     featureFlatFeePerOrder: '0',
   },
   {
+    orderConfigId: 14,
+    configKey: 'IsInventoryEnabled',
+    configName: 'AI Inventory & Stock Management',
+    category: 'Operations',
+    description: 'Multimodal AI invoice digitizer, recipe BOM costing, and live stock depletion',
+    isAllowed: false,
+    featureCommissionPercentage: '0',
+    featureFlatFeePerOrder: '0',
+  },
+  {
     orderConfigId: 13,
     configKey: 'IsSmsNotificationsEnabled',
     configName: 'SMS & WhatsApp Notifications',
@@ -833,6 +843,7 @@ export default function SuperAdminPlansPage() {
         allowKds: !!selectedApps.app_captain_menza,
         allowOnlinePayment: dynamicEntitlements.find((d) => d.configKey.includes('Payment'))?.isAllowed ?? true,
         allowSmsNotifications: dynamicEntitlements.find((d) => d.configKey.toLowerCase().includes('sms'))?.isAllowed ?? true,
+        isInventory: dynamicEntitlements.find((d) => d.configKey.toLowerCase().includes('inventory'))?.isAllowed ?? false,
         isActive: true,
         entitlements: [
           ...dynamicEntitlements.map((item) => ({

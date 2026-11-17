@@ -14,7 +14,7 @@ import {
   Table as TableIcon,
   CheckCircle2,
   Banknote,
-  Receipt,
+  ReceiptIndianRupee as Receipt,
 } from 'lucide-react-native';
 import { useNotificationStore } from '../state/useNotificationStore';
 import { usePrinterStore } from '../state/usePrinterStore';

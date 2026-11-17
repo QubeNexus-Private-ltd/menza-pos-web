@@ -314,6 +314,17 @@ apiClient.interceptors.request.use(
     // Identify caller application as Menza POS client
     config.headers['X-Menza-Client'] = 'Menza-POS-App';
 
+    // When config.data is FormData, remove Content-Type so React Native's XHR/fetch can automatically set multipart boundary
+    if (config.data && typeof config.data === 'object' && typeof (config.data as any).append === 'function') {
+      delete config.headers['Content-Type'];
+      delete config.headers['content-type'];
+    }
+
+    // AI Vision OCR scans require a longer processing window (up to 90s)
+    if (config.url && config.url.includes('/Inventory/invoices/scan')) {
+      config.timeout = 90000;
+    }
+
     // Attach request metadata for logging & correlation
     const requestId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const startTime = Date.now();

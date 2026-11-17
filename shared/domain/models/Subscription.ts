@@ -272,11 +272,16 @@ export const extractFeatureFlag = (obj: any, featureKey: string): boolean => {
   }
 
   // 2. Direct property name checks
+  const capitalizedKey = featureKey.charAt(0).toUpperCase() + featureKey.slice(1);
   const candidates: any[] = [
     obj[featureKey],
-    obj[featureKey.charAt(0).toUpperCase() + featureKey.slice(1)],
-    obj[`is${featureKey.charAt(0).toUpperCase() + featureKey.slice(1)}Enabled`],
-    obj[`Is${featureKey.charAt(0).toUpperCase() + featureKey.slice(1)}Enabled`]
+    obj[capitalizedKey],
+    obj[`is${capitalizedKey}`],
+    obj[`Is${capitalizedKey}`],
+    obj[`is${capitalizedKey}Enabled`],
+    obj[`Is${capitalizedKey}Enabled`],
+    obj[featureKey.toLowerCase()],
+    obj[`is${featureKey.toLowerCase()}enabled`],
   ];
 
   for (const c of candidates) {

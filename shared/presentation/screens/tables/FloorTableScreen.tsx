@@ -48,7 +48,7 @@ import {
   RefreshCw,
   ShoppingBag,
   ExternalLink,
-  Receipt,
+  ReceiptIndianRupee as Receipt,
   Printer,
   CreditCard,
   History,

@@ -118,6 +118,24 @@ const SAMPLE_INVOICES: SampleInvoicePreset[] = [
   },
 ];
 
+const RECIPE_BOM_UNITS = ['Kg', 'g', 'L', 'ml', 'Pcs', 'Box'];
+
+const normalizeUnitName = (u?: string): string => {
+  if (!u) return 'Kg';
+  const clean = u.trim();
+  const lower = clean.toLowerCase();
+  if (lower === 'kg' || lower === 'kgs' || lower === 'kilogram' || lower === 'kilograms') return 'Kg';
+  if (lower === 'g' || lower === 'gm' || lower === 'gms' || lower === 'gram' || lower === 'grams') return 'g';
+  if (lower === 'l' || lower === 'ltr' || lower === 'ltrs' || lower === 'liter' || lower === 'litre' || lower === 'liters' || lower === 'litres') return 'L';
+  if (lower === 'ml' || lower === 'milliliter' || lower === 'millilitre') return 'ml';
+  if (lower === 'pcs' || lower === 'pc' || lower === 'piece' || lower === 'pieces') return 'Pcs';
+  if (lower === 'box' || lower === 'boxes' || lower === 'crate') return 'Box';
+  if (lower === 'bag' || lower === 'bags') return 'Bag';
+  if (lower === 'can' || lower === 'cans') return 'Can';
+  if (lower === 'tin' || lower === 'tins') return 'Tin';
+  return clean;
+};
+
 export default function InventoryPage() {
   const { user, activeRestaurant, restaurants } = useAuthStore();
   const restId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
@@ -410,8 +428,31 @@ export default function InventoryPage() {
     setEditableItems(updated);
   };
 
+  const handleAddNewItemRow = () => {
+    setEditableItems((prev) => [
+      ...prev,
+      {
+        rawScannedText: 'New Ingredient',
+        matchedIngredientName: 'New Ingredient',
+        quantity: 1,
+        unitName: 'Kg',
+        ratePerUnit: 0,
+        lineTotal: 0,
+        isNewIngredient: true,
+      },
+    ]);
+  };
+
+  const handleRemoveItemRow = (index: number) => {
+    setEditableItems((prev) => prev.filter((_, i) => i !== index));
+  };
+
   const handleConfirmInvoice = async () => {
     if (!scannedBill || restId <= 0) return;
+    if (editableItems.length === 0) {
+      alert('Please add at least one line item to approve into inventory.');
+      return;
+    }
 
     setLoading(true);
     try {
@@ -498,20 +539,28 @@ export default function InventoryPage() {
   // Recipe Modal Handlers
   const openRecipeConfig = (dish: MenuItemRecipe) => {
     setSelectedRecipeDish(dish);
-    setRecipeDraftIngredients(dish.ingredients ? [...dish.ingredients] : []);
+    setRecipeDraftIngredients(
+      dish.ingredients
+        ? dish.ingredients.map((i) => ({
+            ...i,
+            unitName: normalizeUnitName(i.unitName),
+          }))
+        : []
+    );
     setRecipeActionFeedback(null);
     setShowRecipeModal(true);
   };
 
   const handleAddIngredientRow = () => {
     const firstIng = ingredients.length > 0 ? ingredients[0] : null;
+    const initUnit = normalizeUnitName(firstIng?.unitName || 'Kg');
     setRecipeDraftIngredients([
       ...recipeDraftIngredients,
       {
         ingredientId: firstIng ? firstIng.id : 0,
         ingredientName: firstIng ? firstIng.ingredientName : '',
         quantityRequired: 0.1,
-        unitName: firstIng ? firstIng.unitName : 'Kg',
+        unitName: initUnit,
         costPerUnit: firstIng ? firstIng.lastPurchaseCostPerUnit : 0,
         lineCost: 0,
         wastageBufferPercent: 0,
@@ -528,9 +577,11 @@ export default function InventoryPage() {
         ...updated[index],
         ingredientId: ingId,
         ingredientName: ing ? ing.ingredientName : '',
-        unitName: ing ? ing.unitName : 'Kg',
+        unitName: normalizeUnitName(ing ? ing.unitName : 'Kg'),
         costPerUnit: ing ? ing.lastPurchaseCostPerUnit : 0,
       };
+    } else if (field === 'unitName') {
+      updated[index] = { ...updated[index], unitName: normalizeUnitName(value) };
     } else {
       updated[index] = { ...updated[index], [field]: value };
     }
@@ -860,6 +911,9 @@ export default function InventoryPage() {
                   <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                     <CheckCircle2 className="w-3.5 h-3.5" />
                     Auto-Depletion Active on KOT Orders
+                  </span>
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-neutral-900/10 dark:bg-neutral-100/10 text-neutral-800 dark:text-neutral-200 border border-neutral-300 dark:border-neutral-700">
+                    Outlet: {activeRestaurant?.restaurantName || (restaurants.length > 0 ? restaurants[0].restaurantName : 'Active Restaurant')} (#{restId})
                   </span>
                 </div>
                 <h1 className="text-3xl font-extrabold tracking-tight text-neutral-900 dark:text-white">
@@ -1245,6 +1299,14 @@ export default function InventoryPage() {
 
                       <div className="flex items-center gap-2">
                         <button
+                          type="button"
+                          onClick={handleAddNewItemRow}
+                          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold border border-amber-500/30 text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 hover:bg-amber-100 dark:hover:bg-amber-900/40 transition-colors"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          Add Missing Item
+                        </button>
+                        <button
                           onClick={() => setScannedBill(null)}
                           className="px-4 py-2 rounded-xl text-xs font-semibold border border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100"
                         >
@@ -1252,7 +1314,7 @@ export default function InventoryPage() {
                         </button>
                         <button
                           onClick={handleConfirmInvoice}
-                          disabled={loading}
+                          disabled={loading || editableItems.length === 0}
                           className="flex items-center gap-1.5 px-5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs shadow-sm transition-all disabled:opacity-50"
                         >
                           {loading ? (
@@ -1275,19 +1337,32 @@ export default function InventoryPage() {
                       <table className="w-full text-left text-xs">
                         <thead className="bg-neutral-50 dark:bg-neutral-900/50 uppercase tracking-wider text-neutral-500 font-bold border-b border-neutral-200 dark:border-neutral-700">
                           <tr>
-                            <th className="p-3">Scanned Text</th>
+                            <th className="p-3">Scanned Text / Item</th>
                             <th className="p-3">Matched Ingredient</th>
-                            <th className="p-3">Quantity</th>
+                            <th className="p-3">Quantity & Unit</th>
                             <th className="p-3">Rate (₹)</th>
                             <th className="p-3">Line Total (₹)</th>
                             <th className="p-3">Rate Variance</th>
+                            <th className="p-3 text-center w-14">Action</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-neutral-200 dark:divide-neutral-700">
                           {editableItems.map((item, idx) => (
                             <tr key={idx} className="hover:bg-neutral-50/50 dark:hover:bg-neutral-700/30">
-                              <td className="p-3 font-bold text-neutral-900 dark:text-white">
-                                {item.rawScannedText}
+                              <td className="p-3">
+                                {item.isNewIngredient || !item.matchedIngredientId ? (
+                                  <input
+                                    type="text"
+                                    value={item.rawScannedText}
+                                    onChange={(e) => handleItemChange(idx, 'rawScannedText', e.target.value)}
+                                    placeholder="Ingredient name"
+                                    className="w-full min-w-[130px] px-2.5 py-1.5 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50/40 dark:bg-amber-950/20 text-neutral-900 dark:text-white font-bold text-xs focus:ring-1 focus:ring-amber-500"
+                                  />
+                                ) : (
+                                  <span className="font-bold text-neutral-900 dark:text-white">
+                                    {item.rawScannedText}
+                                  </span>
+                                )}
                               </td>
                               <td className="p-3">
                                 <select
@@ -1312,15 +1387,28 @@ export default function InventoryPage() {
                                 </select>
                               </td>
                               <td className="p-3">
-                                <div className="flex items-center gap-1">
+                                <div className="flex items-center gap-1.5">
                                   <input
                                     type="number"
                                     step="0.01"
+                                    min="0"
                                     value={item.quantity}
                                     onChange={(e) => handleItemChange(idx, 'quantity', parseFloat(e.target.value) || 0)}
                                     className="w-16 px-2 py-1 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 font-bold"
                                   />
-                                  <span className="text-neutral-500 font-semibold">{item.unitName}</span>
+                                  {item.isNewIngredient && !item.matchedIngredientId ? (
+                                    <select
+                                      value={item.unitName || 'Kg'}
+                                      onChange={(e) => handleItemChange(idx, 'unitName', e.target.value)}
+                                      className="px-1.5 py-1 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-xs font-semibold"
+                                    >
+                                      {['Kg', 'Gm', 'Ltr', 'Ml', 'Pcs', 'Box', 'Bag', 'Can', 'Tin'].map((u) => (
+                                        <option key={u} value={u}>{u}</option>
+                                      ))}
+                                    </select>
+                                  ) : (
+                                    <span className="text-neutral-500 font-semibold">{item.unitName}</span>
+                                  )}
                                 </div>
                               </td>
                               <td className="p-3">
@@ -1355,6 +1443,16 @@ export default function InventoryPage() {
                                   <span className="text-neutral-400">Baseline</span>
                                 )}
                               </td>
+                              <td className="p-3 text-center">
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveItemRow(idx)}
+                                  className="p-1.5 text-neutral-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-lg transition-colors"
+                                  title="Remove line item"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -1363,13 +1461,23 @@ export default function InventoryPage() {
                             <td colSpan={4} className="p-3 text-right">
                               Total Calculated Amount:
                             </td>
-                            <td colSpan={2} className="p-3 text-sm text-amber-600 dark:text-amber-400 font-black">
+                            <td colSpan={3} className="p-3 text-sm text-amber-600 dark:text-amber-400 font-black">
                               ₹{totalCalculatedBill.toFixed(2)}
                             </td>
                           </tr>
                         </tfoot>
                       </table>
                     </div>
+
+                    {/* Add Missing Line Item Button */}
+                    <button
+                      type="button"
+                      onClick={handleAddNewItemRow}
+                      className="w-full flex items-center justify-center gap-2 py-2.5 rounded-2xl border-2 border-dashed border-amber-300 dark:border-amber-700/60 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/20 font-bold text-xs transition-colors"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Add Missing Line Item (Manual Entry)
+                    </button>
                   </div>
                 </div>
               )}
@@ -1614,7 +1722,7 @@ export default function InventoryPage() {
                                   key={i}
                                   className="px-2 py-0.5 rounded-md bg-neutral-100 dark:bg-neutral-700/60 text-neutral-700 dark:text-neutral-300 text-[11px] font-medium"
                                 >
-                                  {ing.ingredientName}: {ing.quantityRequired} {ing.unitName}
+                                  {ing.ingredientName}: {ing.quantityRequired} {normalizeUnitName(ing.unitName)}
                                 </span>
                               ))}
                               {dish.ingredients.length > 3 && (
@@ -2946,15 +3054,24 @@ export default function InventoryPage() {
               <div className="bg-white dark:bg-neutral-800 rounded-3xl p-6 max-w-2xl w-full shadow-2xl border border-neutral-200 dark:border-neutral-700 space-y-4 max-h-[90vh] flex flex-col">
                 <div className="flex items-start justify-between pb-3 border-b border-neutral-200 dark:border-neutral-700">
                   <div>
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-amber-500">
-                      Recipe & Bill of Materials (BOM)
-                    </span>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-amber-500">
+                        Recipe & Bill of Materials (BOM)
+                      </span>
+                      {selectedRecipeDish.categoryName && (
+                        <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-neutral-100 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-300">
+                          {selectedRecipeDish.categoryName}
+                        </span>
+                      )}
+                    </div>
                     <h2 className="text-xl font-extrabold text-neutral-900 dark:text-white">
                       {selectedRecipeDish.menuItemName}
                     </h2>
-                    <span className="text-xs text-neutral-500 font-medium">
-                      Selling Price: ₹{selectedRecipeDish.price}
-                    </span>
+                    <div className="flex items-center gap-3 text-xs text-neutral-500 font-medium mt-0.5">
+                      <span>Selling Price: ₹{selectedRecipeDish.price}</span>
+                      <span>•</span>
+                      <span>Target Cost: ₹{selectedRecipeDish.totalRecipeCost ? selectedRecipeDish.totalRecipeCost.toFixed(2) : '0.00'}</span>
+                    </div>
                   </div>
 
                   <button
@@ -2992,94 +3109,124 @@ export default function InventoryPage() {
                       </button>
                     </div>
                   ) : (
-                    recipeDraftIngredients.map((row, idx) => (
-                      <div
-                        key={idx}
-                        className="p-3 rounded-2xl bg-neutral-50 dark:bg-neutral-900/60 border border-neutral-200 dark:border-neutral-700 grid grid-cols-12 gap-2 items-center text-xs"
-                      >
-                        {/* Ingredient Select */}
-                        <div className="col-span-4">
-                          <label className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider block mb-0.5">
-                            Raw Material
-                          </label>
-                          <select
-                            value={row.ingredientId}
-                            onChange={(e) => handleDraftIngredientChange(idx, 'ingredientId', e.target.value)}
-                            className="w-full px-2 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 font-bold"
-                          >
-                            {ingredients.map((ing) => (
-                              <option key={ing.id} value={ing.id}>
-                                {ing.ingredientName} (₹{ing.lastPurchaseCostPerUnit}/{ing.unitName})
-                              </option>
-                            ))}
-                          </select>
-                        </div>
+                    recipeDraftIngredients.map((row, idx) => {
+                      const matchedIng = ingredients.find((i) => i.id === row.ingredientId);
+                      const unitRate = row.costPerUnit || matchedIng?.lastPurchaseCostPerUnit || 0;
+                      const unitName = normalizeUnitName(row.unitName || matchedIng?.unitName || 'Kg');
 
-                        {/* Quantity */}
-                        <div className="col-span-2">
-                          <label className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider block mb-0.5">
-                            Portion Qty
-                          </label>
-                          <input
-                            type="number"
-                            step="0.01"
-                            value={row.quantityRequired}
-                            onChange={(e) => handleDraftIngredientChange(idx, 'quantityRequired', e.target.value)}
-                            className="w-full px-2 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 font-black"
-                          />
-                        </div>
+                      return (
+                        <div
+                          key={idx}
+                          className="p-3.5 rounded-2xl bg-neutral-50 dark:bg-neutral-900/60 border border-neutral-200 dark:border-neutral-700 space-y-2 text-xs"
+                        >
+                          <div className="grid grid-cols-12 gap-2 items-center">
+                            {/* Ingredient Select */}
+                            <div className="col-span-4">
+                              <label className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider block mb-0.5">
+                                Raw Material
+                              </label>
+                              <select
+                                value={row.ingredientId}
+                                onChange={(e) => handleDraftIngredientChange(idx, 'ingredientId', e.target.value)}
+                                className="w-full px-2 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 font-bold"
+                              >
+                                {ingredients.map((ing) => (
+                                  <option key={ing.id} value={ing.id}>
+                                    {ing.ingredientName} (₹{ing.lastPurchaseCostPerUnit}/{normalizeUnitName(ing.unitName)})
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
 
-                        {/* Unit */}
-                        <div className="col-span-2">
-                          <label className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider block mb-0.5">
-                            Unit
-                          </label>
-                          <select
-                            value={row.unitName}
-                            onChange={(e) => handleDraftIngredientChange(idx, 'unitName', e.target.value)}
-                            className="w-full px-1.5 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 font-bold"
-                          >
-                            <option value="Kg">Kg</option>
-                            <option value="g">g</option>
-                            <option value="L">L</option>
-                            <option value="ml">ml</option>
-                            <option value="Pcs">Pcs</option>
-                          </select>
-                        </div>
+                            {/* Quantity */}
+                            <div className="col-span-2">
+                              <label className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider block mb-0.5">
+                                Portion Qty
+                              </label>
+                              <input
+                                type="number"
+                                step="0.01"
+                                value={row.quantityRequired}
+                                onChange={(e) => handleDraftIngredientChange(idx, 'quantityRequired', e.target.value)}
+                                className="w-full px-2 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 font-black"
+                              />
+                            </div>
 
-                        {/* Yield / Trim Buffer % */}
-                        <div className="col-span-2">
-                          <label className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider block mb-0.5">
-                            Prep Buffer %
-                          </label>
-                          <input
-                            type="number"
-                            step="1"
-                            value={row.wastageBufferPercent || 0}
-                            onChange={(e) => handleDraftIngredientChange(idx, 'wastageBufferPercent', e.target.value)}
-                            placeholder="0%"
-                            className="w-full px-2 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 font-semibold"
-                          />
-                        </div>
+                            {/* Unit */}
+                            <div className="col-span-2">
+                              <label className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider block mb-0.5">
+                                Unit
+                              </label>
+                              <select
+                                value={normalizeUnitName(row.unitName)}
+                                onChange={(e) => handleDraftIngredientChange(idx, 'unitName', e.target.value)}
+                                className="w-full px-1.5 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 font-bold"
+                              >
+                                {RECIPE_BOM_UNITS.map((u) => (
+                                  <option key={u} value={u}>{u}</option>
+                                ))}
+                              </select>
+                            </div>
 
-                        {/* Cost & Delete */}
-                        <div className="col-span-2 flex items-center justify-between pl-1">
-                          <div>
-                            <span className="text-[10px] text-neutral-400 block font-bold">Line ₹</span>
-                            <span className="font-black text-neutral-900 dark:text-white">
-                              ₹{row.lineCost?.toFixed(2) || '0.00'}
-                            </span>
+                            {/* Rate / Cost per Unit */}
+                            <div className="col-span-2">
+                              <label className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider block mb-0.5">
+                                Cost / Unit (₹)
+                              </label>
+                              <div className="px-2 py-1.5 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 font-bold text-xs truncate">
+                                ₹{unitRate.toFixed(2)}/{unitName}
+                              </div>
+                            </div>
+
+                            {/* Yield / Trim Buffer % */}
+                            <div className="col-span-1">
+                              <label className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider block mb-0.5" title="Prep / Trimming Waste Buffer %">
+                                Buffer %
+                              </label>
+                              <input
+                                type="number"
+                                step="1"
+                                value={row.wastageBufferPercent || 0}
+                                onChange={(e) => handleDraftIngredientChange(idx, 'wastageBufferPercent', e.target.value)}
+                                placeholder="0%"
+                                className="w-full px-1.5 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 font-semibold"
+                              />
+                            </div>
+
+                            {/* Cost & Delete */}
+                            <div className="col-span-1 flex items-center justify-between">
+                              <div>
+                                <span className="text-[9px] text-neutral-400 block font-bold">Line ₹</span>
+                                <span className="font-black text-neutral-900 dark:text-white text-xs">
+                                  ₹{row.lineCost?.toFixed(2) || '0.00'}
+                                </span>
+                              </div>
+                              <button
+                                onClick={() => handleRemoveDraftIngredient(idx)}
+                                className="p-1 rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20"
+                                title="Remove ingredient"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
                           </div>
-                          <button
-                            onClick={() => handleRemoveDraftIngredient(idx)}
-                            className="p-1 rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20"
-                            title="Remove ingredient"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+
+                          {/* Cooking & Prep Notes */}
+                          <div className="flex items-center gap-2 pt-1 border-t border-neutral-200/60 dark:border-neutral-700/60">
+                            <label className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider shrink-0">
+                              Prep Notes:
+                            </label>
+                            <input
+                              type="text"
+                              value={row.notes || ''}
+                              onChange={(e) => handleDraftIngredientChange(idx, 'notes', e.target.value)}
+                              placeholder="e.g. Finely chopped, Blanch 2 mins, Marinate with garlic paste..."
+                              className="flex-1 px-2.5 py-1 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-[11px] placeholder-neutral-400"
+                            />
+                          </div>
                         </div>
-                      </div>
-                    ))
+                      );
+                    })
                   )}
 
                   {recipeDraftIngredients.length > 0 && (

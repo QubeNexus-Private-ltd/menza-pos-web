@@ -1,4 +1,11 @@
 import { apiClient } from '@shared/core/network/apiClient';
+import { useAuthStore } from '@shared/presentation/state/useAuthStore';
+
+function resolveRestId(restaurantId: number): number {
+  if (restaurantId > 0) return restaurantId;
+  const store = useAuthStore.getState();
+  return store.activeRestaurant?.restaurantId || (store.restaurants?.[0]?.restaurantId || 0);
+}
 
 export interface ScannedInvoiceItem {
   id?: number;
@@ -156,13 +163,15 @@ export interface WasteLogItem {
 
 export class WebInventoryService {
   static async scanInvoice(restaurantId: number, file: File): Promise<ScannedInvoiceResult> {
+    const rid = resolveRestId(restaurantId);
     const formData = new FormData();
     formData.append('file', file, file.name);
 
     const response = await apiClient.post<ScannedInvoiceResult>(
-      `/Inventory/invoices/scan?restaurantId=${restaurantId}`,
+      `/Inventory/invoices/scan?restaurantId=${rid}`,
       formData,
       {
+        timeout: 90000,
         headers: {
           'Content-Type': 'multipart/form-data',
         },
@@ -173,75 +182,85 @@ export class WebInventoryService {
   }
 
   static async confirmInvoice(restaurantId: number, payload: ConfirmInvoicePayload): Promise<{ success: boolean; message: string }> {
+    const rid = resolveRestId(restaurantId);
     const response = await apiClient.post<{ success: boolean; message: string }>(
-      `/Inventory/invoices/confirm?restaurantId=${restaurantId}`,
+      `/Inventory/invoices/confirm?restaurantId=${rid}`,
       payload
     );
     return response.data;
   }
 
   static async getIngredients(restaurantId: number): Promise<RawIngredient[]> {
+    const rid = resolveRestId(restaurantId);
     const response = await apiClient.get<RawIngredient[]>(
-      `/Inventory/ingredients?restaurantId=${restaurantId}`
+      `/Inventory/ingredients?restaurantId=${rid}`
     );
     return response.data;
   }
 
   static async saveIngredient(restaurantId: number, payload: Partial<RawIngredient>): Promise<RawIngredient> {
+    const rid = resolveRestId(restaurantId);
     const response = await apiClient.post<RawIngredient>(
-      `/Inventory/ingredients?restaurantId=${restaurantId}`,
+      `/Inventory/ingredients?restaurantId=${rid}`,
       payload
     );
     return response.data;
   }
 
   static async getInvoices(restaurantId: number, limit = 20): Promise<ScannedInvoiceResult[]> {
+    const rid = resolveRestId(restaurantId);
     const response = await apiClient.get<ScannedInvoiceResult[]>(
-      `/Inventory/invoices?restaurantId=${restaurantId}&limit=${limit}`
+      `/Inventory/invoices?restaurantId=${rid}&limit=${limit}`
     );
     return response.data;
   }
 
   static async logWaste(restaurantId: number, payload: LogWastePayload): Promise<{ success: boolean; message: string }> {
+    const rid = resolveRestId(restaurantId);
     const response = await apiClient.post<{ success: boolean; message: string }>(
-      `/Inventory/waste?restaurantId=${restaurantId}`,
+      `/Inventory/waste?restaurantId=${rid}`,
       payload
     );
     return response.data;
   }
 
   static async getWasteLogs(restaurantId: number, limit = 50): Promise<WasteLogItem[]> {
+    const rid = resolveRestId(restaurantId);
     const response = await apiClient.get<WasteLogItem[]>(
-      `/Inventory/waste?restaurantId=${restaurantId}&limit=${limit}`
+      `/Inventory/waste?restaurantId=${rid}&limit=${limit}`
     );
     return response.data;
   }
 
   static async getRecipes(restaurantId: number): Promise<MenuItemRecipe[]> {
+    const rid = resolveRestId(restaurantId);
     const response = await apiClient.get<MenuItemRecipe[]>(
-      `/Inventory/recipes?restaurantId=${restaurantId}`
+      `/Inventory/recipes?restaurantId=${rid}`
     );
     return response.data;
   }
 
   static async getRecipeByMenuItem(restaurantId: number, menuItemId: number): Promise<MenuItemRecipe> {
+    const rid = resolveRestId(restaurantId);
     const response = await apiClient.get<MenuItemRecipe>(
-      `/Inventory/recipes/${menuItemId}?restaurantId=${restaurantId}`
+      `/Inventory/recipes/${menuItemId}?restaurantId=${rid}`
     );
     return response.data;
   }
 
   static async saveRecipe(restaurantId: number, payload: SaveRecipePayload): Promise<{ success: boolean; message: string }> {
+    const rid = resolveRestId(restaurantId);
     const response = await apiClient.post<{ success: boolean; message: string }>(
-      `/Inventory/recipes?restaurantId=${restaurantId}`,
+      `/Inventory/recipes?restaurantId=${rid}`,
       payload
     );
     return response.data;
   }
 
   static async deductDish(restaurantId: number, payload: DeductDishPayload): Promise<{ success: boolean; message: string }> {
+    const rid = resolveRestId(restaurantId);
     const response = await apiClient.post<{ success: boolean; message: string }>(
-      `/Inventory/deduct-dish?restaurantId=${restaurantId}`,
+      `/Inventory/deduct-dish?restaurantId=${rid}`,
       payload
     );
     return response.data;
@@ -259,9 +278,10 @@ export class WebInventoryService {
       pageSize?: number;
     }
   ): Promise<PagedStockMovementResponse> {
+    const rid = resolveRestId(restaurantId);
     const page = options?.page ?? 1;
     const pageSize = options?.pageSize ?? 25;
-    let url = `/Inventory/movements?restaurantId=${restaurantId}&page=${page}&pageSize=${pageSize}`;
+    let url = `/Inventory/movements?restaurantId=${rid}&page=${page}&pageSize=${pageSize}`;
 
     if (options?.ingredientId && options.ingredientId > 0) {
       url += `&ingredientId=${options.ingredientId}`;

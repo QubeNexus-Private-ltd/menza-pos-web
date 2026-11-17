@@ -612,9 +612,46 @@ export class SubscriptionRemoteDataSource {
           queuedRenewalDays,
           isTableOrder: tableOrderFlag,
           allowTableOrdering: tableOrderFlag,
-          isInventory: Boolean(activeItem.isInventory ?? activeItem.IsInventory ?? matchedPlan?.isInventory ?? false),
-          isInventoryEnabled: Boolean(activeItem.isInventoryEnabled ?? activeItem.IsInventoryEnabled ?? matchedPlan?.isInventoryEnabled ?? false),
-          features: activeItem.features || activeItem.Features || matchedPlan?.features || {},
+          isInventory: Boolean(
+            activeItem.isInventory ??
+            activeItem.IsInventory ??
+            activeItem.isInventoryEnabled ??
+            activeItem.IsInventoryEnabled ??
+            matchedPlan?.isInventory ??
+            matchedPlan?.isInventoryEnabled ??
+            false
+          ),
+          isInventoryEnabled: Boolean(
+            activeItem.isInventoryEnabled ??
+            activeItem.IsInventoryEnabled ??
+            activeItem.isInventory ??
+            activeItem.IsInventory ??
+            matchedPlan?.isInventoryEnabled ??
+            matchedPlan?.isInventory ??
+            false
+          ),
+          features: {
+            ...(matchedPlan?.features || {}),
+            ...(activeItem.features || activeItem.Features || {}),
+            inventory: Boolean(
+              activeItem.isInventory ??
+              activeItem.IsInventory ??
+              activeItem.isInventoryEnabled ??
+              activeItem.IsInventoryEnabled ??
+              matchedPlan?.isInventory ??
+              matchedPlan?.isInventoryEnabled ??
+              false
+            ),
+            isInventoryEnabled: Boolean(
+              activeItem.isInventoryEnabled ??
+              activeItem.IsInventoryEnabled ??
+              activeItem.isInventory ??
+              activeItem.IsInventory ??
+              matchedPlan?.isInventoryEnabled ??
+              matchedPlan?.isInventory ??
+              false
+            ),
+          },
           applications: activeItem.applications || activeItem.Applications || matchedPlan?.applications || {},
         };
       }

@@ -101,6 +101,15 @@ export const CANONICAL_FEATURES: CanonicalFeature[] = [
     iconName: 'Smartphone',
     aliases: ['ismobileposenabled', 'mobilepos'],
   },
+  {
+    key: 'IsInventoryEnabled',
+    label: 'AI Inventory & Smart Stock',
+    shortLabel: 'AI Inventory',
+    category: 'Kitchen Operations',
+    description: 'Multimodal AI invoice digitizer, recipe BOM costing, and live KOT stock depletion.',
+    iconName: 'Boxes',
+    aliases: ['isinventoryenabled', 'isinventory', 'inventory', 'aiinventory', 'stockmanagement'],
+  },
 ];
 
 /**
@@ -166,7 +175,9 @@ export const getSubscriptionFeatureList = (sub: UserSubscriptionStatus | null): 
     } else {
       // 2. Direct property fallbacks on subscription
       const k = feat.key.toLowerCase();
-      if (k.includes('table') && (sub.isTableOrder !== undefined || sub.allowTableOrdering !== undefined)) {
+      if (k.includes('inventory') && (sub.isInventory !== undefined || sub.isInventoryEnabled !== undefined)) {
+        enabled = Boolean(sub.isInventory || sub.isInventoryEnabled);
+      } else if (k.includes('table') && (sub.isTableOrder !== undefined || sub.allowTableOrdering !== undefined)) {
         enabled = Boolean(sub.isTableOrder || sub.allowTableOrdering);
       } else if (k.includes('kds') && ((sub as any).isKdsEnabled !== undefined || sub.isKdsAppEnabled !== undefined)) {
         enabled = Boolean((sub as any).isKdsEnabled || sub.isKdsAppEnabled);
@@ -214,7 +225,9 @@ export const getPlanFeatureList = (plan: SubscriptionPlan): FormattedFeatureItem
     } else {
       // Direct boolean flags on plan
       const k = feat.key.toLowerCase();
-      if (k.includes('table') && (plan.isTableOrder !== undefined || plan.allowTableOrdering !== undefined)) {
+      if (k.includes('inventory') && (plan.isInventory !== undefined || plan.isInventoryEnabled !== undefined)) {
+        enabled = Boolean(plan.isInventory || plan.isInventoryEnabled);
+      } else if (k.includes('table') && (plan.isTableOrder !== undefined || plan.allowTableOrdering !== undefined)) {
         enabled = Boolean(plan.isTableOrder || plan.allowTableOrdering);
       } else if (k.includes('kds') && (plan.allowKds !== undefined || plan.isKdsAppEnabled !== undefined)) {
         enabled = Boolean(plan.allowKds || plan.isKdsAppEnabled);

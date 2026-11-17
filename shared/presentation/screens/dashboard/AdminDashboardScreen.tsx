@@ -12,6 +12,7 @@ import {
   Alert,
   Image,
   Dimensions,
+  Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -45,6 +46,8 @@ import {
   Table,
   BadgeCheck,
   CheckCircle2,
+  Boxes,
+  Camera,
   Gift,
   Sun,
   Moon,
@@ -119,6 +122,7 @@ import { TermsConsentCard } from '../../components/TermsConsentCard';
 import { NetworkStrengthIndicator } from '../../components/NetworkStrengthIndicator';
 import { RestaurantQrModal } from '../../components/RestaurantQrModal';
 import { StoreOperatingStatusModal } from '../../components/StoreOperatingStatusModal';
+import { InventoryModal } from '../../components/InventoryModal';
 import { StoreOperatingStatus } from '../../../domain/models/RestaurantConfig';
 import { RestaurantConfigRemoteDataSource } from '../../../data/datasources/RestaurantConfigRemoteDataSource';
 import { logger } from '../../../core/logging';
@@ -250,6 +254,7 @@ export const AdminDashboardScreen: React.FC = () => {
   const [walletBalance, setWalletBalance] = useState<number | null>(null);
   const [availablePlans, setAvailablePlans] = useState<SubscriptionPlan[]>([]);
   const [subscribingId, setSubscribingId] = useState<number | null>(null);
+  const [inventoryModalVisible, setInventoryModalVisible] = useState<boolean>(false);
 
   // Synchronize local activeSubscription whenever store updates
   useEffect(() => {
@@ -848,6 +853,20 @@ export const AdminDashboardScreen: React.FC = () => {
     if (isSuperAdmin) return true;
     return useSubscriptionStore.getState().isFeatureAllowed('staffPinLock');
   }, [isSuperAdmin, activeSubscription, storeSubscription]);
+  const isInventoryAllowed = useMemo(() => {
+    if (isSuperAdmin) return true;
+    const sub = activeSubscription || storeSubscription;
+    if (
+      sub &&
+      (sub.isInventory === true ||
+        sub.isInventoryEnabled === true ||
+        (sub as any).IsInventory === true ||
+        (sub as any).IsInventoryEnabled === true)
+    ) {
+      return true;
+    }
+    return useSubscriptionStore.getState().isFeatureAllowed('inventory');
+  }, [isSuperAdmin, activeSubscription, storeSubscription]);
   const isPosAndCounterOrderingAllowed = isPosBillingAllowed;
 
   // Strictly locked when no active subscription or expired beyond grace period
@@ -1216,6 +1235,64 @@ export const AdminDashboardScreen: React.FC = () => {
           </TouchableOpacity>
 
           <Text style={styles.settingsSectionHeading}>STORE OPERATIONS</Text>
+
+          {/* AI Inventory & Stock Management Tile */}
+          <TouchableOpacity
+            style={styles.settingsTileCard}
+            onPress={() => {
+              if (isInventoryAllowed) {
+                setInventoryModalVisible(true);
+              } else {
+                Alert.alert(
+                  'Subscription Upgrade Required',
+                  'AI Inventory & Stock Management is an enterprise feature. Please upgrade your subscription plan to unlock bill scanning and automated stock tracking.',
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    {
+                      text: 'View Plans',
+                      onPress: () => {
+                        loadSubscriptionPlans();
+                        setPlanSelectionModalVisible(true);
+                      },
+                    },
+                  ]
+                );
+              }
+            }}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.settingsTileIconBox, { backgroundColor: isInventoryAllowed ? '#F0FDF4' : '#FFF0DE' }]}>
+              <Boxes size={20} color={isInventoryAllowed ? '#16A34A' : '#DE8626'} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Text style={styles.settingsTileTitle}>AI Inventory & Smart Stock</Text>
+                <View
+                  style={[
+                    styles.saActionPill,
+                    isInventoryAllowed
+                      ? { backgroundColor: '#DCFCE7', borderColor: 'rgba(22, 163, 74, 0.3)' }
+                      : { backgroundColor: '#FEF3C7', borderColor: 'rgba(217, 119, 6, 0.3)' },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.saActionPillText,
+                      { color: isInventoryAllowed ? '#16A34A' : '#B45309' },
+                    ]}
+                  >
+                    {isInventoryAllowed ? 'ACTIVE' : 'PRO 🔒'}
+                  </Text>
+                </View>
+              </View>
+              <Text style={styles.settingsTileDesc}>
+                {isInventoryAllowed
+                  ? 'AI mandi bill scanner, dish recipes (BOM) & KOT depletion'
+                  : 'Upgrade plan to enable AI invoice scanning & stock management'}
+              </Text>
+            </View>
+            <ChevronRight size={16} color="#8C7A6B" />
+          </TouchableOpacity>
 
           {/* Staff & Roles Tile */}
           <TouchableOpacity
@@ -2386,11 +2463,113 @@ export const AdminDashboardScreen: React.FC = () => {
                           <Text style={styles.quickCardDesc}>Sales Trends</Text>
                         </LinearGradient>
                       </TouchableOpacity>
+
+                      {/* AI Inventory */}
+                      <TouchableOpacity
+                        style={styles.quickCardAction}
+                        onPress={() => {
+                          if (isInventoryAllowed) {
+                            setInventoryModalVisible(true);
+                          } else {
+                            Alert.alert(
+                              'Subscription Required',
+                              'AI Inventory & Stock Management requires a subscription plan with AI Inventory enabled.',
+                              [
+                                { text: 'Cancel', style: 'cancel' },
+                                {
+                                  text: 'View Plans',
+                                  onPress: () => {
+                                    loadSubscriptionPlans();
+                                    setPlanSelectionModalVisible(true);
+                                  },
+                                },
+                              ]
+                            );
+                          }
+                        }}
+                        activeOpacity={0.85}
+                      >
+                        <LinearGradient
+                          colors={['#FFF8F0', '#FFFFFF']}
+                          style={styles.quickCardInner}
+                        >
+                          <View style={[styles.quickCardIconCircle, { backgroundColor: isInventoryAllowed ? '#E4F5EC' : '#FFF0DE' }]}>
+                            <Boxes size={20} color={isInventoryAllowed ? '#16A34A' : '#DE8626'} strokeWidth={2.4} />
+                          </View>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                            <Text style={styles.quickCardTitle}>AI Inventory</Text>
+                            {!isInventoryAllowed && <Lock size={11} color="#D96B14" />}
+                          </View>
+                          <Text style={styles.quickCardDesc}>
+                            {isInventoryAllowed ? 'Stock & Recipes' : 'Pro Feature 🔒'}
+                          </Text>
+                        </LinearGradient>
+                      </TouchableOpacity>
                     </View>
 
                     {/* 3. STORE MANAGEMENT SHORTCUTS */}
                     <Text style={styles.sectionHeading}>STORE OPERATIONS</Text>
                     <View style={styles.managementCardContainer}>
+                      {/* AI Inventory & Stock Management */}
+                      <TouchableOpacity
+                        style={styles.mgmtRowItem}
+                        onPress={() => {
+                          if (isInventoryAllowed) {
+                            setInventoryModalVisible(true);
+                          } else {
+                            Alert.alert(
+                              'Subscription Upgrade Required',
+                              'AI Inventory & Stock Management is an enterprise feature. Please upgrade your subscription plan to unlock bill scanning and automated stock tracking.',
+                              [
+                                { text: 'Cancel', style: 'cancel' },
+                                {
+                                  text: 'View Plans',
+                                  onPress: () => {
+                                    loadSubscriptionPlans();
+                                    setPlanSelectionModalVisible(true);
+                                  },
+                                },
+                              ]
+                            );
+                          }
+                        }}
+                        activeOpacity={0.7}
+                      >
+                        <View style={[styles.mgmtIconBox, { backgroundColor: isInventoryAllowed ? '#F0FDF4' : '#FFF0DE' }]}>
+                          <Boxes size={18} color={isInventoryAllowed ? '#16A34A' : '#DE8626'} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                            <Text style={styles.mgmtRowTitle}>AI Inventory & Smart Stock</Text>
+                            <View
+                              style={[
+                                styles.saActionPill,
+                                isInventoryAllowed
+                                  ? { backgroundColor: '#DCFCE7', borderColor: 'rgba(22, 163, 74, 0.3)' }
+                                  : { backgroundColor: '#FEF3C7', borderColor: 'rgba(217, 119, 6, 0.3)' },
+                              ]}
+                            >
+                              <Text
+                                style={[
+                                  styles.saActionPillText,
+                                  { color: isInventoryAllowed ? '#16A34A' : '#B45309' },
+                                ]}
+                              >
+                                {isInventoryAllowed ? 'ACTIVE' : 'PRO 🔒'}
+                              </Text>
+                            </View>
+                          </View>
+                          <Text style={styles.mgmtRowDesc}>
+                            {isInventoryAllowed
+                              ? 'Multimodal bill scanner, recipe BOM & stock depletion'
+                              : 'AI bill scanner, recipe costing & automated depletion'}
+                          </Text>
+                        </View>
+                        <ChevronRight size={16} color="#8C7A6B" />
+                      </TouchableOpacity>
+
+                      <View style={styles.mgmtRowDivider} />
+
                       {/* Staff Roles */}
                       <TouchableOpacity
                         style={styles.mgmtRowItem}
@@ -3237,6 +3416,19 @@ export const AdminDashboardScreen: React.FC = () => {
           visible={restaurantQrModalVisible}
           onClose={() => setRestaurantQrModalVisible(false)}
           restaurant={activeRestaurant}
+        />
+
+        {/* AI INVENTORY & STOCK MANAGEMENT MODAL */}
+        <InventoryModal
+          visible={inventoryModalVisible}
+          onClose={() => setInventoryModalVisible(false)}
+          isInventoryAllowed={isInventoryAllowed}
+          restaurantName={activeRestaurant?.restaurantName}
+          restaurantId={activeRestaurant?.restaurantId || currentRestId}
+          onUpgradePlan={() => {
+            loadSubscriptionPlans();
+            setPlanSelectionModalVisible(true);
+          }}
         />
 
         {/* REAL-TIME FLOATING ORDER ALERT BANNER */}

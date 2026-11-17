@@ -336,6 +336,8 @@ export const PlanCreatorScreen: React.FC<PlanCreatorScreenProps> = ({ onClose })
       minCommissionFloorPerOrder: parsedMinFloor,
       maxCommissionCapPerOrder: parsedMaxCap,
       includedWalletCredit: parsedWalletCredit,
+      isInventory: dynamicEntitlements.find((d) => d.configKey.toLowerCase().includes('inventory'))?.isAllowed ?? false,
+      isInventoryEnabled: dynamicEntitlements.find((d) => d.configKey.toLowerCase().includes('inventory'))?.isAllowed ?? false,
       isActive: true,
       entitlements: dynamicEntitlements.map((e) => ({
         orderConfigId: e.orderConfigId,

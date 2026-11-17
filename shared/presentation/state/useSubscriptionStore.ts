@@ -423,6 +423,17 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
       if (!subscription || lifecycleState === 'NONE' || lifecycleState === 'EXPIRED' || lifecycleState === 'INACTIVE' || (isExpired && !isInGracePeriod)) {
         return false;
       }
+      const k = String(featureKey).toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (k === 'inventory' || k === 'isinventory' || k === 'isinventoryenabled' || k === 'aiinventory') {
+        if (
+          subscription.isInventory === true ||
+          subscription.isInventoryEnabled === true ||
+          (subscription as any).IsInventory === true ||
+          (subscription as any).IsInventoryEnabled === true
+        ) {
+          return true;
+        }
+      }
       return extractFeatureFlag(subscription, featureKey);
     },
 

@@ -54,6 +54,8 @@ export interface SubscriptionPlan {
   isMenuOrderingEnabled?: boolean;
   isStaffPinLockEnabled?: boolean;
   isReportsEnabled?: boolean;
+  isInventory?: boolean;
+  isInventoryEnabled?: boolean;
 }
 
 export type SubscriptionLifecycleState =
@@ -121,6 +123,8 @@ export interface UserSubscriptionStatus {
   isMenuOrderingEnabled?: boolean;
   isStaffPinLockEnabled?: boolean;
   isReportsEnabled?: boolean;
+  isInventory?: boolean;
+  isInventoryEnabled?: boolean;
 }
 
 export interface RestaurantSubscriptionHistory {

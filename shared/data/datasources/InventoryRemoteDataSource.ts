@@ -159,6 +159,41 @@ export interface PagedStockMovementResponse {
   stats: StockLedgerStats;
 }
 
+export interface PagedRawIngredientResponse {
+  items: RawIngredient[];
+  pageNumber: number;
+  pageSize: number;
+  totalCount: number;
+  totalPages: number;
+  lowStockCount?: number;
+}
+
+export interface PagedMenuItemRecipeResponse {
+  items: MenuItemRecipe[];
+  pageNumber: number;
+  pageSize: number;
+  totalCount: number;
+  totalPages: number;
+  configuredCount?: number;
+}
+
+export interface PagedWasteLogResponse {
+  items: WasteLogItem[];
+  pageNumber: number;
+  pageSize: number;
+  totalCount: number;
+  totalPages: number;
+  totalEstimatedLoss?: number;
+}
+
+export interface PagedScannedInvoiceResponse {
+  items: ScannedInvoiceResult[];
+  pageNumber: number;
+  pageSize: number;
+  totalCount: number;
+  totalPages: number;
+}
+
 export class InventoryRemoteDataSource {
   async scanInvoice(
     restaurantId: number,
@@ -305,14 +340,72 @@ export class InventoryRemoteDataSource {
     return response.data;
   }
 
+  async getPagedIngredients(
+    restaurantId: number,
+    options?: { page?: number; pageSize?: number; searchTerm?: string }
+  ): Promise<PagedRawIngredientResponse> {
+    const storeState = useAuthStore.getState();
+    const resolvedRestId =
+      restaurantId > 0 ? restaurantId : (storeState.activeRestaurant?.restaurantId || 0);
+
+    const page = options?.page ?? 1;
+    const pageSize = options?.pageSize ?? 25;
+    let url = `/Inventory/ingredients?restaurantId=${resolvedRestId}&page=${page}&pageSize=${pageSize}`;
+    if (options?.searchTerm?.trim()) {
+      url += `&searchTerm=${encodeURIComponent(options.searchTerm.trim())}`;
+    }
+
+    const response = await apiClient.get<PagedRawIngredientResponse | RawIngredient[]>(url);
+    if (Array.isArray(response.data)) {
+      return {
+        items: response.data,
+        pageNumber: 1,
+        pageSize: response.data.length,
+        totalCount: response.data.length,
+        totalPages: 1,
+        lowStockCount: response.data.filter((i) => i.currentStock <= i.minimumReorderLevel).length,
+      };
+    }
+    return response.data;
+  }
+
   async getIngredients(restaurantId: number): Promise<RawIngredient[]> {
     const storeState = useAuthStore.getState();
     const resolvedRestId =
       restaurantId > 0 ? restaurantId : (storeState.activeRestaurant?.restaurantId || 0);
 
-    const response = await apiClient.get<RawIngredient[]>(
+    const response = await apiClient.get<RawIngredient[] | PagedRawIngredientResponse>(
       `/Inventory/ingredients?restaurantId=${resolvedRestId}`
     );
+    if (Array.isArray(response.data)) return response.data;
+    return response.data.items || [];
+  }
+
+  async getPagedInvoices(
+    restaurantId: number,
+    options?: { page?: number; pageSize?: number; searchTerm?: string }
+  ): Promise<PagedScannedInvoiceResponse> {
+    const storeState = useAuthStore.getState();
+    const resolvedRestId =
+      restaurantId > 0 ? restaurantId : (storeState.activeRestaurant?.restaurantId || 0);
+
+    const page = options?.page ?? 1;
+    const pageSize = options?.pageSize ?? 20;
+    let url = `/Inventory/invoices?restaurantId=${resolvedRestId}&page=${page}&pageSize=${pageSize}`;
+    if (options?.searchTerm?.trim()) {
+      url += `&searchTerm=${encodeURIComponent(options.searchTerm.trim())}`;
+    }
+
+    const response = await apiClient.get<PagedScannedInvoiceResponse | ScannedInvoiceResult[]>(url);
+    if (Array.isArray(response.data)) {
+      return {
+        items: response.data,
+        pageNumber: 1,
+        pageSize: response.data.length,
+        totalCount: response.data.length,
+        totalPages: 1,
+      };
+    }
     return response.data;
   }
 
@@ -321,10 +414,11 @@ export class InventoryRemoteDataSource {
     const resolvedRestId =
       restaurantId > 0 ? restaurantId : (storeState.activeRestaurant?.restaurantId || 0);
 
-    const response = await apiClient.get<ScannedInvoiceResult[]>(
+    const response = await apiClient.get<ScannedInvoiceResult[] | PagedScannedInvoiceResponse>(
       `/Inventory/invoices?restaurantId=${resolvedRestId}&limit=${limit}`
     );
-    return response.data;
+    if (Array.isArray(response.data)) return response.data;
+    return response.data.items || [];
   }
 
   async logWaste(
@@ -357,6 +451,35 @@ export class InventoryRemoteDataSource {
     return response.data;
   }
 
+  async getPagedWasteLogs(
+    restaurantId: number,
+    options?: { page?: number; pageSize?: number; searchTerm?: string }
+  ): Promise<PagedWasteLogResponse> {
+    const storeState = useAuthStore.getState();
+    const resolvedRestId =
+      restaurantId > 0 ? restaurantId : (storeState.activeRestaurant?.restaurantId || 0);
+
+    const page = options?.page ?? 1;
+    const pageSize = options?.pageSize ?? 20;
+    let url = `/Inventory/waste?restaurantId=${resolvedRestId}&page=${page}&pageSize=${pageSize}`;
+    if (options?.searchTerm?.trim()) {
+      url += `&searchTerm=${encodeURIComponent(options.searchTerm.trim())}`;
+    }
+
+    const response = await apiClient.get<PagedWasteLogResponse | WasteLogItem[]>(url);
+    if (Array.isArray(response.data)) {
+      return {
+        items: response.data,
+        pageNumber: 1,
+        pageSize: response.data.length,
+        totalCount: response.data.length,
+        totalPages: 1,
+        totalEstimatedLoss: response.data.reduce((sum, item) => sum + (item.totalEstimatedLoss || 0), 0),
+      };
+    }
+    return response.data;
+  }
+
   async getWasteLogs(
     restaurantId: number,
     limit: number = 50
@@ -365,9 +488,39 @@ export class InventoryRemoteDataSource {
     const resolvedRestId =
       restaurantId > 0 ? restaurantId : (storeState.activeRestaurant?.restaurantId || 0);
 
-    const response = await apiClient.get<WasteLogItem[]>(
+    const response = await apiClient.get<WasteLogItem[] | PagedWasteLogResponse>(
       `/Inventory/waste?restaurantId=${resolvedRestId}&limit=${limit}`
     );
+    if (Array.isArray(response.data)) return response.data;
+    return response.data.items || [];
+  }
+
+  async getPagedRecipes(
+    restaurantId: number,
+    options?: { page?: number; pageSize?: number; searchTerm?: string }
+  ): Promise<PagedMenuItemRecipeResponse> {
+    const storeState = useAuthStore.getState();
+    const resolvedRestId =
+      restaurantId > 0 ? restaurantId : (storeState.activeRestaurant?.restaurantId || 0);
+
+    const page = options?.page ?? 1;
+    const pageSize = options?.pageSize ?? 12;
+    let url = `/Inventory/recipes?restaurantId=${resolvedRestId}&page=${page}&pageSize=${pageSize}`;
+    if (options?.searchTerm?.trim()) {
+      url += `&searchTerm=${encodeURIComponent(options.searchTerm.trim())}`;
+    }
+
+    const response = await apiClient.get<PagedMenuItemRecipeResponse | MenuItemRecipe[]>(url);
+    if (Array.isArray(response.data)) {
+      return {
+        items: response.data,
+        pageNumber: 1,
+        pageSize: response.data.length,
+        totalCount: response.data.length,
+        totalPages: 1,
+        configuredCount: response.data.filter((r) => (r.ingredients?.length || 0) > 0).length,
+      };
+    }
     return response.data;
   }
 
@@ -376,10 +529,11 @@ export class InventoryRemoteDataSource {
     const resolvedRestId =
       restaurantId > 0 ? restaurantId : (storeState.activeRestaurant?.restaurantId || 0);
 
-    const response = await apiClient.get<MenuItemRecipe[]>(
+    const response = await apiClient.get<MenuItemRecipe[] | PagedMenuItemRecipeResponse>(
       `/Inventory/recipes?restaurantId=${resolvedRestId}`
     );
-    return response.data;
+    if (Array.isArray(response.data)) return response.data;
+    return response.data.items || [];
   }
 
   async getRecipeByMenuItem(

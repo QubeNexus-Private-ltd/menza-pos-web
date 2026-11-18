@@ -33,6 +33,8 @@ import {
   ArrowDownRight,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
   Check,
   ShieldCheck,
   Package,
@@ -191,80 +193,138 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
   const [historySearchQuery, setHistorySearchQuery] = useState<string>('');
   const [expandedInvoiceId, setExpandedInvoiceId] = useState<number | null>(null);
 
+  // Pagination States for All Modules
+  const [ingredientPage, setIngredientPage] = useState<number>(1);
+  const ingredientPageSize = 20;
+  const [ingredientTotalPages, setIngredientTotalPages] = useState<number>(1);
+  const [ingredientTotalCount, setIngredientTotalCount] = useState<number>(0);
+
+  const [recipePage, setRecipePage] = useState<number>(1);
+  const recipePageSize = 10;
+  const [recipeTotalPages, setRecipeTotalPages] = useState<number>(1);
+  const [recipeTotalCount, setRecipeTotalCount] = useState<number>(0);
+
+  const [movementPage, setMovementPage] = useState<number>(1);
+  const [movementPageSize, setMovementPageSize] = useState<number>(25);
+  const [movementTotalPages, setMovementTotalPages] = useState<number>(1);
+  const [movementTotalCount, setMovementTotalCount] = useState<number>(0);
+
+  const [wastePage, setWastePage] = useState<number>(1);
+  const wastePageSize = 15;
+  const [wasteTotalPages, setWasteTotalPages] = useState<number>(1);
+  const [wasteTotalCount, setWasteTotalCount] = useState<number>(0);
+
+  const [archivePage, setArchivePage] = useState<number>(1);
+  const archivePageSize = 15;
+  const [archiveTotalPages, setArchiveTotalPages] = useState<number>(1);
+  const [archiveTotalCount, setArchiveTotalCount] = useState<number>(0);
+
   // Load ingredients when opening or switching to stock
-  const loadIngredients = useCallback(async () => {
+  const loadIngredients = useCallback(async (targetPage?: number | unknown) => {
     if (!effectiveRestId || effectiveRestId <= 0) return;
     try {
       setLoadingIngredients(true);
-      const data = await inventoryRemoteDataSource.getIngredients(effectiveRestId);
-      setIngredients(Array.isArray(data) ? data : []);
+      const pageToLoad = typeof targetPage === 'number' ? targetPage : ingredientPage;
+      const res = await inventoryRemoteDataSource.getPagedIngredients(effectiveRestId, {
+        page: pageToLoad,
+        pageSize: ingredientPageSize,
+        searchTerm: searchQuery.trim() || undefined,
+      });
+      setIngredients(Array.isArray(res.items) ? res.items : []);
+      setIngredientTotalPages(res.totalPages || 1);
+      setIngredientTotalCount(res.totalCount || (res.items?.length || 0));
     } catch {
       // handle gracefully
     } finally {
       setLoadingIngredients(false);
     }
-  }, [effectiveRestId]);
+  }, [effectiveRestId, ingredientPage, ingredientPageSize, searchQuery]);
 
   // Load recipes for dish BOM
-  const loadRecipes = useCallback(async () => {
+  const loadRecipes = useCallback(async (targetPage?: number | unknown) => {
     if (!effectiveRestId || effectiveRestId <= 0) return;
     try {
       setLoadingRecipes(true);
-      const data = await inventoryRemoteDataSource.getRecipes(effectiveRestId);
-      setRecipes(Array.isArray(data) ? data : []);
+      const pageToLoad = typeof targetPage === 'number' ? targetPage : recipePage;
+      const res = await inventoryRemoteDataSource.getPagedRecipes(effectiveRestId, {
+        page: pageToLoad,
+        pageSize: recipePageSize,
+        searchTerm: recipeSearchQuery.trim() || undefined,
+      });
+      setRecipes(Array.isArray(res.items) ? res.items : []);
+      setRecipeTotalPages(res.totalPages || 1);
+      setRecipeTotalCount(res.totalCount || (res.items?.length || 0));
     } catch {
       // handle gracefully
     } finally {
       setLoadingRecipes(false);
     }
-  }, [effectiveRestId]);
+  }, [effectiveRestId, recipePage, recipePageSize, recipeSearchQuery]);
 
   // Load movements for stock ledger
-  const loadMovements = useCallback(async () => {
+  const loadMovements = useCallback(async (targetPage?: number | unknown) => {
     if (!effectiveRestId || effectiveRestId <= 0) return;
     try {
       setLoadingMovements(true);
+      const pageToLoad = typeof targetPage === 'number' ? targetPage : movementPage;
       const res = await inventoryRemoteDataSource.getPagedStockMovements(effectiveRestId, {
         movementType: movementTypeFilter === 'All' ? undefined : movementTypeFilter,
         searchTerm: movementSearchQuery.trim() || undefined,
-        pageSize: 50,
+        page: pageToLoad,
+        pageSize: movementPageSize,
       });
       setMovements(Array.isArray(res.items) ? res.items : []);
       setMovementStats(res.stats || null);
+      setMovementTotalPages(res.totalPages || 1);
+      setMovementTotalCount(res.totalCount || (res.items?.length || 0));
     } catch {
       // handle gracefully
     } finally {
       setLoadingMovements(false);
     }
-  }, [effectiveRestId, movementTypeFilter, movementSearchQuery]);
+  }, [effectiveRestId, movementTypeFilter, movementSearchQuery, movementPage, movementPageSize]);
 
   // Load waste logs
-  const loadWasteLogs = useCallback(async () => {
+  const loadWasteLogs = useCallback(async (targetPage?: number | unknown) => {
     if (!effectiveRestId || effectiveRestId <= 0) return;
     try {
       setLoadingWasteLogs(true);
-      const res = await inventoryRemoteDataSource.getWasteLogs(effectiveRestId, 50);
-      setWasteLogs(Array.isArray(res) ? res : []);
+      const pageToLoad = typeof targetPage === 'number' ? targetPage : wastePage;
+      const res = await inventoryRemoteDataSource.getPagedWasteLogs(effectiveRestId, {
+        page: pageToLoad,
+        pageSize: wastePageSize,
+        searchTerm: wasteSearchQuery.trim() || undefined,
+      });
+      setWasteLogs(Array.isArray(res.items) ? res.items : []);
+      setWasteTotalPages(res.totalPages || 1);
+      setWasteTotalCount(res.totalCount || (res.items?.length || 0));
     } catch {
       // handle gracefully
     } finally {
       setLoadingWasteLogs(false);
     }
-  }, [effectiveRestId]);
+  }, [effectiveRestId, wastePage, wastePageSize, wasteSearchQuery]);
 
   // Load history when switching to history
-  const loadHistory = useCallback(async () => {
+  const loadHistory = useCallback(async (targetPage?: number | unknown) => {
     if (!effectiveRestId || effectiveRestId <= 0) return;
     try {
       setLoadingHistory(true);
-      const data = await inventoryRemoteDataSource.getInvoices(effectiveRestId, 40);
-      setInvoicesHistory(Array.isArray(data) ? data : []);
+      const pageToLoad = typeof targetPage === 'number' ? targetPage : archivePage;
+      const res = await inventoryRemoteDataSource.getPagedInvoices(effectiveRestId, {
+        page: pageToLoad,
+        pageSize: archivePageSize,
+        searchTerm: historySearchQuery.trim() || undefined,
+      });
+      setInvoicesHistory(Array.isArray(res.items) ? res.items : []);
+      setArchiveTotalPages(res.totalPages || 1);
+      setArchiveTotalCount(res.totalCount || (res.items?.length || 0));
     } catch {
       // handle gracefully
     } finally {
       setLoadingHistory(false);
     }
-  }, [effectiveRestId]);
+  }, [effectiveRestId, archivePage, archivePageSize, historySearchQuery]);
 
   useEffect(() => {
     if (visible && isInventoryAllowed && effectiveRestId > 0) {
@@ -293,6 +353,43 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
     loadWasteLogs,
     loadHistory,
   ]);
+
+  // Debounce search query changes for server-side search
+  useEffect(() => {
+    if (visible && isInventoryAllowed && effectiveRestId > 0 && activeTab === 'stock') {
+      const timer = setTimeout(() => {
+        loadIngredients(1);
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [searchQuery]);
+
+  useEffect(() => {
+    if (visible && isInventoryAllowed && effectiveRestId > 0 && activeTab === 'recipes') {
+      const timer = setTimeout(() => {
+        loadRecipes(1);
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [recipeSearchQuery]);
+
+  useEffect(() => {
+    if (visible && isInventoryAllowed && effectiveRestId > 0 && activeTab === 'waste') {
+      const timer = setTimeout(() => {
+        loadWasteLogs(1);
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [wasteSearchQuery]);
+
+  useEffect(() => {
+    if (visible && isInventoryAllowed && effectiveRestId > 0 && activeTab === 'history') {
+      const timer = setTimeout(() => {
+        loadHistory(1);
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [historySearchQuery]);
 
   // Action: Save New Raw Ingredient
   const handleSaveNewIngredient = async () => {
@@ -588,27 +685,6 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
     }
   };
 
-  // Sample Invoice Quick Test Handler
-  const handleScanSample = async (type: 'mandi' | 'dairy') => {
-    try {
-      const asset =
-        type === 'mandi'
-          ? Image.resolveAssetSource(require('../../../../assets/dummy-invoices/handwritten_mandi_parcha.jpg'))
-          : Image.resolveAssetSource(require('../../../../assets/dummy-invoices/handwritten_dairy_slip.jpg'));
-
-      if (asset?.uri) {
-        setSelectedImageUri(asset.uri);
-        runScanPipeline(
-          asset.uri,
-          type === 'mandi' ? 'handwritten_mandi_parcha.jpg' : 'handwritten_dairy_slip.jpg',
-          'image/jpeg'
-        );
-      }
-    } catch (err: any) {
-      Alert.alert('Error', err?.message || 'Could not load sample invoice.');
-    }
-  };
-
   // Run AI Vision Scanner Pipeline
   const runScanPipeline = async (uri: string, filename = 'invoice_scan.jpg', mimeType = 'image/jpeg') => {
     if (!effectiveRestId || effectiveRestId <= 0) {
@@ -880,6 +956,82 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
     );
   }, [invoicesHistory, historySearchQuery]);
 
+  // Paged Slices & Totals for Mobile Modules (Backed by Server-Side Paging)
+  const totalIngredientPages = ingredientTotalPages;
+  const pagedIngredients = ingredients;
+
+  const totalRecipePages = recipeTotalPages;
+  const pagedRecipes = recipes;
+
+  const totalWastePages = wasteTotalPages;
+  const pagedWasteLogs = wasteLogs;
+
+  const totalArchivePages = archiveTotalPages;
+  const pagedInvoicesHistory = invoicesHistory;
+
+  const renderPaginationBar = (
+    currentPage: number,
+    totalPages: number,
+    totalItems: number,
+    itemName: string,
+    onPrev: () => void,
+    onNext: () => void
+  ) => {
+    if (totalItems === 0) return null;
+    const currentSize =
+      itemName === 'movements'
+        ? movementPageSize
+        : itemName === 'ingredients'
+        ? ingredientPageSize
+        : itemName === 'recipes'
+        ? recipePageSize
+        : itemName === 'waste logs'
+        ? wastePageSize
+        : archivePageSize;
+    const startIdx = (currentPage - 1) * currentSize + 1;
+    const endIdx = Math.min(currentPage * currentSize, totalItems);
+
+    return (
+      <View style={styles.paginationContainer}>
+        <Text style={styles.paginationSummaryText}>
+          Showing <Text style={{ fontWeight: '700', color: '#2D2319' }}>{startIdx}</Text> –{' '}
+          <Text style={{ fontWeight: '700', color: '#2D2319' }}>{endIdx}</Text> of{' '}
+          <Text style={{ fontWeight: '700', color: '#2D2319' }}>{totalItems}</Text> {itemName}
+        </Text>
+
+        {totalPages > 1 && (
+          <View style={styles.paginationControlsRow}>
+            <TouchableOpacity
+              style={[styles.paginationBtn, currentPage === 1 && styles.paginationBtnDisabled]}
+              onPress={onPrev}
+              disabled={currentPage === 1}
+              activeOpacity={0.7}
+            >
+              <ChevronLeft size={13} color={currentPage === 1 ? '#C4B5A5' : '#2D2319'} />
+              <Text style={[styles.paginationBtnText, currentPage === 1 && styles.paginationBtnTextDisabled]}>Prev</Text>
+            </TouchableOpacity>
+
+            <View style={styles.paginationPageBadge}>
+              <Text style={styles.paginationPageBadgeText}>
+                {currentPage} / {totalPages}
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              style={[styles.paginationBtn, currentPage === totalPages && styles.paginationBtnDisabled]}
+              onPress={onNext}
+              disabled={currentPage === totalPages}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.paginationBtnText, currentPage === totalPages && styles.paginationBtnTextDisabled]}>Next</Text>
+              <ChevronRight size={13} color={currentPage === totalPages ? '#C4B5A5' : '#2D2319'} />
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
+    );
+  };
+
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={[styles.modalBackdrop, { paddingTop: Math.max(insets.top, 20) }]}>
@@ -1130,42 +1282,6 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                                 <Text style={styles.captureBtnSub}>From Device Gallery</Text>
                               </LinearGradient>
                             </TouchableOpacity>
-                          </View>
-
-                          {/* Quick Test with Sample Mandi & Dairy Slips */}
-                          <View style={{ marginTop: 14 }}>
-                            <Text style={styles.sampleHeaderLabel}>OR TEST WITH SAMPLE BILLS</Text>
-                            <View style={styles.sampleButtonsRow}>
-                              <TouchableOpacity
-                                style={styles.sampleSlipBtn}
-                                onPress={() => handleScanSample('mandi')}
-                                disabled={isScanning || isConfirming}
-                                activeOpacity={0.8}
-                              >
-                                <View style={[styles.sampleIconBox, { backgroundColor: '#DCFCE7' }]}>
-                                  <Sparkles size={14} color="#16A34A" />
-                                </View>
-                                <View style={{ flex: 1 }}>
-                                  <Text style={styles.sampleBtnTitle}>सब्जी मंडी कच्चा पर्चा</Text>
-                                  <Text style={styles.sampleBtnSub}>Tomato, Onion, Chilli (Hindi Mandi Slip)</Text>
-                                </View>
-                              </TouchableOpacity>
-
-                              <TouchableOpacity
-                                style={styles.sampleSlipBtn}
-                                onPress={() => handleScanSample('dairy')}
-                                disabled={isScanning || isConfirming}
-                                activeOpacity={0.8}
-                              >
-                                <View style={[styles.sampleIconBox, { backgroundColor: '#FEF3C7' }]}>
-                                  <Sparkles size={14} color="#D97706" />
-                                </View>
-                                <View style={{ flex: 1 }}>
-                                  <Text style={styles.sampleBtnTitle}>श्री गणेश डेयरी पर्ची</Text>
-                                  <Text style={styles.sampleBtnSub}>Paneer, Butter, Dahi (Dairy Receipt)</Text>
-                                </View>
-                              </TouchableOpacity>
-                            </View>
                           </View>
                         </>
                       )}
@@ -1495,12 +1611,18 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                         <TextInput
                           style={styles.searchInput}
                           value={searchQuery}
-                          onChangeText={setSearchQuery}
+                          onChangeText={(val) => {
+                            setSearchQuery(val);
+                            setIngredientPage(1);
+                          }}
                           placeholder="Search raw items (Tomato, Paneer, Oil)..."
                           placeholderTextColor="#A89E92"
                         />
                         {searchQuery.length > 0 && (
-                          <TouchableOpacity onPress={() => setSearchQuery('')}>
+                          <TouchableOpacity onPress={() => {
+                            setSearchQuery('');
+                            setIngredientPage(1);
+                          }}>
                             <X size={14} color="#8C7A6B" />
                           </TouchableOpacity>
                         )}
@@ -1547,47 +1669,65 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                         </TouchableOpacity>
                       </View>
                     ) : (
-                      <View style={styles.stockGrid}>
-                        {filteredIngredients.map((ing) => {
-                          const isLow = ing.currentStock <= ing.minimumReorderLevel;
-                          return (
-                            <View key={`ing-${ing.id}`} style={[styles.stockCard, isLow && styles.stockCardLow]}>
-                              <View style={styles.stockCardTop}>
-                                <View style={{ flex: 1 }}>
-                                  <Text style={styles.stockCardName}>{ing.ingredientName}</Text>
-                                  <Text style={styles.stockCardSku}>
-                                    Unit: {ing.unitName} {ing.sku ? `• SKU: ${ing.sku}` : ''}
-                                  </Text>
+                      <>
+                        <View style={styles.stockGrid}>
+                          {pagedIngredients.map((ing) => {
+                            const isLow = ing.currentStock <= ing.minimumReorderLevel;
+                            return (
+                              <View key={`ing-${ing.id}`} style={[styles.stockCard, isLow && styles.stockCardLow]}>
+                                <View style={styles.stockCardTop}>
+                                  <View style={{ flex: 1 }}>
+                                    <Text style={styles.stockCardName}>{ing.ingredientName}</Text>
+                                    <Text style={styles.stockCardSku}>
+                                      Unit: {ing.unitName} {ing.sku ? `• SKU: ${ing.sku}` : ''}
+                                    </Text>
+                                  </View>
+                                  <View style={[styles.stockPill, isLow ? styles.stockPillLow : styles.stockPillGood]}>
+                                    <Text style={[styles.stockPillText, isLow ? styles.stockPillTextLow : styles.stockPillTextGood]}>
+                                      {isLow ? 'LOW STOCK' : 'IN STOCK'}
+                                    </Text>
+                                  </View>
                                 </View>
-                                <View style={[styles.stockPill, isLow ? styles.stockPillLow : styles.stockPillGood]}>
-                                  <Text style={[styles.stockPillText, isLow ? styles.stockPillTextLow : styles.stockPillTextGood]}>
-                                    {isLow ? 'LOW STOCK' : 'IN STOCK'}
-                                  </Text>
-                                </View>
-                              </View>
 
-                              <View style={styles.stockCardMetrics}>
-                                <View style={styles.metricCol}>
-                                  <Text style={styles.metricColLabel}>CURRENT STOCK</Text>
-                                  <Text style={[styles.metricColVal, isLow && { color: '#DC2626' }]}>
-                                    {ing.currentStock} {ing.unitName}
-                                  </Text>
-                                </View>
-                                <View style={styles.metricDivider} />
-                                <View style={styles.metricCol}>
-                                  <Text style={styles.metricColLabel}>MIN REORDER</Text>
-                                  <Text style={styles.metricColValSub}>{ing.minimumReorderLevel} {ing.unitName}</Text>
-                                </View>
-                                <View style={styles.metricDivider} />
-                                <View style={styles.metricCol}>
-                                  <Text style={styles.metricColLabel}>LAST COST</Text>
-                                  <Text style={styles.metricColValSub}>₹{ing.lastPurchaseCostPerUnit}/{ing.unitName}</Text>
+                                <View style={styles.stockCardMetrics}>
+                                  <View style={styles.metricCol}>
+                                    <Text style={styles.metricColLabel}>CURRENT STOCK</Text>
+                                    <Text style={[styles.metricColVal, isLow && { color: '#DC2626' }]}>
+                                      {ing.currentStock} {ing.unitName}
+                                    </Text>
+                                  </View>
+                                  <View style={styles.metricDivider} />
+                                  <View style={styles.metricCol}>
+                                    <Text style={styles.metricColLabel}>MIN REORDER</Text>
+                                    <Text style={styles.metricColValSub}>{ing.minimumReorderLevel} {ing.unitName}</Text>
+                                  </View>
+                                  <View style={styles.metricDivider} />
+                                  <View style={styles.metricCol}>
+                                    <Text style={styles.metricColLabel}>LAST COST</Text>
+                                    <Text style={styles.metricColValSub}>₹{ing.lastPurchaseCostPerUnit}/{ing.unitName}</Text>
+                                  </View>
                                 </View>
                               </View>
-                            </View>
-                          );
-                        })}
-                      </View>
+                            );
+                          })}
+                        </View>
+                        {renderPaginationBar(
+                          ingredientPage,
+                          totalIngredientPages,
+                          ingredientTotalCount,
+                          'ingredients',
+                          () => {
+                            const p = Math.max(1, ingredientPage - 1);
+                            setIngredientPage(p);
+                            loadIngredients(p);
+                          },
+                          () => {
+                            const p = Math.min(totalIngredientPages, ingredientPage + 1);
+                            setIngredientPage(p);
+                            loadIngredients(p);
+                          }
+                        )}
+                      </>
                     )}
                   </View>
                 )}
@@ -1603,12 +1743,18 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                           <TextInput
                             style={styles.searchInput}
                             value={recipeSearchQuery}
-                            onChangeText={setRecipeSearchQuery}
+                            onChangeText={(val) => {
+                              setRecipeSearchQuery(val);
+                              setRecipePage(1);
+                            }}
                             placeholder="Search by dish name, category, or raw ingredient..."
                             placeholderTextColor="#A89E92"
                           />
                           {recipeSearchQuery.length > 0 && (
-                            <TouchableOpacity onPress={() => setRecipeSearchQuery('')}>
+                            <TouchableOpacity onPress={() => {
+                              setRecipeSearchQuery('');
+                              setRecipePage(1);
+                            }}>
                               <X size={14} color="#8C7A6B" />
                             </TouchableOpacity>
                           )}
@@ -1642,8 +1788,9 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                         </Text>
                       </View>
                     ) : (
-                      <View style={{ gap: 12 }}>
-                        {filteredRecipes.map((dish) => {
+                      <>
+                        <View style={{ gap: 12 }}>
+                          {pagedRecipes.map((dish) => {
                           const isConfigured = dish.ingredientsCount > 0;
                           const isCooking = simulatingDishId === dish.menuItemId;
                           const marginColor =
@@ -1771,9 +1918,26 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                           );
                         })}
                       </View>
-                    )}
-                  </View>
-                )}
+                      {renderPaginationBar(
+                        recipePage,
+                        totalRecipePages,
+                        recipeTotalCount,
+                        'recipes',
+                        () => {
+                          const p = Math.max(1, recipePage - 1);
+                          setRecipePage(p);
+                          loadRecipes(p);
+                        },
+                        () => {
+                          const p = Math.min(totalRecipePages, recipePage + 1);
+                          setRecipePage(p);
+                          loadRecipes(p);
+                        }
+                      )}
+                    </>
+                  )}
+                </View>
+              )}
 
                 {/* 4. STOCK MOVEMENT LEDGER TAB */}
                 {activeTab === 'movements' && (
@@ -1783,7 +1947,7 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                         <Text style={styles.cardHeaderTitle}>Stock Movement Ledger</Text>
                         <Text style={styles.cardHeaderSub}>Real-time 360° kitchen audit trail of purchases, consumption & waste</Text>
                       </View>
-                      <TouchableOpacity onPress={loadMovements} style={styles.refreshIconBtn}>
+                      <TouchableOpacity onPress={() => loadMovements()} style={styles.refreshIconBtn}>
                         <RefreshCw size={14} color="#DE8626" />
                       </TouchableOpacity>
                     </View>
@@ -1796,7 +1960,10 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                           <TouchableOpacity
                             key={`filter-${mType}`}
                             style={[styles.filterChip, isSel && styles.filterChipActive]}
-                            onPress={() => setMovementTypeFilter(mType)}
+                            onPress={() => {
+                              setMovementTypeFilter(mType);
+                              setMovementPage(1);
+                            }}
                             activeOpacity={0.7}
                           >
                             <Text style={[styles.filterChipText, isSel && styles.filterChipTextActive]}>{mType}</Text>
@@ -1812,12 +1979,18 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                         <TextInput
                           style={styles.searchInput}
                           value={movementSearchQuery}
-                          onChangeText={setMovementSearchQuery}
+                          onChangeText={(val) => {
+                            setMovementSearchQuery(val);
+                            setMovementPage(1);
+                          }}
                           placeholder="Search by ingredient, ref or notes..."
                           placeholderTextColor="#A89E92"
                         />
                         {movementSearchQuery.length > 0 && (
-                          <TouchableOpacity onPress={() => setMovementSearchQuery('')}>
+                          <TouchableOpacity onPress={() => {
+                            setMovementSearchQuery('');
+                            setMovementPage(1);
+                          }}>
                             <X size={14} color="#8C7A6B" />
                           </TouchableOpacity>
                         )}
@@ -1866,8 +2039,9 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                         </Text>
                       </View>
                     ) : (
-                      <View style={{ gap: 8 }}>
-                        {movements.map((m) => {
+                      <>
+                        <View style={{ gap: 8 }}>
+                          {movements.map((m) => {
                           const isPurchase = m.movementType?.toLowerCase() === 'purchase';
                           const isWaste = m.movementType?.toLowerCase() === 'wastage' || m.movementType?.toLowerCase() === 'waste';
                           const isCooked = m.movementType?.toLowerCase() === 'consumption' || m.movementType?.toLowerCase() === 'cooked';
@@ -1937,9 +2111,26 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                           );
                         })}
                       </View>
-                    )}
-                  </View>
-                )}
+                      {renderPaginationBar(
+                        movementPage,
+                        movementTotalPages,
+                        movementTotalCount,
+                        'movements',
+                        () => {
+                          const p = Math.max(1, movementPage - 1);
+                          setMovementPage(p);
+                          loadMovements(p);
+                        },
+                        () => {
+                          const p = Math.min(movementTotalPages, movementPage + 1);
+                          setMovementPage(p);
+                          loadMovements(p);
+                        }
+                      )}
+                    </>
+                  )}
+                </View>
+              )}
 
                 {/* 5. WASTE TRACKING TAB */}
                 {activeTab === 'waste' && (
@@ -1978,12 +2169,18 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                         <TextInput
                           style={styles.searchInput}
                           value={wasteSearchQuery}
-                          onChangeText={setWasteSearchQuery}
+                          onChangeText={(val) => {
+                            setWasteSearchQuery(val);
+                            setWastePage(1);
+                          }}
                           placeholder="Search wastage by ingredient or reason..."
                           placeholderTextColor="#A89E92"
                         />
                         {wasteSearchQuery.length > 0 && (
-                          <TouchableOpacity onPress={() => setWasteSearchQuery('')}>
+                          <TouchableOpacity onPress={() => {
+                            setWasteSearchQuery('');
+                            setWastePage(1);
+                          }}>
                             <X size={14} color="#8C7A6B" />
                           </TouchableOpacity>
                         )}
@@ -2007,44 +2204,62 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                         </Text>
                       </View>
                     ) : (
-                      <View style={{ gap: 8 }}>
-                        {filteredWasteLogs.map((w) => {
-                          const dateStr = w.loggedAtUtc ? new Date(w.loggedAtUtc).toLocaleDateString() : 'Recent';
-                          return (
-                            <View key={`waste-${w.id}`} style={styles.wasteCard}>
-                              <View style={styles.wasteCardTop}>
-                                <View style={{ flex: 1 }}>
-                                  <Text style={styles.wasteIngName}>{w.ingredientName}</Text>
-                                  <Text style={styles.wasteDateText}>{dateStr} {w.notes ? `• ${w.notes}` : ''}</Text>
+                      <>
+                        <View style={{ gap: 8 }}>
+                          {pagedWasteLogs.map((w) => {
+                            const dateStr = w.loggedAtUtc ? new Date(w.loggedAtUtc).toLocaleDateString() : 'Recent';
+                            return (
+                              <View key={`waste-${w.id}`} style={styles.wasteCard}>
+                                <View style={styles.wasteCardTop}>
+                                  <View style={{ flex: 1 }}>
+                                    <Text style={styles.wasteIngName}>{w.ingredientName}</Text>
+                                    <Text style={styles.wasteDateText}>{dateStr} {w.notes ? `• ${w.notes}` : ''}</Text>
+                                  </View>
+                                  <View style={styles.wasteReasonBadge}>
+                                    <Text style={styles.wasteReasonText}>{w.reason || 'Spoiled'}</Text>
+                                  </View>
                                 </View>
-                                <View style={styles.wasteReasonBadge}>
-                                  <Text style={styles.wasteReasonText}>{w.reason || 'Spoiled'}</Text>
-                                </View>
-                              </View>
 
-                              <View style={styles.wasteCardBottom}>
-                                <View>
-                                  <Text style={styles.wasteMetricLabel}>QTY WASTED</Text>
-                                  <Text style={styles.wasteMetricQty}>{w.quantityWasted} {w.unitName}</Text>
-                                </View>
-                                <View style={styles.metricDivider} />
-                                <View>
-                                  <Text style={styles.wasteMetricLabel}>UNIT COST</Text>
-                                  <Text style={styles.wasteMetricCost}>₹{w.costPerUnit || 0}/{w.unitName}</Text>
-                                </View>
-                                <View style={styles.metricDivider} />
-                                <View>
-                                  <Text style={styles.wasteMetricLabel}>EST. LOSS</Text>
-                                  <Text style={styles.wasteMetricLoss}>₹{w.totalEstimatedLoss.toFixed(2)}</Text>
+                                <View style={styles.wasteCardBottom}>
+                                  <View>
+                                    <Text style={styles.wasteMetricLabel}>QTY WASTED</Text>
+                                    <Text style={styles.wasteMetricQty}>{w.quantityWasted} {w.unitName}</Text>
+                                  </View>
+                                  <View style={styles.metricDivider} />
+                                  <View>
+                                    <Text style={styles.wasteMetricLabel}>UNIT COST</Text>
+                                    <Text style={styles.wasteMetricCost}>₹{w.costPerUnit || 0}/{w.unitName}</Text>
+                                  </View>
+                                  <View style={styles.metricDivider} />
+                                  <View>
+                                    <Text style={styles.wasteMetricLabel}>EST. LOSS</Text>
+                                    <Text style={styles.wasteMetricLoss}>₹{w.totalEstimatedLoss.toFixed(2)}</Text>
+                                  </View>
                                 </View>
                               </View>
-                            </View>
-                          );
-                        })}
-                      </View>
+                            );
+                          })}
+                        </View>
+                        {renderPaginationBar(
+                          wastePage,
+                          totalWastePages,
+                          wasteTotalCount,
+                          'waste logs',
+                          () => {
+                            const p = Math.max(1, wastePage - 1);
+                            setWastePage(p);
+                            loadWasteLogs(p);
+                          },
+                          () => {
+                            const p = Math.min(totalWastePages, wastePage + 1);
+                            setWastePage(p);
+                            loadWasteLogs(p);
+                          }
+                        )}
+                      </>
                     )}
-                  </View>
-                )}
+                </View>
+              )}
 
                 {/* 6. INVOICE ARCHIVE TAB */}
                 {activeTab === 'history' && (
@@ -2066,12 +2281,18 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                         <TextInput
                           style={styles.searchInput}
                           value={historySearchQuery}
-                          onChangeText={setHistorySearchQuery}
+                          onChangeText={(val) => {
+                            setHistorySearchQuery(val);
+                            setArchivePage(1);
+                          }}
                           placeholder="Search bills by vendor or invoice #..."
                           placeholderTextColor="#A89E92"
                         />
                         {historySearchQuery.length > 0 && (
-                          <TouchableOpacity onPress={() => setHistorySearchQuery('')}>
+                          <TouchableOpacity onPress={() => {
+                            setHistorySearchQuery('');
+                            setArchivePage(1);
+                          }}>
                             <X size={14} color="#8C7A6B" />
                           </TouchableOpacity>
                         )}
@@ -2094,8 +2315,9 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                         </Text>
                       </View>
                     ) : (
-                      <View style={{ gap: 10 }}>
-                        {filteredInvoicesHistory.map((inv) => {
+                      <>
+                        <View style={{ gap: 10 }}>
+                          {pagedInvoicesHistory.map((inv) => {
                           const isExpanded = expandedInvoiceId === inv.invoiceLogId;
                           const isDraft = inv.status?.toLowerCase() === 'draft';
                           return (
@@ -2176,7 +2398,24 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
                           );
                         })}
                       </View>
-                    )}
+                      {renderPaginationBar(
+                        archivePage,
+                        totalArchivePages,
+                        archiveTotalCount,
+                        'invoices',
+                        () => {
+                          const p = Math.max(1, archivePage - 1);
+                          setArchivePage(p);
+                          loadHistory(p);
+                        },
+                        () => {
+                          const p = Math.min(totalArchivePages, archivePage + 1);
+                          setArchivePage(p);
+                          loadHistory(p);
+                        }
+                      )}
+                    </>
+                  )}
                   </View>
                 )}
               </>
@@ -3273,43 +3512,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '500',
     color: '#7C6F62',
-  },
-  sampleHeaderLabel: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#8C7A6B',
-    letterSpacing: 0.5,
-    marginBottom: 8,
-  },
-  sampleButtonsRow: {
-    gap: 8,
-  },
-  sampleSlipBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    backgroundColor: '#FAF7F2',
-    borderWidth: 1,
-    borderColor: '#E8E2D9',
-    borderRadius: 10,
-    padding: 10,
-  },
-  sampleIconBox: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  sampleBtnTitle: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#2D2319',
-  },
-  sampleBtnSub: {
-    fontSize: 11,
-    color: '#7C6F62',
-    marginTop: 1,
   },
   previewContainer: {
     borderRadius: 12,
@@ -5385,5 +5587,63 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#6B7280',
     marginTop: 1,
+  },
+  // Pagination Styles
+  paginationContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: '#FAF7F2',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#EFE9DE',
+    marginTop: 10,
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  paginationSummaryText: {
+    fontSize: 11,
+    color: '#7C6F62',
+  },
+  paginationControlsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  paginationBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E8E2D9',
+  },
+  paginationBtnDisabled: {
+    opacity: 0.45,
+    backgroundColor: '#F3EFEA',
+  },
+  paginationBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#2D2319',
+  },
+  paginationBtnTextDisabled: {
+    color: '#A89E92',
+  },
+  paginationPageBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: '#EAE3D7',
+  },
+  paginationPageBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#2D2319',
   },
 });

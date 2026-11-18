@@ -43,6 +43,7 @@ import {
 } from '@/types/subscription';
 import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
 import { TaxInvoiceModal, TaxInvoiceItem } from '@/components/invoice/TaxInvoiceModal';
+import { BillingSkeleton } from '@/components/common/Skeleton';
 
 export default function SubscriptionBillingPage() {
   const router = useRouter();
@@ -531,8 +532,12 @@ export default function SubscriptionBillingPage() {
             </div>
           </div>
 
-          {/* Active Subscription Overview & Details Card */}
-          <div className="rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-6 shadow-sm space-y-6">
+          {loading ? (
+            <BillingSkeleton />
+          ) : (
+            <>
+              {/* Active Subscription Overview & Details Card */}
+              <div className="rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-6 shadow-sm space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="flex items-start gap-3.5">
                 <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-amber-500/10 text-[#DE8626]">
@@ -1272,6 +1277,8 @@ export default function SubscriptionBillingPage() {
               </div>
             )}
           </div>
+            </>
+          )}
         </div>
 
         {/* GST Tax Invoice Modal */}

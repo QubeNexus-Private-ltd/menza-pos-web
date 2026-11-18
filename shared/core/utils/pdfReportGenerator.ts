@@ -17,6 +17,10 @@ export interface GenerateBusinessReportPdfOptions {
   executiveData: ExecutiveDashboard | null;
   salesSummary: DatewiseSalesSummary | null;
   topItems: TopSellingItemsReport | null;
+  paymentBreakdown?: {
+    metrics: { mode: string; total: number; count: number; percentage: number }[];
+    grandTotal: number;
+  };
   generatedBy?: string;
 }
 
@@ -90,6 +94,42 @@ export class PdfReportGenerator {
           </tr>
         `;
       })
+      .join('');
+
+    const categoryMap: Record<string, { totalRevenue: number; totalQty: number }> = {};
+    let totalCatRevenue = 0;
+    (topItems?.items || []).forEach((it) => {
+      const c = it.categoryName?.trim() || 'General';
+      if (!categoryMap[c]) categoryMap[c] = { totalRevenue: 0, totalQty: 0 };
+      categoryMap[c].totalRevenue += it.totalRevenue || 0;
+      categoryMap[c].totalQty += it.quantitySold || 0;
+      totalCatRevenue += it.totalRevenue || 0;
+    });
+
+    const categoryRows = Object.entries(categoryMap)
+      .sort((a, b) => b[1].totalRevenue - a[1].totalRevenue)
+      .map(([catName, stats]) => {
+        const pct = totalCatRevenue > 0 ? ((stats.totalRevenue / totalCatRevenue) * 100).toFixed(1) : '0.0';
+        return `
+          <tr style="border-bottom: 1px solid #E7E1DA;">
+            <td style="padding: 7px 8px; font-size: 11px; font-weight: 700; color: #1F2937;">${catName}</td>
+            <td style="padding: 7px 8px; font-size: 11px; text-align: center; color: #1F2937;">${stats.totalQty}</td>
+            <td style="padding: 7px 8px; font-size: 11px; text-align: right; font-weight: 800; color: #17845A;">₹${stats.totalRevenue.toLocaleString('en-IN')}</td>
+            <td style="padding: 7px 8px; font-size: 11px; text-align: right; font-weight: 700; color: #DE8626;">${pct}%</td>
+          </tr>
+        `;
+      })
+      .join('');
+
+    const paymentRows = (options.paymentBreakdown?.metrics || [])
+      .map((m) => `
+        <tr style="border-bottom: 1px solid #E7E1DA;">
+          <td style="padding: 7px 8px; font-size: 11px; font-weight: 700; color: #1F2937;">${m.mode}</td>
+          <td style="padding: 7px 8px; font-size: 11px; text-align: center; color: #1F2937;">${m.count}</td>
+          <td style="padding: 7px 8px; font-size: 11px; text-align: right; font-weight: 800; color: #17845A;">₹${m.total.toLocaleString('en-IN')}</td>
+          <td style="padding: 7px 8px; font-size: 11px; text-align: right; font-weight: 700; color: #DE8626;">${m.percentage}%</td>
+        </tr>
+      `)
       .join('');
 
     return `
@@ -314,6 +354,50 @@ export class PdfReportGenerator {
                 </thead>
                 <tbody>
                   ${dailyRows}
+                </tbody>
+              </table>
+            `
+              : ''
+          }
+
+          <!-- Payment Settlement Breakdown -->
+          ${
+            paymentRows
+              ? `
+              <div class="section-title">Payment Settlement Breakdown</div>
+              <table>
+                <thead>
+                  <tr>
+                    <th style="text-align: left;">Payment Method</th>
+                    <th style="width: 100px; text-align: center;">Bills Settled</th>
+                    <th style="width: 120px; text-align: right;">Total Collected</th>
+                    <th style="width: 80px; text-align: right;">Share</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${paymentRows}
+                </tbody>
+              </table>
+            `
+              : ''
+          }
+
+          <!-- Category Revenue Contribution -->
+          ${
+            categoryRows
+              ? `
+              <div class="section-title">Category Revenue Contribution</div>
+              <table>
+                <thead>
+                  <tr>
+                    <th style="text-align: left;">Category</th>
+                    <th style="width: 100px; text-align: center;">Dishes Sold</th>
+                    <th style="width: 120px; text-align: right;">Total Revenue</th>
+                    <th style="width: 80px; text-align: right;">Share</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${categoryRows}
                 </tbody>
               </table>
             `

@@ -45,6 +45,8 @@ import {
   Copy,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Maximize2,
   Minimize2,
   Crown,
@@ -53,6 +55,7 @@ import {
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
+import { InventoryTableSkeleton, DirectoryGridSkeleton } from '@/components/common/Skeleton';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
 import {
@@ -165,6 +168,11 @@ export default function InventoryPage() {
   // Ingredients States
   const [ingredients, setIngredients] = useState<RawIngredient[]>([]);
   const [searchTerm, setSearchTerm] = useState<string>('');
+  const [ingredientPage, setIngredientPage] = useState<number>(1);
+  const [ingredientPageSize, setIngredientPageSize] = useState<number>(25);
+  const [ingredientTotalCount, setIngredientTotalCount] = useState<number>(0);
+  const [ingredientTotalPages, setIngredientTotalPages] = useState<number>(1);
+  const [ingredientLowStockCount, setIngredientLowStockCount] = useState<number>(0);
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
   const [newIngredientName, setNewIngredientName] = useState<string>('');
   const [newUnit, setNewUnit] = useState<string>('Kg');
@@ -175,6 +183,11 @@ export default function InventoryPage() {
   // Recipes / BOM States
   const [recipes, setRecipes] = useState<MenuItemRecipe[]>([]);
   const [recipeSearchTerm, setRecipeSearchTerm] = useState<string>('');
+  const [recipePage, setRecipePage] = useState<number>(1);
+  const [recipePageSize, setRecipePageSize] = useState<number>(12);
+  const [recipeTotalCount, setRecipeTotalCount] = useState<number>(0);
+  const [recipeTotalPages, setRecipeTotalPages] = useState<number>(1);
+  const [recipeConfiguredCount, setRecipeConfiguredCount] = useState<number>(0);
   const [showRecipeModal, setShowRecipeModal] = useState<boolean>(false);
   const [selectedRecipeDish, setSelectedRecipeDish] = useState<MenuItemRecipe | null>(null);
   const [recipeDraftIngredients, setRecipeDraftIngredients] = useState<RecipeIngredientItem[]>([]);
@@ -225,10 +238,26 @@ export default function InventoryPage() {
   const [wasteNotes, setWasteNotes] = useState<string>('');
   const [wasteLogs, setWasteLogs] = useState<WasteLogItem[]>([]);
   const [wasteSearchTerm, setWasteSearchTerm] = useState<string>('');
+  const [wastePage, setWastePage] = useState<number>(1);
+  const [wastePageSize, setWastePageSize] = useState<number>(20);
+  const [wasteTotalCount, setWasteTotalCount] = useState<number>(0);
+  const [wasteTotalPages, setWasteTotalPages] = useState<number>(1);
+  const [wasteTotalLoss, setWasteTotalLoss] = useState<number>(0);
 
   // Past Invoices
   const [historyInvoices, setHistoryInvoices] = useState<ScannedInvoiceResult[]>([]);
   const [historySearchTerm, setHistorySearchTerm] = useState<string>('');
+  const [historyPage, setHistoryPage] = useState<number>(1);
+  const [historyPageSize, setHistoryPageSize] = useState<number>(15);
+  const [historyTotalCount, setHistoryTotalCount] = useState<number>(0);
+  const [historyTotalPages, setHistoryTotalPages] = useState<number>(1);
+  const [expandedInvoiceId, setExpandedInvoiceId] = useState<number | null>(null);
+  const [viewReceiptModalUrl, setViewReceiptModalUrl] = useState<string | null>(null);
+
+  const [ingredientsLoading, setIngredientsLoading] = useState<boolean>(false);
+  const [historyLoading, setHistoryLoading] = useState<boolean>(false);
+  const [wasteLoading, setWasteLoading] = useState<boolean>(false);
+  const [recipesLoading, setRecipesLoading] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -294,15 +323,145 @@ export default function InventoryPage() {
     }
   }, [restId, isInventoryAllowed, activeTab, ledgerPage, ledgerPageSize, movementIngredientFilter, movementTypeFilter, movementSearchTerm]);
 
+  const loadIngredients = useCallback(async (targetPage?: number) => {
+    if (restId <= 0) return;
+    try {
+      setIngredientsLoading(true);
+      const pageToLoad = typeof targetPage === 'number' ? targetPage : ingredientPage;
+      const effectiveSize = ingredientPageSize === 0 ? 1000 : ingredientPageSize;
+      const data = await WebInventoryService.getPagedIngredients(restId, {
+        page: pageToLoad,
+        pageSize: effectiveSize,
+        searchTerm: searchTerm.trim() || undefined,
+      });
+      setIngredients(data.items || []);
+      setIngredientTotalCount(data.totalCount || 0);
+      setIngredientTotalPages(data.totalPages || 1);
+      if (typeof data.lowStockCount === 'number') {
+        setIngredientLowStockCount(data.lowStockCount);
+      }
+    } catch (err) {
+      console.error('Failed to load ingredients:', err);
+    } finally {
+      setIngredientsLoading(false);
+    }
+  }, [restId, ingredientPage, ingredientPageSize, searchTerm]);
+
+  const loadHistory = useCallback(async (targetPage?: number) => {
+    if (restId <= 0) return;
+    try {
+      setHistoryLoading(true);
+      const pageToLoad = typeof targetPage === 'number' ? targetPage : historyPage;
+      const effectiveSize = historyPageSize === 0 ? 1000 : historyPageSize;
+      const data = await WebInventoryService.getPagedInvoices(restId, {
+        page: pageToLoad,
+        pageSize: effectiveSize,
+        searchTerm: historySearchTerm.trim() || undefined,
+      });
+      setHistoryInvoices(data.items || []);
+      setHistoryTotalCount(data.totalCount || 0);
+      setHistoryTotalPages(data.totalPages || 1);
+    } catch (err) {
+      console.error('Failed to load invoice history:', err);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [restId, historyPage, historyPageSize, historySearchTerm]);
+
+  const loadWasteLogs = useCallback(async (targetPage?: number) => {
+    if (restId <= 0) return;
+    try {
+      setWasteLoading(true);
+      const pageToLoad = typeof targetPage === 'number' ? targetPage : wastePage;
+      const effectiveSize = wastePageSize === 0 ? 1000 : wastePageSize;
+      const data = await WebInventoryService.getPagedWasteLogs(restId, {
+        page: pageToLoad,
+        pageSize: effectiveSize,
+        searchTerm: wasteSearchTerm.trim() || undefined,
+      });
+      setWasteLogs(data.items || []);
+      setWasteTotalCount(data.totalCount || 0);
+      setWasteTotalPages(data.totalPages || 1);
+      if (typeof data.totalEstimatedLoss === 'number') {
+        setWasteTotalLoss(data.totalEstimatedLoss);
+      }
+    } catch (err) {
+      console.error('Failed to load waste logs:', err);
+    } finally {
+      setWasteLoading(false);
+    }
+  }, [restId, wastePage, wastePageSize, wasteSearchTerm]);
+
+  const loadRecipes = useCallback(async (targetPage?: number) => {
+    if (restId <= 0) return;
+    try {
+      setRecipesLoading(true);
+      const pageToLoad = typeof targetPage === 'number' ? targetPage : recipePage;
+      const effectiveSize = recipePageSize === 0 ? 1000 : recipePageSize;
+      const data = await WebInventoryService.getPagedRecipes(restId, {
+        page: pageToLoad,
+        pageSize: effectiveSize,
+        searchTerm: recipeSearchTerm.trim() || undefined,
+      });
+      setRecipes(data.items || []);
+      setRecipeTotalCount(data.totalCount || 0);
+      setRecipeTotalPages(data.totalPages || 1);
+      if (typeof data.configuredCount === 'number') {
+        setRecipeConfiguredCount(data.configuredCount);
+      }
+    } catch (err) {
+      console.error('Failed to load recipes:', err);
+    } finally {
+      setRecipesLoading(false);
+    }
+  }, [restId, recipePage, recipePageSize, recipeSearchTerm]);
+
   // Load initial reference datasets
   useEffect(() => {
     if (restId > 0 && isInventoryAllowed) {
-      loadIngredients();
-      loadHistory();
-      loadWasteLogs();
-      loadRecipes();
+      loadIngredients(1);
+      loadHistory(1);
+      loadWasteLogs(1);
+      loadRecipes(1);
     }
-  }, [restId, isInventoryAllowed]);
+  }, [restId, isInventoryAllowed, loadIngredients, loadHistory, loadWasteLogs, loadRecipes]);
+
+  // Debounced module loaders on page, size or search change
+  useEffect(() => {
+    if (restId > 0 && isInventoryAllowed && activeTab === 'ingredients') {
+      const timer = setTimeout(() => {
+        loadIngredients();
+      }, 250);
+      return () => clearTimeout(timer);
+    }
+  }, [restId, isInventoryAllowed, activeTab, ingredientPage, ingredientPageSize, searchTerm, loadIngredients]);
+
+  useEffect(() => {
+    if (restId > 0 && isInventoryAllowed && activeTab === 'recipes') {
+      const timer = setTimeout(() => {
+        loadRecipes();
+      }, 250);
+      return () => clearTimeout(timer);
+    }
+  }, [restId, isInventoryAllowed, activeTab, recipePage, recipePageSize, recipeSearchTerm, loadRecipes]);
+
+  useEffect(() => {
+    if (restId > 0 && isInventoryAllowed && activeTab === 'waste') {
+      const timer = setTimeout(() => {
+        loadWasteLogs();
+      }, 250);
+      return () => clearTimeout(timer);
+    }
+  }, [restId, isInventoryAllowed, activeTab, wastePage, wastePageSize, wasteSearchTerm, loadWasteLogs]);
+
+  useEffect(() => {
+    if (restId > 0 && isInventoryAllowed && activeTab === 'history') {
+      const timer = setTimeout(() => {
+        loadHistory();
+      }, 250);
+      return () => clearTimeout(timer);
+    }
+  }, [restId, isInventoryAllowed, activeTab, historyPage, historyPageSize, historySearchTerm, loadHistory]);
 
   // Global keyboard shortcut '/' to focus search & 'Escape' to clear
   useEffect(() => {
@@ -329,42 +488,6 @@ export default function InventoryPage() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [activeTab]);
-
-  const loadIngredients = async () => {
-    try {
-      const data = await WebInventoryService.getIngredients(restId);
-      setIngredients(data || []);
-    } catch (err) {
-      console.error('Failed to load ingredients:', err);
-    }
-  };
-
-  const loadHistory = async () => {
-    try {
-      const data = await WebInventoryService.getInvoices(restId);
-      setHistoryInvoices(data || []);
-    } catch (err) {
-      console.error('Failed to load invoice history:', err);
-    }
-  };
-
-  const loadWasteLogs = async () => {
-    try {
-      const data = await WebInventoryService.getWasteLogs(restId);
-      setWasteLogs(data || []);
-    } catch (err) {
-      console.error('Failed to load waste logs:', err);
-    }
-  };
-
-  const loadRecipes = async () => {
-    try {
-      const data = await WebInventoryService.getRecipes(restId);
-      setRecipes(data || []);
-    } catch (err) {
-      console.error('Failed to load recipes:', err);
-    }
-  };
 
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -413,6 +536,16 @@ export default function InventoryPage() {
     } finally {
       setScanning(false);
     }
+  };
+
+  const handleReviewDraftInvoice = (inv: ScannedInvoiceResult) => {
+    setScannedBill(inv);
+    setVendorName(inv.vendorName || 'Mandi / Local Supplier');
+    setInvoiceNumber(inv.invoiceNumber || (inv.invoiceLogId ? `Slip #${inv.invoiceLogId}` : ''));
+    setInvoiceDate(inv.invoiceDate ? inv.invoiceDate.substring(0, 10) : new Date().toISOString().substring(0, 10));
+    setEditableItems(inv.items ? inv.items.map((i) => ({ ...i })) : []);
+    setActiveTab('scanner');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleItemChange = (index: number, field: keyof ScannedInvoiceItem, value: any) => {
@@ -738,6 +871,19 @@ export default function InventoryPage() {
     }
     return movementLogs;
   }, [movementLogs, movementSortOrder]);
+
+  // Paged Slices & Totals for All Modules (Backed by Server-Side Paging)
+  const totalIngredientPages = ingredientTotalPages;
+  const pagedIngredients = ingredients;
+
+  const totalRecipePages = recipeTotalPages;
+  const pagedRecipes = recipes;
+
+  const totalWastePages = wasteTotalPages;
+  const pagedWasteLogs = wasteLogs;
+
+  const totalHistoryPages = historyTotalPages;
+  const pagedHistoryInvoices = historyInvoices;
 
   const handleExportLedgerCsv = async () => {
     try {
@@ -1493,13 +1639,19 @@ export default function InventoryPage() {
                   <input
                     type="text"
                     value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
+                    onChange={(e) => {
+                      setSearchTerm(e.target.value);
+                      setIngredientPage(1);
+                    }}
                     placeholder="Search raw ingredients, chicken, paneer, tomatoes..."
                     className="w-full pl-9 pr-9 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs sm:text-sm text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
                   />
                   {searchTerm && (
                     <button
-                      onClick={() => setSearchTerm('')}
+                      onClick={() => {
+                        setSearchTerm('');
+                        setIngredientPage(1);
+                      }}
                       className="absolute right-2.5 top-2.5 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200"
                       title="Clear search"
                     >
@@ -1509,6 +1661,20 @@ export default function InventoryPage() {
                 </div>
 
                 <div className="flex items-center gap-2">
+                  <select
+                    value={ingredientPageSize}
+                    onChange={(e) => {
+                      setIngredientPageSize(Number(e.target.value));
+                      setIngredientPage(1);
+                    }}
+                    className="px-2.5 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs font-semibold text-neutral-700 dark:text-neutral-300 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    title="Ingredients per page"
+                  >
+                    <option value={15}>15 / page</option>
+                    <option value={25}>25 / page</option>
+                    <option value={50}>50 / page</option>
+                    <option value={0}>All</option>
+                  </select>
                   <button
                     onClick={() => setShowAddModal(true)}
                     className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs shadow-sm"
@@ -1546,14 +1712,20 @@ export default function InventoryPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-neutral-200 dark:divide-neutral-700">
-                    {filteredIngredients.length === 0 ? (
+                    {ingredientsLoading ? (
+                      <tr>
+                        <td colSpan={7} className="p-0">
+                          <InventoryTableSkeleton rows={6} />
+                        </td>
+                      </tr>
+                    ) : ingredients.length === 0 ? (
                       <tr>
                         <td colSpan={7} className="p-8 text-center text-neutral-500 font-medium">
                           {searchTerm ? `No raw ingredients match "${searchTerm}".` : 'No raw materials added yet.'}
                         </td>
                       </tr>
                     ) : (
-                      filteredIngredients.map((item) => {
+                      pagedIngredients.map((item) => {
                       const isLow = item.currentStock <= item.minimumReorderLevel;
                       const ratio = item.minimumReorderLevel > 0 
                         ? Math.min(100, Math.round((item.currentStock / (item.minimumReorderLevel * 2)) * 100))
@@ -1609,6 +1781,50 @@ export default function InventoryPage() {
                   </tbody>
                 </table>
               </div>
+
+              {/* Ingredients Pagination Footer */}
+              {ingredientTotalCount > 0 && (
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-2xl bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 text-xs">
+                  <div className="text-neutral-500 dark:text-neutral-400 font-medium tabular-nums">
+                    {ingredientPageSize === 0 ? (
+                      <span>Showing all <strong>{ingredientTotalCount}</strong> ingredients</span>
+                    ) : (
+                      <span>
+                        Showing{' '}
+                        <strong>{(ingredientPage - 1) * ingredientPageSize + 1}</strong> –{' '}
+                        <strong>{Math.min(ingredientPage * ingredientPageSize, ingredientTotalCount)}</strong> of{' '}
+                        <strong>{ingredientTotalCount}</strong> ingredients
+                      </span>
+                    )}
+                  </div>
+
+                  {ingredientPageSize > 0 && totalIngredientPages > 1 && (
+                    <div className="flex items-center gap-2 self-center sm:self-auto">
+                      <button
+                        onClick={() => setIngredientPage((p) => Math.max(1, p - 1))}
+                        disabled={ingredientPage === 1}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold transition-all"
+                      >
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                        <span>Previous</span>
+                      </button>
+
+                      <span className="px-3 py-1 rounded-xl bg-neutral-100 dark:bg-neutral-700 text-neutral-700 dark:text-neutral-300 font-mono font-bold text-xs tabular-nums">
+                        {ingredientPage} / {totalIngredientPages}
+                      </span>
+
+                      <button
+                        onClick={() => setIngredientPage((p) => Math.min(totalIngredientPages, p + 1))}
+                        disabled={ingredientPage === totalIngredientPages}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold transition-all"
+                      >
+                        <span>Next</span>
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -1621,13 +1837,19 @@ export default function InventoryPage() {
                   <input
                     type="text"
                     value={recipeSearchTerm}
-                    onChange={(e) => setRecipeSearchTerm(e.target.value)}
+                    onChange={(e) => {
+                      setRecipeSearchTerm(e.target.value);
+                      setRecipePage(1);
+                    }}
                     placeholder="Search by dish name, category, or raw ingredient..."
                     className="w-full pl-9 pr-9 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs sm:text-sm text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
                   />
                   {recipeSearchTerm && (
                     <button
-                      onClick={() => setRecipeSearchTerm('')}
+                      onClick={() => {
+                        setRecipeSearchTerm('');
+                        setRecipePage(1);
+                      }}
                       className="absolute right-2.5 top-2.5 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200"
                       title="Clear search"
                     >
@@ -1636,19 +1858,38 @@ export default function InventoryPage() {
                   )}
                 </div>
 
-                <div className="text-xs font-semibold text-neutral-500">
-                  {recipes.filter((r) => r.ingredientsCount > 0).length} of {recipes.length} dishes linked with recipes
+                <div className="flex items-center gap-3">
+                  <select
+                    value={recipePageSize}
+                    onChange={(e) => {
+                      setRecipePageSize(Number(e.target.value));
+                      setRecipePage(1);
+                    }}
+                    className="px-2.5 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs font-semibold text-neutral-700 dark:text-neutral-300 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    title="Dishes per page"
+                  >
+                    <option value={9}>9 / page</option>
+                    <option value={12}>12 / page</option>
+                    <option value={24}>24 / page</option>
+                    <option value={0}>All</option>
+                  </select>
+
+                  <div className="text-xs font-semibold text-neutral-500">
+                    {recipeConfiguredCount > 0 ? recipeConfiguredCount : recipes.filter((r) => r.ingredientsCount > 0).length} of {recipeTotalCount > 0 ? recipeTotalCount : recipes.length} dishes linked with recipes
+                  </div>
                 </div>
               </div>
 
               {/* Recipe Cards Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredRecipes.length === 0 ? (
-                  <div className="col-span-full p-8 text-center rounded-3xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-500 font-medium">
-                    {recipeSearchTerm ? `No recipes match "${recipeSearchTerm}".` : 'No menu dishes found.'}
-                  </div>
-                ) : (
-                  filteredRecipes.map((dish) => {
+              {recipesLoading ? (
+                <DirectoryGridSkeleton count={6} />
+              ) : recipes.length === 0 ? (
+                <div className="p-8 text-center rounded-3xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-500 font-medium">
+                  {recipeSearchTerm ? `No recipes match "${recipeSearchTerm}".` : 'No menu dishes found.'}
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {pagedRecipes.map((dish) => {
                   const isConfigured = dish.ingredientsCount > 0;
                   return (
                     <div
@@ -1761,8 +2002,53 @@ export default function InventoryPage() {
                       </div>
                     </div>
                   );
-                }))}
+                })}
               </div>
+            )}
+
+              {/* Recipes Pagination Footer */}
+              {recipeTotalCount > 0 && (
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-2xl bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 text-xs">
+                  <div className="text-neutral-500 dark:text-neutral-400 font-medium tabular-nums">
+                    {recipePageSize === 0 ? (
+                      <span>Showing all <strong>{recipeTotalCount}</strong> dishes</span>
+                    ) : (
+                      <span>
+                        Showing{' '}
+                        <strong>{(recipePage - 1) * recipePageSize + 1}</strong> –{' '}
+                        <strong>{Math.min(recipePage * recipePageSize, recipeTotalCount)}</strong> of{' '}
+                        <strong>{recipeTotalCount}</strong> dishes
+                      </span>
+                    )}
+                  </div>
+
+                  {recipePageSize > 0 && totalRecipePages > 1 && (
+                    <div className="flex items-center gap-2 self-center sm:self-auto">
+                      <button
+                        onClick={() => setRecipePage((p) => Math.max(1, p - 1))}
+                        disabled={recipePage === 1}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold transition-all"
+                      >
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                        <span>Previous</span>
+                      </button>
+
+                      <span className="px-3 py-1 rounded-xl bg-neutral-100 dark:bg-neutral-700 text-neutral-700 dark:text-neutral-300 font-mono font-bold text-xs tabular-nums">
+                        {recipePage} / {totalRecipePages}
+                      </span>
+
+                      <button
+                        onClick={() => setRecipePage((p) => Math.min(totalRecipePages, p + 1))}
+                        disabled={recipePage === totalRecipePages}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold transition-all"
+                      >
+                        <span>Next</span>
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -2652,13 +2938,19 @@ export default function InventoryPage() {
                   <input
                     type="text"
                     value={wasteSearchTerm}
-                    onChange={(e) => setWasteSearchTerm(e.target.value)}
+                    onChange={(e) => {
+                      setWasteSearchTerm(e.target.value);
+                      setWastePage(1);
+                    }}
                     placeholder="Search waste logs by ingredient, reason, or notes..."
                     className="w-full pl-9 pr-9 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs sm:text-sm text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-rose-500"
                   />
                   {wasteSearchTerm && (
                     <button
-                      onClick={() => setWasteSearchTerm('')}
+                      onClick={() => {
+                        setWasteSearchTerm('');
+                        setWastePage(1);
+                      }}
                       className="absolute right-2.5 top-2.5 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200"
                       title="Clear search"
                     >
@@ -2667,18 +2959,35 @@ export default function InventoryPage() {
                   )}
                 </div>
 
-                <button
-                  onClick={() => {
-                    if (ingredients.length > 0) {
-                      setWasteIngredientId(ingredients[0].id);
-                      setShowWasteModal(true);
-                    }
-                  }}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-rose-500 hover:bg-rose-600 text-white font-bold text-xs shadow-sm"
-                >
-                  <Plus className="w-4 h-4" />
-                  Record Kitchen Loss
-                </button>
+                <div className="flex items-center gap-3">
+                  <select
+                    value={wastePageSize}
+                    onChange={(e) => {
+                      setWastePageSize(Number(e.target.value));
+                      setWastePage(1);
+                    }}
+                    className="px-2.5 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs font-semibold text-neutral-700 dark:text-neutral-300 focus:outline-none focus:ring-2 focus:ring-rose-500"
+                    title="Waste records per page"
+                  >
+                    <option value={15}>15 / page</option>
+                    <option value={25}>25 / page</option>
+                    <option value={50}>50 / page</option>
+                    <option value={0}>All</option>
+                  </select>
+
+                  <button
+                    onClick={() => {
+                      if (ingredients.length > 0) {
+                        setWasteIngredientId(ingredients[0].id);
+                        setShowWasteModal(true);
+                      }
+                    }}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-rose-500 hover:bg-rose-600 text-white font-bold text-xs shadow-sm"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Record Kitchen Loss
+                  </button>
+                </div>
               </div>
 
               {/* Waste Table */}
@@ -2696,14 +3005,20 @@ export default function InventoryPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-neutral-200 dark:divide-neutral-700">
-                    {filteredWasteLogs.length === 0 ? (
+                    {wasteLoading ? (
+                      <tr>
+                        <td colSpan={7} className="p-0">
+                          <InventoryTableSkeleton rows={6} />
+                        </td>
+                      </tr>
+                    ) : wasteLogs.length === 0 ? (
                       <tr>
                         <td colSpan={7} className="p-8 text-center text-neutral-500 font-medium">
                           No spoilage or waste records found. Use the &quot;Record Kitchen Loss&quot; button to track waste.
                         </td>
                       </tr>
                     ) : (
-                      filteredWasteLogs.map((log) => (
+                      pagedWasteLogs.map((log) => (
                         <tr key={log.id} className="hover:bg-neutral-50/50 dark:hover:bg-neutral-700/30">
                           <td className="p-3.5 text-neutral-500 font-mono text-[11px]">
                             {log.loggedAtUtc
@@ -2753,30 +3068,123 @@ export default function InventoryPage() {
                   </tbody>
                 </table>
               </div>
+
+              {/* Waste Pagination Footer */}
+              {wasteTotalCount > 0 && (
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-2xl bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 text-xs">
+                  <div className="text-neutral-500 dark:text-neutral-400 font-medium tabular-nums">
+                    {wastePageSize === 0 ? (
+                      <span>Showing all <strong>{wasteTotalCount}</strong> waste logs</span>
+                    ) : (
+                      <span>
+                        Showing{' '}
+                        <strong>{(wastePage - 1) * wastePageSize + 1}</strong> –{' '}
+                        <strong>{Math.min(wastePage * wastePageSize, wasteTotalCount)}</strong> of{' '}
+                        <strong>{wasteTotalCount}</strong> waste logs
+                      </span>
+                    )}
+                  </div>
+
+                  {wastePageSize > 0 && totalWastePages > 1 && (
+                    <div className="flex items-center gap-2 self-center sm:self-auto">
+                      <button
+                        onClick={() => setWastePage((p) => Math.max(1, p - 1))}
+                        disabled={wastePage === 1}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold transition-all"
+                      >
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                        <span>Previous</span>
+                      </button>
+
+                      <span className="px-3 py-1 rounded-xl bg-neutral-100 dark:bg-neutral-700 text-neutral-700 dark:text-neutral-300 font-mono font-bold text-xs tabular-nums">
+                        {wastePage} / {totalWastePages}
+                      </span>
+
+                      <button
+                        onClick={() => setWastePage((p) => Math.min(totalWastePages, p + 1))}
+                        disabled={wastePage === totalWastePages}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold transition-all"
+                      >
+                        <span>Next</span>
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
           {/* TAB 6: INVOICES ARCHIVE */}
           {activeTab === 'history' && (
             <div className="space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-neutral-200 dark:border-neutral-700">
+                <div>
+                  <h3 className="text-lg font-bold text-neutral-900 dark:text-white flex items-center gap-2">
+                    <Receipt className="w-5 h-5 text-amber-500" />
+                    Scanned Invoice Archive
+                  </h3>
+                  <p className="text-xs text-neutral-500 dark:text-neutral-400">
+                    Historical paper receipts, mandi parchis (कच्चा पर्चा) & dairy bills
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => loadHistory()}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-xs font-bold text-neutral-700 dark:text-neutral-300 transition-colors"
+                    title="Refresh invoice records"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 text-amber-500" />
+                    Refresh
+                  </button>
+                </div>
+              </div>
+
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="relative flex-1 max-w-md">
                   <Search className="w-4 h-4 text-neutral-400 absolute left-3 top-3" />
                   <input
                     type="text"
                     value={historySearchTerm}
-                    onChange={(e) => setHistorySearchTerm(e.target.value)}
+                    onChange={(e) => {
+                      setHistorySearchTerm(e.target.value);
+                      setHistoryPage(1);
+                    }}
                     placeholder="Search invoices by vendor, invoice #, ingredient..."
-                    className="w-full pl-9 pr-4 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs sm:text-sm text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full pl-9 pr-9 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs sm:text-sm text-neutral-900 dark:text-white placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
                   />
                   {historySearchTerm && (
                     <button
-                      onClick={() => setHistorySearchTerm('')}
+                      onClick={() => {
+                        setHistorySearchTerm('');
+                        setHistoryPage(1);
+                      }}
                       className="absolute right-2.5 top-2.5 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200"
                     >
                       <X className="w-4 h-4" />
                     </button>
                   )}
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <select
+                    value={historyPageSize}
+                    onChange={(e) => {
+                      setHistoryPageSize(Number(e.target.value));
+                      setHistoryPage(1);
+                    }}
+                    className="px-2.5 py-2 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-xs font-semibold text-neutral-700 dark:text-neutral-300 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    title="Invoices per page"
+                  >
+                    <option value={10}>10 / page</option>
+                    <option value={20}>20 / page</option>
+                    <option value={50}>50 / page</option>
+                    <option value={0}>All</option>
+                  </select>
+
+                  <div className="text-xs font-semibold text-neutral-500">
+                    {historyTotalCount > 0 ? historyTotalCount : historyInvoices.length} invoices archived
+                  </div>
                 </div>
               </div>
 
@@ -2784,60 +3192,260 @@ export default function InventoryPage() {
                 <table className="w-full text-left text-xs">
                   <thead className="bg-neutral-50 dark:bg-neutral-900/50 uppercase tracking-wider text-neutral-500 font-bold border-b border-neutral-200 dark:border-neutral-700">
                     <tr>
+                      <th className="p-3.5 w-10"></th>
                       <th className="p-3.5">Invoice #</th>
                       <th className="p-3.5">Vendor / Mandi Supplier</th>
                       <th className="p-3.5">Invoice Date</th>
                       <th className="p-3.5">Total Amount (₹)</th>
-                      <th className="p-3.5">Items Count</th>
+                      <th className="p-3.5">Items</th>
                       <th className="p-3.5">Status</th>
                       <th className="p-3.5">AI Confidence</th>
+                      <th className="p-3.5 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-neutral-200 dark:divide-neutral-700">
-                    {filteredHistoryInvoices.length === 0 ? (
+                    {historyLoading ? (
                       <tr>
-                        <td colSpan={7} className="p-8 text-center text-neutral-500 font-medium">
+                        <td colSpan={9} className="p-0">
+                          <InventoryTableSkeleton rows={6} />
+                        </td>
+                      </tr>
+                    ) : historyInvoices.length === 0 ? (
+                      <tr>
+                        <td colSpan={9} className="p-8 text-center text-neutral-500 font-medium">
                           {historySearchTerm ? 'No archived invoices match your search.' : 'No past scanned invoices found. Scan a bill to populate archive.'}
                         </td>
                       </tr>
                     ) : (
-                      filteredHistoryInvoices.map((inv) => (
-                        <tr key={inv.invoiceLogId} className="hover:bg-neutral-50/50 dark:hover:bg-neutral-700/30">
-                          <td className="p-3.5 font-bold text-neutral-900 dark:text-white font-mono">
-                            {inv.invoiceNumber || `Slip #${inv.invoiceLogId}`}
-                          </td>
-                          <td className="p-3.5 font-bold text-neutral-800 dark:text-neutral-200">
-                            {inv.vendorName || 'Mandi / Local Supplier'}
-                          </td>
-                          <td className="p-3.5 text-neutral-500">
-                            {inv.invoiceDate ? new Date(inv.invoiceDate).toLocaleDateString() : '—'}
-                          </td>
-                          <td className="p-3.5 font-black text-sm text-neutral-900 dark:text-white">
-                            ₹{inv.totalAmount?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
-                          </td>
-                          <td className="p-3.5 text-neutral-500 font-medium">
-                            {inv.items?.length || 0} items
-                          </td>
-                          <td className="p-3.5">
-                            <span
-                              className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
-                                inv.status === 'Confirmed'
-                                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
-                                  : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20'
-                              }`}
+                      pagedHistoryInvoices.map((inv) => {
+                        const isExpanded = expandedInvoiceId === inv.invoiceLogId;
+                        const isDraft = inv.status?.toLowerCase() === 'draft';
+                        return (
+                          <React.Fragment key={inv.invoiceLogId}>
+                            <tr
+                              onClick={() => setExpandedInvoiceId(isExpanded ? null : inv.invoiceLogId)}
+                              className={`cursor-pointer transition-colors ${
+                                isExpanded
+                                  ? 'bg-amber-500/5 dark:bg-amber-500/10'
+                                  : 'hover:bg-neutral-50/50 dark:hover:bg-neutral-700/30'
+                              } ${isDraft ? 'border-l-4 border-l-amber-500' : ''}`}
                             >
-                              {inv.status}
-                            </span>
-                          </td>
-                          <td className="p-3.5 text-neutral-500 font-semibold">
-                            {Math.round((inv.confidenceScore || 0) * 100)}%
-                          </td>
-                        </tr>
-                      ))
+                              <td className="p-3.5 text-neutral-400">
+                                {isExpanded ? (
+                                  <ChevronUp className="w-4 h-4 text-amber-500" />
+                                ) : (
+                                  <ChevronDown className="w-4 h-4" />
+                                )}
+                              </td>
+                              <td className="p-3.5 font-bold text-neutral-900 dark:text-white font-mono">
+                                {inv.invoiceNumber || `Slip #${inv.invoiceLogId}`}
+                              </td>
+                              <td className="p-3.5 font-bold text-neutral-800 dark:text-neutral-200">
+                                {inv.vendorName || 'Mandi / Local Supplier'}
+                              </td>
+                              <td className="p-3.5 text-neutral-500">
+                                {inv.invoiceDate ? new Date(inv.invoiceDate).toLocaleDateString() : '—'}
+                              </td>
+                              <td className="p-3.5 font-black text-sm text-neutral-900 dark:text-white">
+                                ₹{inv.totalAmount?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                              </td>
+                              <td className="p-3.5 text-neutral-600 dark:text-neutral-300 font-semibold">
+                                {inv.items?.length || 0} line items
+                              </td>
+                              <td className="p-3.5">
+                                <span
+                                  className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
+                                    isDraft
+                                      ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20'
+                                      : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                                  }`}
+                                >
+                                  {isDraft ? 'DRAFT' : 'CONFIRMED'}
+                                </span>
+                              </td>
+                              <td className="p-3.5 text-neutral-500 font-semibold">
+                                {Math.round((inv.confidenceScore || 0) * 100)}%
+                              </td>
+                              <td className="p-3.5 text-right space-x-2" onClick={(e) => e.stopPropagation()}>
+                                {isDraft && (
+                                  <button
+                                    onClick={() => handleReviewDraftInvoice(inv)}
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs shadow-sm transition-all"
+                                    title="Review & Approve Draft Invoice into Inventory Stock"
+                                  >
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                    Review & Approve
+                                  </button>
+                                )}
+                                {inv.scannedImageUrl && (
+                                  <button
+                                    onClick={() => setViewReceiptModalUrl(inv.scannedImageUrl || null)}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-700 text-xs font-semibold text-neutral-700 dark:text-neutral-300 transition-colors"
+                                    title="View original scanned receipt image"
+                                  >
+                                    <Eye className="w-3.5 h-3.5 text-neutral-500" />
+                                    Slip
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => setExpandedInvoiceId(isExpanded ? null : inv.invoiceLogId)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-700 text-xs font-semibold text-neutral-700 dark:text-neutral-300 transition-colors"
+                                >
+                                  {isExpanded ? 'Hide' : 'Details'}
+                                </button>
+                              </td>
+                            </tr>
+
+                            {/* Expanded Row: Extracted Line Items Detail */}
+                            {isExpanded && (
+                              <tr className="bg-neutral-50/70 dark:bg-neutral-900/60">
+                                <td colSpan={9} className="p-4 sm:p-6">
+                                  <div className="rounded-2xl border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 p-4 space-y-4 shadow-sm">
+                                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-neutral-100 dark:border-neutral-700">
+                                      <div className="flex items-center gap-2">
+                                        <FileText className="w-4 h-4 text-amber-500" />
+                                        <h4 className="font-bold text-xs uppercase tracking-wider text-neutral-700 dark:text-neutral-200">
+                                          Extracted Line Items Detail ({inv.items?.length || 0})
+                                        </h4>
+                                      </div>
+                                      <div className="flex items-center gap-3">
+                                        {inv.scannedImageUrl && (
+                                          <button
+                                            onClick={() => setViewReceiptModalUrl(inv.scannedImageUrl || null)}
+                                            className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400 hover:underline font-semibold"
+                                          >
+                                            <Eye className="w-3.5 h-3.5" />
+                                            View Original Paper Bill Image
+                                          </button>
+                                        )}
+                                        {isDraft && (
+                                          <button
+                                            onClick={() => handleReviewDraftInvoice(inv)}
+                                            className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs shadow-sm"
+                                          >
+                                            <CheckCircle2 className="w-3.5 h-3.5" />
+                                            Review & Inward to Stock
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    {Array.isArray(inv.items) && inv.items.length > 0 ? (
+                                      <div className="overflow-x-auto">
+                                        <table className="w-full text-left text-xs">
+                                          <thead>
+                                            <tr className="border-b border-neutral-100 dark:border-neutral-700 text-[11px] font-bold text-neutral-400 uppercase">
+                                              <th className="py-2 pr-3">#</th>
+                                              <th className="py-2 px-3">Raw Scanned Slip Item</th>
+                                              <th className="py-2 px-3">Matched Raw Material</th>
+                                              <th className="py-2 px-3">Quantity</th>
+                                              <th className="py-2 px-3">Rate / Unit (₹)</th>
+                                              <th className="py-2 pl-3 text-right">Line Total (₹)</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody className="divide-y divide-neutral-100 dark:divide-neutral-700/50">
+                                            {inv.items.map((it, idx) => (
+                                              <tr key={it.id || idx} className="hover:bg-neutral-50/50 dark:hover:bg-neutral-700/20">
+                                                <td className="py-2.5 pr-3 text-neutral-400 font-mono text-[11px]">
+                                                  {idx + 1}
+                                                </td>
+                                                <td className="py-2.5 px-3 font-semibold text-neutral-900 dark:text-white">
+                                                  {it.rawScannedText || it.matchedIngredientName || 'Item'}
+                                                </td>
+                                                <td className="py-2.5 px-3">
+                                                  {it.matchedIngredientName ? (
+                                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                                                      <Check className="w-3 h-3" />
+                                                      {it.matchedIngredientName}
+                                                    </span>
+                                                  ) : (
+                                                    <span className="text-neutral-400 italic text-[11px]">Unmatched</span>
+                                                  )}
+                                                </td>
+                                                <td className="py-2.5 px-3 font-black text-neutral-800 dark:text-neutral-200">
+                                                  {it.quantity} {it.unitName}
+                                                </td>
+                                                <td className="py-2.5 px-3 text-neutral-600 dark:text-neutral-400 font-medium">
+                                                  ₹{it.ratePerUnit?.toFixed(2)} / {it.unitName}
+                                                </td>
+                                                <td className="py-2.5 pl-3 text-right font-black text-neutral-900 dark:text-white">
+                                                  ₹{it.lineTotal?.toFixed(2)}
+                                                </td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                          <tfoot>
+                                            <tr className="border-t border-neutral-200 dark:border-neutral-700 font-black text-xs">
+                                              <td colSpan={5} className="pt-3 text-right uppercase text-neutral-500">
+                                                Total Intake Amount:
+                                              </td>
+                                              <td className="pt-3 pl-3 text-right text-base text-neutral-900 dark:text-white">
+                                                ₹{inv.totalAmount?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                              </td>
+                                            </tr>
+                                          </tfoot>
+                                        </table>
+                                      </div>
+                                    ) : (
+                                      <p className="text-xs text-neutral-500 italic py-2">
+                                        No item details available for this invoice record.
+                                      </p>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
               </div>
+
+              {/* Invoices Archive Pagination Footer */}
+              {historyTotalCount > 0 && (
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-2xl bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 text-xs">
+                  <div className="text-neutral-500 dark:text-neutral-400 font-medium tabular-nums">
+                    {historyPageSize === 0 ? (
+                      <span>Showing all <strong>{historyTotalCount}</strong> invoices</span>
+                    ) : (
+                      <span>
+                        Showing{' '}
+                        <strong>{(historyPage - 1) * historyPageSize + 1}</strong> –{' '}
+                        <strong>{Math.min(historyPage * historyPageSize, historyTotalCount)}</strong> of{' '}
+                        <strong>{historyTotalCount}</strong> invoices
+                      </span>
+                    )}
+                  </div>
+
+                  {historyPageSize > 0 && totalHistoryPages > 1 && (
+                    <div className="flex items-center gap-2 self-center sm:self-auto">
+                      <button
+                        onClick={() => setHistoryPage((p) => Math.max(1, p - 1))}
+                        disabled={historyPage === 1}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold transition-all"
+                      >
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                        <span>Previous</span>
+                      </button>
+
+                      <span className="px-3 py-1 rounded-xl bg-neutral-100 dark:bg-neutral-700 text-neutral-700 dark:text-neutral-300 font-mono font-bold text-xs tabular-nums">
+                        {historyPage} / {totalHistoryPages}
+                      </span>
+
+                      <button
+                        onClick={() => setHistoryPage((p) => Math.min(totalHistoryPages, p + 1))}
+                        disabled={historyPage === totalHistoryPages}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-700 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold transition-all"
+                      >
+                        <span>Next</span>
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -3288,6 +3896,50 @@ export default function InventoryPage() {
                       Save Recipe (BOM)
                     </button>
                   </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Scanned Receipt / Slip Image Modal Lightbox */}
+          {viewReceiptModalUrl && (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
+              onClick={() => setViewReceiptModalUrl(null)}
+            >
+              <div
+                className="relative max-w-3xl w-full max-h-[90vh] bg-white dark:bg-neutral-900 rounded-2xl overflow-hidden shadow-2xl flex flex-col border border-neutral-200 dark:border-neutral-700"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between p-4 border-b border-neutral-200 dark:border-neutral-700">
+                  <div className="flex items-center gap-2">
+                    <Eye className="w-5 h-5 text-amber-500" />
+                    <h3 className="font-bold text-sm text-neutral-900 dark:text-white">
+                      Scanned Invoice / Mandi Slip View
+                    </h3>
+                  </div>
+                  <button
+                    onClick={() => setViewReceiptModalUrl(null)}
+                    className="p-1.5 rounded-xl hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-200 transition-colors"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+                <div className="flex-1 overflow-auto p-4 flex items-center justify-center bg-neutral-950/20">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={viewReceiptModalUrl}
+                    alt="Original scanned invoice slip"
+                    className="max-w-full max-h-[75vh] object-contain rounded-lg shadow-sm"
+                  />
+                </div>
+                <div className="p-3 border-t border-neutral-200 dark:border-neutral-700 flex justify-end">
+                  <button
+                    onClick={() => setViewReceiptModalUrl(null)}
+                    className="px-4 py-2 rounded-xl text-xs font-bold bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900 hover:opacity-90"
+                  >
+                    Close
+                  </button>
                 </div>
               </div>
             </div>

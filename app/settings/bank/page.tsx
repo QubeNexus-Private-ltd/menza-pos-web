@@ -21,6 +21,7 @@ import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { usePosCatalogStore } from '@/stores/usePosCatalogStore';
+import { BankConfigSkeleton } from '@/components/common/Skeleton';
 import {
   RestaurantBankRemoteDataSource,
   RestaurantBankAccountResponse,
@@ -278,7 +279,11 @@ export default function BankAccountPage() {
             </p>
           </div>
 
-          {/* ACTIVE LINKED ACCOUNT BANNER */}
+          {loading ? (
+            <BankConfigSkeleton />
+          ) : (
+            <>
+              {/* ACTIVE LINKED ACCOUNT BANNER */}
           {existingAccount && (
             <div className="rounded-2xl border border-emerald-300 dark:border-emerald-800/60 bg-emerald-500/10 p-4 space-y-1.5 text-xs shadow-xs">
               <div className="flex items-center justify-between">
@@ -534,6 +539,8 @@ export default function BankAccountPage() {
               </button>
             </div>
           </form>
+            </>
+          )}
         </div>
       </AppShell>
     </AuthGuard>

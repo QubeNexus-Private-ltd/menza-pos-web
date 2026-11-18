@@ -161,6 +161,41 @@ export interface WasteLogItem {
   loggedAtUtc: string;
 }
 
+export interface PagedRawIngredientResponse {
+  items: RawIngredient[];
+  pageNumber: number;
+  pageSize: number;
+  totalCount: number;
+  totalPages: number;
+  lowStockCount?: number;
+}
+
+export interface PagedMenuItemRecipeResponse {
+  items: MenuItemRecipe[];
+  pageNumber: number;
+  pageSize: number;
+  totalCount: number;
+  totalPages: number;
+  configuredCount?: number;
+}
+
+export interface PagedWasteLogResponse {
+  items: WasteLogItem[];
+  pageNumber: number;
+  pageSize: number;
+  totalCount: number;
+  totalPages: number;
+  totalEstimatedLoss?: number;
+}
+
+export interface PagedScannedInvoiceResponse {
+  items: ScannedInvoiceResult[];
+  pageNumber: number;
+  pageSize: number;
+  totalCount: number;
+  totalPages: number;
+}
+
 export class WebInventoryService {
   static async scanInvoice(restaurantId: number, file: File): Promise<ScannedInvoiceResult> {
     const rid = resolveRestId(restaurantId);
@@ -190,12 +225,38 @@ export class WebInventoryService {
     return response.data;
   }
 
+  static async getPagedIngredients(
+    restaurantId: number,
+    options?: { page?: number; pageSize?: number; searchTerm?: string }
+  ): Promise<PagedRawIngredientResponse> {
+    const rid = resolveRestId(restaurantId);
+    const page = options?.page ?? 1;
+    const pageSize = options?.pageSize ?? 25;
+    let url = `/Inventory/ingredients?restaurantId=${rid}&page=${page}&pageSize=${pageSize}`;
+    if (options?.searchTerm?.trim()) {
+      url += `&searchTerm=${encodeURIComponent(options.searchTerm.trim())}`;
+    }
+    const response = await apiClient.get<PagedRawIngredientResponse | RawIngredient[]>(url);
+    if (Array.isArray(response.data)) {
+      return {
+        items: response.data,
+        pageNumber: 1,
+        pageSize: response.data.length,
+        totalCount: response.data.length,
+        totalPages: 1,
+        lowStockCount: response.data.filter(i => i.currentStock <= i.minimumReorderLevel).length,
+      };
+    }
+    return response.data;
+  }
+
   static async getIngredients(restaurantId: number): Promise<RawIngredient[]> {
     const rid = resolveRestId(restaurantId);
-    const response = await apiClient.get<RawIngredient[]>(
+    const response = await apiClient.get<RawIngredient[] | PagedRawIngredientResponse>(
       `/Inventory/ingredients?restaurantId=${rid}`
     );
-    return response.data;
+    if (Array.isArray(response.data)) return response.data;
+    return response.data.items || [];
   }
 
   static async saveIngredient(restaurantId: number, payload: Partial<RawIngredient>): Promise<RawIngredient> {
@@ -207,12 +268,37 @@ export class WebInventoryService {
     return response.data;
   }
 
+  static async getPagedInvoices(
+    restaurantId: number,
+    options?: { page?: number; pageSize?: number; searchTerm?: string }
+  ): Promise<PagedScannedInvoiceResponse> {
+    const rid = resolveRestId(restaurantId);
+    const page = options?.page ?? 1;
+    const pageSize = options?.pageSize ?? 20;
+    let url = `/Inventory/invoices?restaurantId=${rid}&page=${page}&pageSize=${pageSize}`;
+    if (options?.searchTerm?.trim()) {
+      url += `&searchTerm=${encodeURIComponent(options.searchTerm.trim())}`;
+    }
+    const response = await apiClient.get<PagedScannedInvoiceResponse | ScannedInvoiceResult[]>(url);
+    if (Array.isArray(response.data)) {
+      return {
+        items: response.data,
+        pageNumber: 1,
+        pageSize: response.data.length,
+        totalCount: response.data.length,
+        totalPages: 1,
+      };
+    }
+    return response.data;
+  }
+
   static async getInvoices(restaurantId: number, limit = 20): Promise<ScannedInvoiceResult[]> {
     const rid = resolveRestId(restaurantId);
-    const response = await apiClient.get<ScannedInvoiceResult[]>(
+    const response = await apiClient.get<ScannedInvoiceResult[] | PagedScannedInvoiceResponse>(
       `/Inventory/invoices?restaurantId=${rid}&limit=${limit}`
     );
-    return response.data;
+    if (Array.isArray(response.data)) return response.data;
+    return response.data.items || [];
   }
 
   static async logWaste(restaurantId: number, payload: LogWastePayload): Promise<{ success: boolean; message: string }> {
@@ -224,20 +310,72 @@ export class WebInventoryService {
     return response.data;
   }
 
+  static async getPagedWasteLogs(
+    restaurantId: number,
+    options?: { page?: number; pageSize?: number; searchTerm?: string }
+  ): Promise<PagedWasteLogResponse> {
+    const rid = resolveRestId(restaurantId);
+    const page = options?.page ?? 1;
+    const pageSize = options?.pageSize ?? 20;
+    let url = `/Inventory/waste?restaurantId=${rid}&page=${page}&pageSize=${pageSize}`;
+    if (options?.searchTerm?.trim()) {
+      url += `&searchTerm=${encodeURIComponent(options.searchTerm.trim())}`;
+    }
+    const response = await apiClient.get<PagedWasteLogResponse | WasteLogItem[]>(url);
+    if (Array.isArray(response.data)) {
+      return {
+        items: response.data,
+        pageNumber: 1,
+        pageSize: response.data.length,
+        totalCount: response.data.length,
+        totalPages: 1,
+        totalEstimatedLoss: response.data.reduce((sum, item) => sum + (item.totalEstimatedLoss || 0), 0),
+      };
+    }
+    return response.data;
+  }
+
   static async getWasteLogs(restaurantId: number, limit = 50): Promise<WasteLogItem[]> {
     const rid = resolveRestId(restaurantId);
-    const response = await apiClient.get<WasteLogItem[]>(
+    const response = await apiClient.get<WasteLogItem[] | PagedWasteLogResponse>(
       `/Inventory/waste?restaurantId=${rid}&limit=${limit}`
     );
+    if (Array.isArray(response.data)) return response.data;
+    return response.data.items || [];
+  }
+
+  static async getPagedRecipes(
+    restaurantId: number,
+    options?: { page?: number; pageSize?: number; searchTerm?: string }
+  ): Promise<PagedMenuItemRecipeResponse> {
+    const rid = resolveRestId(restaurantId);
+    const page = options?.page ?? 1;
+    const pageSize = options?.pageSize ?? 12;
+    let url = `/Inventory/recipes?restaurantId=${rid}&page=${page}&pageSize=${pageSize}`;
+    if (options?.searchTerm?.trim()) {
+      url += `&searchTerm=${encodeURIComponent(options.searchTerm.trim())}`;
+    }
+    const response = await apiClient.get<PagedMenuItemRecipeResponse | MenuItemRecipe[]>(url);
+    if (Array.isArray(response.data)) {
+      return {
+        items: response.data,
+        pageNumber: 1,
+        pageSize: response.data.length,
+        totalCount: response.data.length,
+        totalPages: 1,
+        configuredCount: response.data.filter(r => r.ingredientsCount > 0).length,
+      };
+    }
     return response.data;
   }
 
   static async getRecipes(restaurantId: number): Promise<MenuItemRecipe[]> {
     const rid = resolveRestId(restaurantId);
-    const response = await apiClient.get<MenuItemRecipe[]>(
+    const response = await apiClient.get<MenuItemRecipe[] | PagedMenuItemRecipeResponse>(
       `/Inventory/recipes?restaurantId=${rid}`
     );
-    return response.data;
+    if (Array.isArray(response.data)) return response.data;
+    return response.data.items || [];
   }
 
   static async getRecipeByMenuItem(restaurantId: number, menuItemId: number): Promise<MenuItemRecipe> {

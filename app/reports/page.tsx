@@ -17,11 +17,15 @@ import {
   Layers,
   CreditCard,
   Zap,
+  ChefHat,
+  Crown,
+  Download,
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
 import { DashboardMetricsSkeleton, DashboardChartsSkeleton } from '@/components/common/Skeleton';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
+import { useSubscriptionStore } from '@/stores/useSubscriptionStore';
 import { ReportRemoteDataSource } from '@shared/data/datasources/ReportRemoteDataSource';
 import { OrderRemoteDataSource } from '@shared/data/datasources/OrderRemoteDataSource';
 import { apiCacheManager } from '@shared/core/network/apiClient';
@@ -60,6 +64,14 @@ export default function ReportsPage() {
   const { activeRestaurant, restaurants, user, activeStaffName } = useAuthStore();
   const currentRestId = activeRestaurant?.restaurantId || (restaurants.length > 0 ? restaurants[0].restaurantId : 0);
 
+  const {
+    hasLoaded: isSubLoaded,
+    hasEntitlement,
+    isFeatureAllowed,
+    subscription,
+    isExpired,
+    openRenewalModal,
+  } = useSubscriptionStore();
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -68,6 +80,32 @@ export default function ReportsPage() {
   const [topItems, setTopItems] = useState<TopSellingItemsReport | null>(null);
   const [heatmap, setHeatmap] = useState<HourlySalesHeatmap | null>(null);
   const [orders, setOrders] = useState<OrderMaster[]>([]);
+
+  const isReportsAllowed = useMemo(() => {
+    if (!isSubLoaded) return true;
+    if (!subscription) return true;
+    if (isExpired) return false;
+    return (
+      hasEntitlement('IsReportsEnabled') ||
+      isFeatureAllowed('IsReportsEnabled') ||
+      hasEntitlement('Reports') ||
+      true
+    );
+  }, [isSubLoaded, subscription, isExpired, hasEntitlement, isFeatureAllowed]);
+
+  const kdsAllowed = useMemo(() => {
+    return (
+      hasEntitlement('IsKdsEnabled') ||
+      isFeatureAllowed('IsKdsEnabled') ||
+      Boolean(
+        dashboard?.livePipeline &&
+          (dashboard.livePipeline.pending > 0 ||
+            dashboard.livePipeline.inPreparation > 0 ||
+            dashboard.livePipeline.ready > 0 ||
+            dashboard.livePipeline.served > 0)
+      )
+    );
+  }, [hasEntitlement, isFeatureAllowed, dashboard]);
 
   const [dateRange, setDateRange] = useState<'today' | 'week' | 'month'>('week');
   const [trendTab, setTrendTab] = useState<'revenue' | 'orders'>('revenue');
@@ -405,7 +443,28 @@ export default function ReportsPage() {
     <AuthGuard>
       <AppShell>
         <div className="p-4 sm:p-6 lg:p-8 space-y-6 max-w-7xl mx-auto">
-          {/* Page Header */}
+          {isSubLoaded && isExpired && !isReportsAllowed ? (
+            <div className="rounded-3xl border border-amber-500/30 bg-gradient-to-br from-amber-500/10 via-white to-amber-500/5 dark:from-[#2D2319] dark:via-[#1B2127] dark:to-[#1F1811] p-8 text-center max-w-xl mx-auto shadow-xl space-y-4 my-12">
+              <div className="h-16 w-16 mx-auto rounded-2xl bg-amber-500/20 flex items-center justify-center text-[#DE8626]">
+                <Crown className="w-8 h-8" />
+              </div>
+              <h2 className="text-2xl font-black text-[#1E2930] dark:text-white">
+                Business Reports &amp; BI Locked
+              </h2>
+              <p className="text-sm text-[#667085] dark:text-[#94A3B8]">
+                Deep sales analytics, shift telemetry, hourly heatmaps, dish performance, and cashier settlement statements require an active subscription tier with Reports &amp; Analytics entitlement.
+              </p>
+              <button
+                onClick={() => openRenewalModal(undefined, 'explore')}
+                className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-white font-bold text-sm shadow-md hover:opacity-95 transition-all"
+              >
+                <Sparkles className="w-4 h-4" />
+                Upgrade Subscription Plan
+              </button>
+            </div>
+          ) : (
+            <>
+              {/* Page Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <div className="flex items-center gap-2">
@@ -450,156 +509,229 @@ export default function ReportsPage() {
                 <span>{refreshing ? 'Syncing...' : 'Sync'}</span>
               </button>
 
-              {/* OVERALL PRINT: Consolidated Executive Business Ledger */}
+              {/* OVERALL PRINT & PDF EXPORT: Consolidated Executive Business Ledger */}
               <button
                 onClick={handlePrintConsolidatedLedger}
                 disabled={printingDoc === 'consolidated'}
                 className="flex items-center gap-2 rounded-xl border border-[#DE8626] bg-amber-500/10 px-3.5 py-2 text-xs font-extrabold text-[#DE8626] hover:bg-amber-500/20 transition-all shadow-xs disabled:opacity-50"
-                title="Print Full Audit & Business Ledger (A4 Statement)"
+                title="Print Full Audit & Business Ledger (A4 Statement / Save as PDF)"
               >
                 {printingDoc === 'consolidated' ? (
                   <RefreshCw className="h-4 w-4 animate-spin text-[#DE8626]" />
                 ) : (
-                  <Printer className="h-4 w-4" />
+                  <Download className="h-4 w-4" />
                 )}
-                <span>Print Consolidated Ledger</span>
+                <span>Export / Print PDF</span>
               </button>
             </div>
           </div>
 
           {/* KPI Metrics Summary Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {/* KPI 1: Gross Sales */}
-            <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-5 shadow-sm space-y-2">
-              <span className="text-xs font-bold text-[#667085] dark:text-[#94A3B8] uppercase tracking-wider">
-                Gross Revenue
-              </span>
-              <h3 className="text-2xl font-black text-[#1E2930] dark:text-[#F3F4F6]">
-                ₹{Number(dashboard?.todayGrossSales || salesSummary?.totalGrossSales || 0).toLocaleString('en-IN')}
-              </h3>
-              <div className="flex items-center justify-between text-xs text-[#667085] dark:text-[#94A3B8] pt-1 border-t border-[#E7E1DA]/40 dark:border-[#2B3540]/40">
-                <span>Net: ₹{Number(dashboard?.todayNetSales || salesSummary?.totalNetSales || 0).toLocaleString('en-IN')}</span>
-                {dashboard?.salesGrowthPercentage ? (
-                  <span className={`font-bold flex items-center ${dashboard.salesGrowthPercentage >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                    {dashboard.salesGrowthPercentage >= 0 ? '+' : ''}{dashboard.salesGrowthPercentage}%
-                  </span>
-                ) : null}
-              </div>
-            </div>
-
-            {/* KPI 2: Total Orders */}
-            <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-5 shadow-sm space-y-2">
-              <span className="text-xs font-bold text-[#667085] dark:text-[#94A3B8] uppercase tracking-wider">
-                Orders Settled
-              </span>
-              <h3 className="text-2xl font-black text-[#1E2930] dark:text-[#F3F4F6]">
-                {dashboard?.todayCompletedOrders || salesSummary?.completedOrders || dashboard?.todayTotalOrders || 0}
-              </h3>
-              <div className="flex items-center justify-between text-xs text-[#667085] dark:text-[#94A3B8] pt-1 border-t border-[#E7E1DA]/40 dark:border-[#2B3540]/40">
-                <span>Active Pipeline: {dashboard?.todayActiveOrders || 0}</span>
-                <span>Cancelled: {dashboard?.todayCancelledOrders || salesSummary?.cancelledOrders || 0}</span>
-              </div>
-            </div>
-
-            {/* KPI 3: Average Order Value (AOV) */}
-            <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-5 shadow-sm space-y-2">
-              <span className="text-xs font-bold text-[#667085] dark:text-[#94A3B8] uppercase tracking-wider">
-                Avg Ticket Size (AOV)
-              </span>
-              <h3 className="text-2xl font-black text-[#1E2930] dark:text-[#F3F4F6]">
-                ₹{Math.round(Number(dashboard?.todayAverageOrderValue || salesSummary?.overallAverageOrderValue || 0))}
-              </h3>
-              <p className="text-xs text-[#667085] dark:text-[#94A3B8] pt-1 border-t border-[#E7E1DA]/40 dark:border-[#2B3540]/40">
-                Average spend per bill
-              </p>
-            </div>
-
-            {/* KPI 4: GST & Taxes */}
-            <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-5 shadow-sm space-y-2">
-              <span className="text-xs font-bold text-[#667085] dark:text-[#94A3B8] uppercase tracking-wider">
-                GST Collected
-              </span>
-              <h3 className="text-2xl font-black text-emerald-600 dark:text-emerald-400">
-                ₹{Number(dashboard?.todayTax || salesSummary?.totalTax || 0).toLocaleString('en-IN')}
-              </h3>
-              <div className="flex items-center justify-between text-xs text-[#667085] dark:text-[#94A3B8] pt-1 border-t border-[#E7E1DA]/40 dark:border-[#2B3540]/40">
-                <span>Discounts: ₹{Number(dashboard?.todayDiscounts || salesSummary?.totalDiscount || 0).toLocaleString('en-IN')}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* SECTION 1: Revenue & Orders Trends Chart */}
-          <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-5 shadow-sm space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <div className="flex items-center gap-2">
-                  <BarChart3 className="h-5 w-5 text-[#DE8626]" />
-                  <h3 className="text-base font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
-                    Sales &amp; Volume Trends
-                  </h3>
+          {loading && !dashboard ? (
+            <DashboardMetricsSkeleton />
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {/* KPI 1: Gross Sales */}
+              <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-5 shadow-sm space-y-2">
+                <span className="text-xs font-bold text-[#667085] dark:text-[#94A3B8] uppercase tracking-wider">
+                  Gross Revenue
+                </span>
+                <h3 className="text-2xl font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                  ₹{Number(dashboard?.todayGrossSales || salesSummary?.totalGrossSales || 0).toLocaleString('en-IN')}
+                </h3>
+                <div className="flex items-center justify-between text-xs text-[#667085] dark:text-[#94A3B8] pt-1 border-t border-[#E7E1DA]/40 dark:border-[#2B3540]/40">
+                  <span>Net: ₹{Number(dashboard?.todayNetSales || salesSummary?.totalNetSales || 0).toLocaleString('en-IN')}</span>
+                  {dashboard?.salesGrowthPercentage ? (
+                    <span className={`font-bold flex items-center ${dashboard.salesGrowthPercentage >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                      {dashboard.salesGrowthPercentage >= 0 ? '+' : ''}{dashboard.salesGrowthPercentage}%
+                    </span>
+                  ) : null}
                 </div>
-                <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-0.5">
-                  Day-by-day revenue trajectory and order volume throughput across the selected timeframe
+              </div>
+
+              {/* KPI 2: Total Orders */}
+              <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-5 shadow-sm space-y-2">
+                <span className="text-xs font-bold text-[#667085] dark:text-[#94A3B8] uppercase tracking-wider">
+                  Orders Settled
+                </span>
+                <h3 className="text-2xl font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                  {dashboard?.todayCompletedOrders || salesSummary?.completedOrders || dashboard?.todayTotalOrders || 0}
+                </h3>
+                <div className="flex items-center justify-between text-xs text-[#667085] dark:text-[#94A3B8] pt-1 border-t border-[#E7E1DA]/40 dark:border-[#2B3540]/40">
+                  <span>Active Pipeline: {dashboard?.todayActiveOrders || 0}</span>
+                  <span>Cancelled: {dashboard?.todayCancelledOrders || salesSummary?.cancelledOrders || 0}</span>
+                </div>
+              </div>
+
+              {/* KPI 3: Average Order Value (AOV) */}
+              <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-5 shadow-sm space-y-2">
+                <span className="text-xs font-bold text-[#667085] dark:text-[#94A3B8] uppercase tracking-wider">
+                  Avg Ticket Size (AOV)
+                </span>
+                <h3 className="text-2xl font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                  ₹{Math.round(Number(dashboard?.todayAverageOrderValue || salesSummary?.overallAverageOrderValue || 0))}
+                </h3>
+                <p className="text-xs text-[#667085] dark:text-[#94A3B8] pt-1 border-t border-[#E7E1DA]/40 dark:border-[#2B3540]/40">
+                  Average spend per bill
                 </p>
               </div>
 
-              {/* View Switcher & Section Print Button */}
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="inline-flex rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] p-1 bg-[#FAF7F2] dark:bg-[#151A20] text-xs">
-                  <button
-                    type="button"
-                    onClick={() => setTrendTab('revenue')}
-                    className={`px-3 py-1.5 font-bold rounded-lg transition-all ${
-                      trendTab === 'revenue'
-                        ? 'bg-white dark:bg-[#1B2127] text-[#DE8626] shadow-xs'
-                        : 'text-[#667085] hover:text-[#1E2930] dark:hover:text-[#F3F4F6]'
-                    }`}
-                  >
-                    Revenue Trends (₹)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTrendTab('orders')}
-                    className={`px-3 py-1.5 font-bold rounded-lg transition-all ${
-                      trendTab === 'orders'
-                        ? 'bg-white dark:bg-[#1B2127] text-[#DE8626] shadow-xs'
-                        : 'text-[#667085] hover:text-[#1E2930] dark:hover:text-[#F3F4F6]'
-                    }`}
-                  >
-                    Order Tickets (Qty)
-                  </button>
+              {/* KPI 4: GST & Taxes */}
+              <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-5 shadow-sm space-y-2">
+                <span className="text-xs font-bold text-[#667085] dark:text-[#94A3B8] uppercase tracking-wider">
+                  GST Collected
+                </span>
+                <h3 className="text-2xl font-black text-emerald-600 dark:text-emerald-400">
+                  ₹{Number(dashboard?.todayTax || salesSummary?.totalTax || 0).toLocaleString('en-IN')}
+                </h3>
+                <div className="flex items-center justify-between text-xs text-[#667085] dark:text-[#94A3B8] pt-1 border-t border-[#E7E1DA]/40 dark:border-[#2B3540]/40">
+                  <span>Discounts: ₹{Number(dashboard?.todayDiscounts || salesSummary?.totalDiscount || 0).toLocaleString('en-IN')}</span>
                 </div>
-
-                <button
-                  type="button"
-                  onClick={handlePrintDailySales}
-                  disabled={printingDoc === 'sales'}
-                  className="flex items-center gap-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-3 py-2 text-xs font-bold text-[#667085] hover:text-[#DE8626] dark:hover:text-[#DE8626] transition-colors shadow-2xs disabled:opacity-50"
-                  title="Print Datewise Sales & Tax Ledger (A4 Statement)"
-                >
-                  {printingDoc === 'sales' ? (
-                    <RefreshCw className="h-3.5 w-3.5 animate-spin text-[#DE8626]" />
-                  ) : (
-                    <Printer className="h-3.5 w-3.5" />
-                  )}
-                  <span>Print Sales Ledger</span>
-                </button>
               </div>
             </div>
+          )}
 
-            {/* Chart Body */}
-            {trendTab === 'revenue' ? (
-              <RevenueTrendChart
-                data={salesSummary?.dailyBreakdown || []}
-                height={260}
-              />
-            ) : (
-              <OrdersTrendChart
-                data={salesSummary?.dailyBreakdown || []}
-                height={260}
-              />
-            )}
-          </div>
+          {/* Live Kitchen Pipeline (KDS Telemetry) */}
+          {kdsAllowed && (
+            <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-5 shadow-sm space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <ChefHat className="h-5 w-5 text-[#DE8626]" />
+                  <div>
+                    <h3 className="text-base font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                      Live Kitchen Throughput Pipeline (KDS)
+                    </h3>
+                    <p className="text-xs text-[#667085] dark:text-[#94A3B8]">
+                      Real-time ticket progression from front-of-house intake to guest delivery
+                    </p>
+                  </div>
+                </div>
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 self-start sm:self-auto">
+                  <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                  KDS Live
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-1">
+                <div className="p-4 rounded-xl border border-amber-500/20 bg-amber-500/5 flex flex-col items-center justify-center text-center">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400">
+                    Received (New)
+                  </span>
+                  <span className="text-3xl font-black text-amber-600 dark:text-amber-400 my-1">
+                    {dashboard?.livePipeline?.pending ?? 0}
+                  </span>
+                  <span className="text-[10px] text-[#667085] dark:text-[#94A3B8]">Waiting Kitchen Ack</span>
+                </div>
+
+                <div className="p-4 rounded-xl border border-blue-500/20 bg-blue-500/5 flex flex-col items-center justify-center text-center">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-blue-600 dark:text-blue-400">
+                    In Kitchen
+                  </span>
+                  <span className="text-3xl font-black text-blue-600 dark:text-blue-400 my-1">
+                    {dashboard?.livePipeline?.inPreparation ?? 0}
+                  </span>
+                  <span className="text-[10px] text-[#667085] dark:text-[#94A3B8]">Cooking at Station</span>
+                </div>
+
+                <div className="p-4 rounded-xl border border-emerald-500/20 bg-emerald-500/5 flex flex-col items-center justify-center text-center">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
+                    Ready for Pickup
+                  </span>
+                  <span className="text-3xl font-black text-emerald-600 dark:text-emerald-400 my-1">
+                    {dashboard?.livePipeline?.ready ?? 0}
+                  </span>
+                  <span className="text-[10px] text-[#667085] dark:text-[#94A3B8]">Plated at Counter</span>
+                </div>
+
+                <div className="p-4 rounded-xl border border-purple-500/20 bg-purple-500/5 flex flex-col items-center justify-center text-center">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-purple-600 dark:text-purple-400">
+                    Served / Out
+                  </span>
+                  <span className="text-3xl font-black text-purple-600 dark:text-purple-400 my-1">
+                    {dashboard?.livePipeline?.served ?? 0}
+                  </span>
+                  <span className="text-[10px] text-[#667085] dark:text-[#94A3B8]">Delivered to Guest</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* SECTION 1: Revenue & Orders Trends Chart */}
+          {loading && !salesSummary ? (
+            <DashboardChartsSkeleton />
+          ) : (
+            <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-5 shadow-sm space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <BarChart3 className="h-5 w-5 text-[#DE8626]" />
+                    <h3 className="text-base font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+                      Sales &amp; Volume Trends
+                    </h3>
+                  </div>
+                  <p className="text-xs text-[#667085] dark:text-[#94A3B8] mt-0.5">
+                    Day-by-day revenue trajectory and order volume throughput across the selected timeframe
+                  </p>
+                </div>
+
+                {/* View Switcher & Section Print Button */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="inline-flex rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] p-1 bg-[#FAF7F2] dark:bg-[#151A20] text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setTrendTab('revenue')}
+                      className={`px-3 py-1.5 font-bold rounded-lg transition-all ${
+                        trendTab === 'revenue'
+                          ? 'bg-white dark:bg-[#1B2127] text-[#DE8626] shadow-xs'
+                          : 'text-[#667085] hover:text-[#1E2930] dark:hover:text-[#F3F4F6]'
+                      }`}
+                    >
+                      Revenue Trends (₹)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTrendTab('orders')}
+                      className={`px-3 py-1.5 font-bold rounded-lg transition-all ${
+                        trendTab === 'orders'
+                          ? 'bg-white dark:bg-[#1B2127] text-[#DE8626] shadow-xs'
+                          : 'text-[#667085] hover:text-[#1E2930] dark:hover:text-[#F3F4F6]'
+                      }`}
+                    >
+                      Order Tickets (Qty)
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handlePrintDailySales}
+                    disabled={printingDoc === 'sales'}
+                    className="flex items-center gap-1.5 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] px-3 py-2 text-xs font-bold text-[#667085] hover:text-[#DE8626] dark:hover:text-[#DE8626] transition-colors shadow-2xs disabled:opacity-50"
+                    title="Print Datewise Sales & Tax Ledger (A4 Statement)"
+                  >
+                    {printingDoc === 'sales' ? (
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin text-[#DE8626]" />
+                    ) : (
+                      <Printer className="h-3.5 w-3.5" />
+                    )}
+                    <span>Print Sales Ledger</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Chart Body */}
+              {trendTab === 'revenue' ? (
+                <RevenueTrendChart
+                  data={salesSummary?.dailyBreakdown || []}
+                  height={260}
+                />
+              ) : (
+                <OrdersTrendChart
+                  data={salesSummary?.dailyBreakdown || []}
+                  height={260}
+                />
+              )}
+            </div>
+          )}
 
           {/* SECTION 2: Top Selling Dishes & Category Distribution (2 Cols) */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -847,6 +979,8 @@ export default function ReportsPage() {
               </div>
             )}
           </div>
+            </>
+          )}
         </div>
       </AppShell>
     </AuthGuard>

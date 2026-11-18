@@ -36,6 +36,7 @@ import {
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
 import { DishImage } from '@/components/common/DishImage';
+import { MenuGridSkeleton } from '@/components/common/Skeleton';
 import { parseDietaryIsVeg } from '@/utils/dietary';
 import { ManageVariantsModal } from '@/components/menu/ManageVariantsModal';
 import { SearchableCategorySelect } from '@/components/menu/SearchableCategorySelect';
@@ -1185,11 +1186,8 @@ function MenuCatalogContent() {
 
           {/* Main Menu Display Area */}
           {loading ? (
-            <div className="rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] py-24 text-center">
-              <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500/10 text-[#DE8626] animate-spin mb-3">
-                <UtensilsCrossed className="h-6 w-6" />
-              </div>
-              <p className="text-xs font-bold text-[#667085] dark:text-[#94A3B8]">Loading menu catalog dishes...</p>
+            <div className="space-y-4">
+              <MenuGridSkeleton count={8} />
             </div>
           ) : filteredItems.length === 0 ? (
             <div className="rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] py-20 px-4 text-center">

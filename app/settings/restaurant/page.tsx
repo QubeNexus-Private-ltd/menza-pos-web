@@ -32,6 +32,7 @@ import { MasterDataRemoteDataSource } from '@shared/data/datasources/MasterDataR
 import { MasterDataRepositoryImpl } from '@shared/data/repositories/MasterDataRepositoryImpl';
 import { StateMaster } from '@shared/domain/models/MasterData';
 import { WebImageUploadService } from '@/services/imageUploadService';
+import { RestaurantConfigSkeleton } from '@/components/common/Skeleton';
 
 const configDataSource = new RestaurantConfigRemoteDataSource();
 const masterDataRepository = new MasterDataRepositoryImpl(new MasterDataRemoteDataSource());
@@ -419,8 +420,12 @@ export default function RestaurantConfigPage() {
             </div>
           )}
 
-          {/* 1. Store Brand Media (Separate Image Update Section) */}
-          <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-5 shadow-sm space-y-4">
+          {loading ? (
+            <RestaurantConfigSkeleton />
+          ) : (
+            <>
+              {/* 1. Store Brand Media (Separate Image Update Section) */}
+              <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-5 shadow-sm space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
                 <h3 className="text-sm font-bold text-[#1E2930] dark:text-[#F3F4F6] flex items-center gap-2">
@@ -891,6 +896,8 @@ export default function RestaurantConfigPage() {
               </button>
             </div>
           </form>
+            </>
+          )}
 
           {/* Searchable State Selection Modal */}
           {stateModalVisible && (

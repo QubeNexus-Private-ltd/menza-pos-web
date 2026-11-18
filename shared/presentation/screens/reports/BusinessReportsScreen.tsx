@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -42,9 +42,15 @@ import {
   Share2,
   BadgeCheck,
   Check,
+  CreditCard,
+  Wallet,
+  QrCode,
+  Banknote,
 } from 'lucide-react-native';
 import { useAuthStore } from '../../state/useAuthStore';
 import { ReportRemoteDataSource } from '../../../data/datasources/ReportRemoteDataSource';
+import { OrderRemoteDataSource } from '../../../data/datasources/OrderRemoteDataSource';
+import { OrderMaster } from '../../../domain/models/Order';
 import {
   ExecutiveDashboard,
   DatewiseSalesSummary,
@@ -67,7 +73,22 @@ interface BusinessReportsScreenProps {
 type PeriodType = 'today' | '7days' | '30days' | 'month';
 type SubTabType = 'executive' | 'trends' | 'dishes' | 'hourly';
 
+export interface PaymentModeBreakdownItem {
+  mode: string;
+  total: number;
+  count: number;
+  percentage: number;
+}
+
+export interface CategoryDistributionItem {
+  category: string;
+  totalRevenue: number;
+  totalQty: number;
+  percentage: number;
+}
+
 const reportDataSource = new ReportRemoteDataSource();
+const orderDataSource = new OrderRemoteDataSource();
 const subscriptionDataSource = new SubscriptionRemoteDataSource();
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -122,6 +143,9 @@ export const BusinessReportsScreen: React.FC<BusinessReportsScreenProps> = ({
   const [salesSummary, setSalesSummary] = useState<DatewiseSalesSummary | null>(null);
   const [topItems, setTopItems] = useState<TopSellingItemsReport | null>(null);
   const [hourlyHeatmap, setHourlyHeatmap] = useState<HourlySalesHeatmap | null>(null);
+  const [orders, setOrders] = useState<OrderMaster[]>([]);
+  const [hourlyDateOption, setHourlyDateOption] = useState<'today' | 'yesterday'>('today');
+  const [hourlyLoading, setHourlyLoading] = useState(false);
 
   const calculateDateRange = (p: PeriodType) => {
     const now = new Date();
@@ -152,17 +176,19 @@ export const BusinessReportsScreen: React.FC<BusinessReportsScreenProps> = ({
       try {
         const { fromDate, toDate } = calculateDateRange(period);
 
-        const [execRes, salesRes, topRes, hourlyRes] = await Promise.allSettled([
+        const [execRes, salesRes, topRes, hourlyRes, ordersRes] = await Promise.allSettled([
           reportDataSource.getExecutiveDashboard(restId),
           reportDataSource.getDatewiseSalesSummary(restId, fromDate, toDate),
-          reportDataSource.getTopSellingItems(restId, fromDate, toDate, 10),
+          reportDataSource.getTopSellingItems(restId, fromDate, toDate, 15),
           reportDataSource.getHourlySalesHeatmap(restId, toDate),
+          orderDataSource.getTodayOrders(restId, 'ALL', 1, 250, undefined, fromDate, toDate),
         ]);
 
         if (execRes.status === 'fulfilled') setExecutiveData(execRes.value);
         if (salesRes.status === 'fulfilled') setSalesSummary(salesRes.value);
         if (topRes.status === 'fulfilled') setTopItems(topRes.value);
         if (hourlyRes.status === 'fulfilled') setHourlyHeatmap(hourlyRes.value);
+        if (ordersRes.status === 'fulfilled' && ordersRes.value?.items) setOrders(ordersRes.value.items);
       } catch (err) {
         console.warn('Failed to load reports data:', err);
       } finally {
@@ -181,6 +207,80 @@ export const BusinessReportsScreen: React.FC<BusinessReportsScreenProps> = ({
     setRefreshing(true);
     loadAllReports(true);
   };
+
+  const handleHourlyDateChange = async (opt: 'today' | 'yesterday') => {
+    if (restId <= 0) return;
+    setHourlyDateOption(opt);
+    setHourlyLoading(true);
+    try {
+      const now = new Date();
+      if (opt === 'yesterday') {
+        now.setDate(now.getDate() - 1);
+      }
+      const dateStr = now.toISOString().split('T')[0];
+      const res = await reportDataSource.getHourlySalesHeatmap(restId, dateStr);
+      if (res) setHourlyHeatmap(res);
+    } catch (err) {
+      console.warn('Failed to load hourly heatmap for', opt, err);
+    } finally {
+      setHourlyLoading(false);
+    }
+  };
+
+  // Payment Breakdown computation
+  const paymentBreakdown = useMemo<{ metrics: PaymentModeBreakdownItem[]; grandTotal: number }>(() => {
+    const modesMap: Record<string, { count: number; total: number }> = {};
+    let grandTotal = 0;
+
+    orders.forEach((o) => {
+      const st = (o.status || '').toLowerCase();
+      if (st === 'cancelled' || st === 'void') return;
+
+      const rawMode = o.paymentMode || (o as any).PaymentMode || 'CASH';
+      const mode = rawMode.trim().toUpperCase() || 'CASH';
+      if (!modesMap[mode]) {
+        modesMap[mode] = { count: 0, total: 0 };
+      }
+      const amt = Number(o.totalAmount || o.paidAmount || o.subtotal || 0);
+      modesMap[mode].count += 1;
+      modesMap[mode].total += amt;
+      grandTotal += amt;
+    });
+
+    const metrics: PaymentModeBreakdownItem[] = Object.entries(modesMap).map(([mode, d]) => ({
+      mode,
+      total: d.total,
+      count: d.count,
+      percentage: grandTotal > 0 ? Math.round((d.total / grandTotal) * 100) : 0,
+    }));
+
+    return { metrics, grandTotal };
+  }, [orders]);
+
+  // Category Revenue Distribution computation
+  const categoryDistribution = useMemo<CategoryDistributionItem[]>(() => {
+    if (!topItems?.items || topItems.items.length === 0) return [];
+    const map: Record<string, { category: string; totalRevenue: number; totalQty: number }> = {};
+    let totalRev = 0;
+
+    topItems.items.forEach((it) => {
+      const cat = it.categoryName?.trim() || 'General';
+      if (!map[cat]) {
+        map[cat] = { category: cat, totalRevenue: 0, totalQty: 0 };
+      }
+      const rev = Number(it.totalRevenue || 0);
+      map[cat].totalRevenue += rev;
+      map[cat].totalQty += Number(it.quantitySold || 0);
+      totalRev += rev;
+    });
+
+    return Object.values(map)
+      .map((c) => ({
+        ...c,
+        percentage: totalRev > 0 ? (c.totalRevenue / totalRev) * 100 : 0,
+      }))
+      .sort((a, b) => b.totalRevenue - a.totalRevenue);
+  }, [topItems]);
 
   // Safe Metric Computations
   const grossSales = salesSummary?.totalGrossSales ?? executiveData?.todayGrossSales ?? 0;
@@ -225,6 +325,7 @@ export const BusinessReportsScreen: React.FC<BusinessReportsScreenProps> = ({
         executiveData,
         salesSummary,
         topItems,
+        paymentBreakdown,
         generatedBy: user?.name || activeRestaurant?.ownerName || 'Store Manager',
       });
     } catch (err: any) {
@@ -607,6 +708,67 @@ export const BusinessReportsScreen: React.FC<BusinessReportsScreenProps> = ({
                 </View>
               )}
 
+              {/* Payment Mode Collections Breakdown */}
+              {paymentBreakdown.metrics.length > 0 && (
+                <View style={styles.paymentCard}>
+                  <View style={styles.cardHeaderRow}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <CreditCard size={14} color="#DE8626" />
+                      <Text style={styles.cardSectionTitle}>PAYMENT MODE BREAKDOWN</Text>
+                    </View>
+                    <Text style={styles.paymentTotalText}>
+                      Total: ₹{paymentBreakdown.grandTotal.toLocaleString('en-IN')}
+                    </Text>
+                  </View>
+
+                  <View style={styles.paymentList}>
+                    {paymentBreakdown.metrics.map((m: PaymentModeBreakdownItem) => {
+                      const isCash = m.mode.toUpperCase().includes('CASH');
+                      const isUpi = m.mode.toUpperCase().includes('UPI') || m.mode.toUpperCase().includes('QR');
+                      const isCard = m.mode.toUpperCase().includes('CARD');
+                      const modeColor = isCash ? '#16A34A' : isUpi ? '#3B82F6' : isCard ? '#8B5CF6' : '#DE8626';
+
+                      return (
+                        <View key={`pay-mode-${m.mode}`} style={styles.paymentRow}>
+                          <View style={styles.paymentRowLeft}>
+                            <View style={[styles.paymentIconBadge, { backgroundColor: `${modeColor}15` }]}>
+                              {isCash ? (
+                                <Banknote size={14} color={modeColor} />
+                              ) : isUpi ? (
+                                <QrCode size={14} color={modeColor} />
+                              ) : isCard ? (
+                                <CreditCard size={14} color={modeColor} />
+                              ) : (
+                                <Wallet size={14} color={modeColor} />
+                              )}
+                            </View>
+                            <View>
+                              <Text style={styles.paymentModeTitle}>{m.mode}</Text>
+                              <Text style={styles.paymentModeCount}>{m.count} bills ({m.percentage}%)</Text>
+                            </View>
+                          </View>
+
+                          <View style={{ alignItems: 'flex-end' }}>
+                            <Text style={styles.paymentModeAmount}>₹{m.total.toLocaleString('en-IN')}</Text>
+                            <View style={styles.paymentProgressTrack}>
+                              <View
+                                style={[
+                                  styles.paymentProgressFill,
+                                  {
+                                    width: `${Math.min(Math.max(m.percentage, 4), 100)}%`,
+                                    backgroundColor: modeColor,
+                                  },
+                                ]}
+                              />
+                            </View>
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                </View>
+              )}
+
               {/* Mini Trend Bar Chart Preview */}
               {salesSummary?.dailyBreakdown && salesSummary.dailyBreakdown.length > 0 && (
                 <View style={styles.chartWrapper}>
@@ -676,6 +838,44 @@ export const BusinessReportsScreen: React.FC<BusinessReportsScreenProps> = ({
 
           {activeSubTab === 'dishes' && (
             <View style={styles.tabContentBlock}>
+              {/* Category Revenue Distribution Card */}
+              {categoryDistribution.length > 0 && (
+                <View style={styles.categoryCard}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 12 }}>
+                    <Layers size={14} color="#DE8626" />
+                    <Text style={styles.cardSectionTitle}>CATEGORY REVENUE CONTRIBUTION</Text>
+                  </View>
+
+                  <View style={styles.categoryList}>
+                    {categoryDistribution.map((cat: CategoryDistributionItem, idx: number) => (
+                      <View key={`cat-${cat.category}-${idx}`} style={styles.categoryRow}>
+                        <View style={{ flex: 1 }}>
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                            <Text style={styles.categoryNameText}>{cat.category}</Text>
+                            <Text style={styles.categoryRevenueText}>
+                              ₹{cat.totalRevenue.toLocaleString('en-IN')}{' '}
+                              <Text style={styles.categoryPercentText}>({cat.percentage.toFixed(1)}%)</Text>
+                            </Text>
+                          </View>
+                          <View style={styles.categoryProgressTrack}>
+                            <View
+                              style={[
+                                styles.categoryProgressFill,
+                                {
+                                  width: `${Math.min(Math.max(cat.percentage, 3), 100)}%`,
+                                  backgroundColor:
+                                    idx === 0 ? '#DE8626' : idx === 1 ? '#F59E0B' : idx === 2 ? '#3B82F6' : '#10B981',
+                                },
+                              ]}
+                            />
+                          </View>
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              )}
+
               {/* Top Selling Items Report */}
               {topItems?.items && topItems.items.length > 0 ? (
                 <View style={styles.dishesCard}>
@@ -747,6 +947,31 @@ export const BusinessReportsScreen: React.FC<BusinessReportsScreenProps> = ({
 
           {activeSubTab === 'hourly' && (
             <View style={styles.tabContentBlock}>
+              {/* Hourly Date Option Switcher */}
+              <View style={styles.hourlyDaySelectorRow}>
+                <View style={styles.hourlyDayPillContainer}>
+                  <TouchableOpacity
+                    onPress={() => handleHourlyDateChange('today')}
+                    style={[styles.hourlyDayPill, hourlyDateOption === 'today' && styles.hourlyDayPillActive]}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.hourlyDayPillText, hourlyDateOption === 'today' && styles.hourlyDayPillTextActive]}>
+                      Today
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => handleHourlyDateChange('yesterday')}
+                    style={[styles.hourlyDayPill, hourlyDateOption === 'yesterday' && styles.hourlyDayPillActive]}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.hourlyDayPillText, hourlyDateOption === 'yesterday' && styles.hourlyDayPillTextActive]}>
+                      Yesterday
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+                {hourlyLoading && <ActivityIndicator size="small" color="#DE8626" />}
+              </View>
+
               {/* Hourly Rush & Heatmap Chart */}
               {hourlyHeatmap?.hourlySlots && hourlyHeatmap.hourlySlots.length > 0 ? (
                 <HourlyHeatmapChart
@@ -1369,5 +1594,149 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '500',
     textAlign: 'center',
+  },
+
+  /* Payment Breakdown Card */
+  paymentCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#E7E1DA',
+    marginBottom: 12,
+  },
+  paymentTotalText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#17845A',
+  },
+  paymentList: {
+    marginTop: 10,
+    gap: 10,
+  },
+  paymentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+  },
+  paymentRowLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  paymentIconBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  paymentModeTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#2D2319',
+  },
+  paymentModeCount: {
+    fontSize: 10,
+    color: '#8C7A6B',
+    marginTop: 1,
+  },
+  paymentModeAmount: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#1F2937',
+  },
+  paymentProgressTrack: {
+    width: 70,
+    height: 4,
+    backgroundColor: '#F0EBE4',
+    borderRadius: 2,
+    overflow: 'hidden',
+    marginTop: 3,
+  },
+  paymentProgressFill: {
+    height: '100%',
+    borderRadius: 2,
+  },
+
+  /* Category Card */
+  categoryCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#E7E1DA',
+    marginBottom: 12,
+  },
+  categoryList: {
+    gap: 10,
+  },
+  categoryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  categoryNameText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#2D2319',
+  },
+  categoryRevenueText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#17845A',
+  },
+  categoryPercentText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#8C7A6B',
+  },
+  categoryProgressTrack: {
+    height: 4,
+    backgroundColor: '#F0EBE4',
+    borderRadius: 2,
+    overflow: 'hidden',
+    marginTop: 2,
+  },
+  categoryProgressFill: {
+    height: '100%',
+    borderRadius: 2,
+  },
+
+  /* Hourly Day Selector */
+  hourlyDaySelectorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  hourlyDayPillContainer: {
+    flexDirection: 'row',
+    backgroundColor: '#EAE4DC',
+    borderRadius: 8,
+    padding: 2,
+  },
+  hourlyDayPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 6,
+  },
+  hourlyDayPillActive: {
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  hourlyDayPillText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#78716C',
+  },
+  hourlyDayPillTextActive: {
+    color: '#DE8626',
   },
 });

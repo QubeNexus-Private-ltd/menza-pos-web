@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
+import { TableSkeleton } from '@/components/common/Skeleton';
 import { apiClient } from '@shared/core/network/apiClient';
 
 interface BlockedDevice {
@@ -336,9 +337,8 @@ export default function BlockedDevicesPage() {
 
             {/* Main Ledger Table / Cards */}
             {loading ? (
-              <div className="flex flex-col items-center justify-center p-16 rounded-2xl bg-slate-900/50 border border-slate-800 space-y-3">
-                <Loader2 className="h-8 w-8 text-[#DE8626] animate-spin" />
-                <p className="text-sm text-slate-400">Querying Redis blacklist registry & device audit log...</p>
+              <div className="rounded-2xl border border-slate-800 bg-slate-900/60 overflow-hidden">
+                <TableSkeleton rows={4} cols={4} />
               </div>
             ) : filteredDevices.length === 0 ? (
               <div className="flex flex-col items-center justify-center p-16 rounded-2xl bg-slate-900/40 border border-slate-800 text-center space-y-3">

@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
+import { TableSkeleton } from '@/components/common/Skeleton';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { SuperAdminRemoteDataSource } from '@shared/data/datasources/SuperAdminRemoteDataSource';
 import { SuperAdminRepositoryImpl } from '@shared/data/repositories/SuperAdminRepositoryImpl';
@@ -677,10 +678,7 @@ export default function SuperAdminDirectoryPage() {
           {/* Outlets Table */}
           <div className="rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] shadow-xs overflow-hidden">
             {loading ? (
-              <div className="py-24 text-center text-xs text-[#667085] flex flex-col items-center gap-2">
-                <Loader2 className="h-6 w-6 animate-spin text-[#DE8626]" />
-                <span>Loading store directory...</span>
-              </div>
+              <TableSkeleton rows={6} cols={6} />
             ) : filteredStores.length === 0 ? (
               <div className="py-24 text-center text-xs text-[#667085]">
                 No outlets found matching the search criteria. Click "Onboard New Store" to register a location.

@@ -24,6 +24,7 @@ import { HubConnection, HubConnectionBuilder, HttpTransportType, LogLevel } from
 import { fetchOrderTracking } from '@/services/publicTrackService';
 import { PublicOrderTrackingDTO, PublicOrderItemTrackingDTO } from '@/types/orderTrack';
 import { APP_CONSTANTS } from '@/shared/core/constants/appConstants';
+import { OrderTrackerSkeleton } from '@/components/common/Skeleton';
 
 // Normalizes status strings for visual stepper
 function getStepperStage(orderStatus: string, kitchenStatus?: string | null): number {
@@ -265,11 +266,8 @@ export default function OrderTrackingPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#FAF7F2] dark:bg-[#111418] flex flex-col items-center justify-center p-4">
-        <div className="w-16 h-16 border-4 border-[#DE8626] border-t-transparent rounded-full animate-spin mb-4" />
-        <p className="text-sm font-semibold text-[#5C4E3D] dark:text-[#A89F91]">
-          Loading live order tracker...
-        </p>
+      <div className="min-h-screen bg-[#FAF7F2] dark:bg-[#111418] py-8 px-4 flex items-center justify-center">
+        <OrderTrackerSkeleton />
       </div>
     );
   }

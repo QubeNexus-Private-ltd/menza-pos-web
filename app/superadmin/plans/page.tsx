@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
+import { TableSkeleton } from '@/components/common/Skeleton';
 import { SubscriptionRemoteDataSource } from '@shared/data/datasources/SubscriptionRemoteDataSource';
 import { MasterDataRemoteDataSource } from '@shared/data/datasources/MasterDataRemoteDataSource';
 import { SubscriptionPlan } from '@shared/domain/models/Subscription';
@@ -988,7 +989,7 @@ export default function SuperAdminPlansPage() {
           {/* Plans Table */}
           <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] shadow-sm overflow-hidden">
             {loading ? (
-              <div className="py-20 text-center text-xs text-[#667085]">Loading plans...</div>
+              <TableSkeleton rows={4} cols={6} />
             ) : plans.length === 0 ? (
               <div className="py-20 text-center text-xs text-[#667085]">
                 No subscription plans configured. Click "Create Plan Tier" to configure a new plan with commission rules.

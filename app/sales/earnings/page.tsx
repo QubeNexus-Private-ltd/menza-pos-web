@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { AuthGuard } from '@/components/auth/AuthGuard';
 import { AppShell } from '@/components/layout/AppShell';
+import { TableSkeleton } from '@/components/common/Skeleton';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { SalesService } from '@/services/salesService';
 import {
@@ -308,10 +309,7 @@ export default function SalesEarningsPage() {
 
             <div className="rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] shadow-xs overflow-hidden">
               {loading ? (
-                <div className="py-16 text-center text-xs text-[#667085] flex flex-col items-center gap-2">
-                  <Loader2 className="h-6 w-6 animate-spin text-emerald-600" />
-                  <span>Loading commission ledger...</span>
-                </div>
+                <TableSkeleton rows={5} cols={6} />
               ) : filteredLedger.length === 0 ? (
                 <div className="py-16 text-center text-xs text-[#667085] space-y-2">
                   <Receipt className="h-10 w-10 text-[#667085]/40 mx-auto" />

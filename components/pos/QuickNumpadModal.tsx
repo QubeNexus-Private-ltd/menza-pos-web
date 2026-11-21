@@ -64,11 +64,11 @@ export function QuickNumpadModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 glass-panel p-4 animate-in fade-in duration-200"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-sm rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] shadow-2xl p-5 space-y-3.5 animate-in zoom-in-95 duration-150"
+        className="w-full max-w-sm rounded-3xl border border-[#E8E2D9] dark:border-[#26323E] bg-white dark:bg-[#161B22] shadow-2xl p-5 space-y-3.5 animate-in zoom-in-95 duration-150"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -95,11 +95,11 @@ export function QuickNumpadModal({
         </div>
 
         {/* Quantity Screen */}
-        <div className="rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-3 text-center">
+        <div className="rounded-2xl border border-[#E8E2D9] dark:border-[#26323E] bg-[#FAF8F5] dark:bg-[#11151B] p-3 text-center">
           <span className="text-[10px] font-extrabold text-[#667085] dark:text-[#94A3B8] uppercase tracking-wider">
             SET QUANTITY
           </span>
-          <div className="text-3xl font-extrabold text-[#DE8626] font-mono tracking-wider my-0.5">
+          <div className="text-3xl font-extrabold tabular-nums text-[#DE8626] font-mono tracking-wider my-0.5">
             {val || '0'}
           </div>
           {unitPrice > 0 && (
@@ -120,10 +120,10 @@ export function QuickNumpadModal({
                 key={`preset-${preset}`}
                 type="button"
                 onClick={() => handleSetExact(preset)}
-                className={`flex-1 min-w-[36px] py-1.5 rounded-xl text-xs font-bold border transition-all ${
+                className={`flex-1 min-w-[36px] py-1.5 rounded-xl text-xs font-bold border transition-all pos-tap tabular-nums ${
                   val === String(preset)
-                    ? 'border-[#DE8626] bg-[#DE8626] text-white shadow-sm'
-                    : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#1E2930] dark:text-[#F3F4F6] hover:border-[#DE8626]'
+                    ? 'border-[#DE8626] bg-gradient-to-r from-amber-500 to-[#DE8626] text-white shadow-sm shadow-[#DE8626]/20'
+                    : 'border-[#E8E2D9] dark:border-[#26323E] bg-[#FAF8F5] dark:bg-[#11151B] text-[#162028] dark:text-[#F8FAFC] hover:border-[#DE8626]'
                 }`}
               >
                 {preset}

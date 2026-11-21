@@ -1,3 +1,5 @@
+import appConfig from '../../../app.json';
+
 const DEFAULT_API_BASE_URL =
   'https://menzaapiprod.azurewebsites.net/api';
 const DEFAULT_CUSTOMER_ORDERING_BASE_URL =
@@ -10,8 +12,8 @@ export const APP_CONSTANTS = {
     process.env.APP_NAME ||
     'Menza',
   APP_TAGLINE: 'Smart Multi-Tenant Restaurant Suite',
-  APP_VERSION: '1.0.3',
-  APP_BUILD_NUMBER: 10,
+  APP_VERSION: appConfig.expo.version || '1.0.0',
+  APP_BUILD_NUMBER: appConfig.expo.android?.versionCode ?? 1,
   APP_TYPE: 'POS_ADMIN',
   DEFAULT_STORE_URL:
     'https://play.google.com/store/apps/details?id=com.qubenexus.menzapos',

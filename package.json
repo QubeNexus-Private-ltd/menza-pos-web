@@ -5,7 +5,7 @@
   "scripts": {
     "sync-shared": "node scripts/sync-shared.mjs",
     "prebuild": "node scripts/sync-shared.mjs",
-    "dev": "node scripts/sync-shared.mjs && next dev -p 3000",
+    "dev": "node scripts/sync-shared.mjs --dev && next dev -p 3000",
     "build": "next build",
     "start": "next start -p 3000",
     "lint": "next lint"

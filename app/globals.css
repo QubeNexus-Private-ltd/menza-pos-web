@@ -3,38 +3,49 @@
 @tailwind utilities;
 
 :root {
-  --menza-bg: #FAF7F2;
+  --menza-bg: #FAF8F5;
   --menza-surface: #FFFFFF;
+  --menza-surface-hover: #FDFBF8;
+  --menza-surface-inset: #F4EFEA;
   --menza-primary: #DE8626;
   --menza-primary-hover: #C4721C;
-  --menza-text: #1E2930;
-  --menza-text-muted: #667085;
-  --menza-border: #E7E1DA;
+  --menza-text: #162028;
+  --menza-text-muted: #64748B;
+  --menza-border: #E8E2D9;
+  --menza-border-subtle: #F0EAE1;
 }
 
 .dark {
-  --menza-bg: #111418;
-  --menza-surface: #1B2127;
+  --menza-bg: #0E1217;
+  --menza-surface: #161B22;
+  --menza-surface-hover: #1C222B;
+  --menza-surface-inset: #11151B;
   --menza-primary: #DE8626;
   --menza-primary-hover: #C4721C;
-  --menza-text: #F3F4F6;
+  --menza-text: #F8FAFC;
   --menza-text-muted: #94A3B8;
-  --menza-border: #2B3540;
+  --menza-border: #26323E;
+  --menza-border-subtle: #1D2630;
 }
 
+html,
 body {
   background-color: var(--menza-bg);
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
   color: var(--menza-text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--font-jakarta), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  letter-spacing: -0.011em;
   margin: 0;
   padding: 0;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 /* Custom scrollbars for POS order lists and catalog */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 
 ::-webkit-scrollbar-track {
@@ -42,23 +53,29 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #D5CEC4;
-  border-radius: 4px;
+  background: #D9D2C9;
+  border-radius: 9999px;
 }
 
 .dark ::-webkit-scrollbar-thumb {
-  background: #334155;
-  border-radius: 4px;
+  background: #2D3A47;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #C4BCB2;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #3B4B5C;
 }
 
 /* Thermal Printer 58mm / 80mm & POS Print Rules */
 @media print {
-  /* Suppress header/footer date and URLs in print output */
   @page {
     margin: 0mm !important;
   }
 
-  /* When printing thermal area specifically */
   body:has(#thermal-print-area) * {
     visibility: hidden;
   }
@@ -79,13 +96,10 @@ body {
     line-height: 1.2;
   }
 
-  /* General print cleaning when printing standard screens */
   header, nav, aside, button, .no-print {
     display: none !important;
   }
 }
-
-
 
 /* POS PIN shake animation */
 @keyframes shake {
@@ -106,4 +120,62 @@ body {
 
 .animate-float {
   animation: float 3.5s ease-in-out infinite;
+}
+
+/* Typography & Numerical alignment for POS counters & totals */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+  -moz-font-feature-settings: "tnum";
+  -webkit-font-feature-settings: "tnum";
+  font-feature-settings: "tnum";
+}
+
+/* Tactile Micro-Interactions for POS Touch Terminals */
+.pos-tap {
+  transition: transform 120ms cubic-bezier(0.4, 0, 0.2, 1), box-shadow 120ms ease, border-color 120ms ease;
+  will-change: transform;
+}
+.pos-tap:active {
+  transform: scale(0.97);
+}
+
+/* Modern Glassmorphic Backdrop for Modals, Drawers & Sticky Bars */
+.glass-panel {
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.glass-topbar {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* Ambient Layered Elevation Shadows */
+.shadow-card {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.025);
+}
+.dark .shadow-card {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35), 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.shadow-card-hover {
+  box-shadow: 0 10px 25px -4px rgba(222, 134, 38, 0.18), 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+.dark .shadow-card-hover {
+  box-shadow: 0 10px 25px -4px rgba(222, 134, 38, 0.28), 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+/* Warm Terracotta Ambient Glow for Active / Selected Elements */
+.glow-amber {
+  box-shadow: 0 0 18px rgba(222, 134, 38, 0.24);
+}
+.dark .glow-amber {
+  box-shadow: 0 0 20px rgba(222, 134, 38, 0.36);
+}
+
+.glow-emerald {
+  box-shadow: 0 0 16px rgba(16, 185, 129, 0.22);
+}
+.dark .glow-emerald {
+  box-shadow: 0 0 18px rgba(16, 185, 129, 0.32);
 }

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -35,6 +35,8 @@ import {
   Tag,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
   FolderPlus,
   Sliders,
   PlusCircle,
@@ -176,6 +178,7 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
   // Pagination State
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [itemsPerPage, setItemsPerPage] = useState<number | 'all'>('all');
+  const flatListRef = useRef<FlatList>(null);
 
   // Subscription State
   const [hasActiveSub, setHasActiveSub] = useState<boolean>(true);
@@ -251,6 +254,15 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
   useEffect(() => {
     setCurrentPage(1);
   }, [selectedCatId, stockFilter, searchQuery, itemsPerPage]);
+
+  // Smoothly scroll back to top when page changes
+  useEffect(() => {
+    if (flatListRef.current) {
+      try {
+        flatListRef.current.scrollToOffset({ offset: 0, animated: true });
+      } catch (_) {}
+    }
+  }, [currentPage]);
 
   const verifySubscriptionAndLoadData = async () => {
     try {
@@ -863,7 +875,7 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
   const filteredUnits = units.filter((u) => u.unitName.toLowerCase().includes(unitSearchQuery.toLowerCase()));
   const inStockCount = safeItems.filter((x) => x.isAvailable).length;
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top', 'bottom', 'left', 'right']}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       <StatusBar barStyle="dark-content" backgroundColor="#FAF7F2" translucent={false} />
       <View style={styles.container}>
       {/* TOP STREAMLINED UNIFIED HEADER (Identical to HomePage) */}
@@ -990,7 +1002,7 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
               <Search size={15} color="#DE8626" />
               <TextInput
                 style={styles.searchTextInput}
-                placeholder="Search dish, category, portion, or price..."
+                placeholder="Search dish"
                 placeholderTextColor="#9CA3AF"
                 value={searchQuery}
                 onChangeText={setSearchQuery}
@@ -1179,10 +1191,12 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
             </View>
           ) : (
             <FlatList
+              ref={flatListRef}
               data={paginatedItems}
               keyExtractor={(item) => String(item.id)}
+              style={styles.dishList}
               contentContainerStyle={styles.listContent}
-              showsVerticalScrollIndicator={false}
+              showsVerticalScrollIndicator={true}
               initialNumToRender={10}
               maxToRenderPerBatch={10}
               windowSize={5}
@@ -1266,7 +1280,7 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
                         {variantsCount > 0 && (
                           <View style={styles.chipsRow}>
                             <Text style={styles.chipSectionLabel}>Sizes:</Text>
-                            {item.variants!.slice(0, 3).map((v) => (
+                            {item.variants!.slice(0, 3).map((v: any) => (
                               <View key={`v-${v.id}`} style={styles.variantTag}>
                                 <Text style={styles.variantTagText}>
                                   {v.name} • ₹{v.price}
@@ -1282,7 +1296,7 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
                         {modifiersCount > 0 && (
                           <View style={styles.chipsRow}>
                             <Text style={styles.chipSectionLabel}>Add-ons:</Text>
-                            {item.modifiers!.slice(0, 3).map((m) => (
+                            {item.modifiers!.slice(0, 3).map((m: any) => (
                               <View key={`m-${m.id}`} style={styles.modifierTag}>
                                 <Text style={styles.modifierTagText}>
                                   +{m.modifierName} (₹{m.price})
@@ -1346,50 +1360,75 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
             />
           )}
 
-          {/* COMPACT PAGINATION TOOLBAR */}
+          {/* MODERN PAGINATION TOOLBAR */}
           {totalItems > 0 && (
             <View style={styles.paginationToolbar}>
-              <Text style={styles.paginationSummary}>
-                Showing <Text style={{ color: '#DE8626', fontWeight: 'bold' }}>{totalItems}</Text> dishes
-              </Text>
-
-              <View style={styles.pageSizeRow}>
-                <Text style={styles.pageSizeLabel}>Rows:</Text>
-                {([10, 25, 50, 'all'] as const).map((size) => (
-                  <TouchableOpacity
-                    key={`size-${size}`}
-                    style={[styles.pageSizeBtn, itemsPerPage === size && styles.pageSizeBtnActive]}
-                    onPress={() => setItemsPerPage(size)}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={[styles.pageSizeBtnText, itemsPerPage === size && styles.pageSizeBtnTextActive]}>
-                      {size === 'all' ? 'All' : size}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+              {/* Summary / Range Info */}
+              <View style={styles.paginationSummaryBox}>
+                <Text style={styles.paginationSummary}>
+                  Showing{' '}
+                  <Text style={styles.paginationHighlight}>
+                    {isAll ? totalItems : `${startIndex + 1}–${endIndex}`}
+                  </Text>
+                  {' '}of{' '}
+                  <Text style={styles.paginationHighlight}>{totalItems}</Text> dishes
+                </Text>
               </View>
 
-              {!isAll && totalPages > 1 && (
-                <View style={styles.pageControls}>
-                  <TouchableOpacity
-                    style={[styles.pageBtn, currentPage === 1 && styles.pageBtnDisabled]}
-                    disabled={currentPage === 1}
-                    onPress={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={styles.pageBtnText}>‹</Text>
-                  </TouchableOpacity>
-                  <Text style={styles.pageCountText}>{currentPage}/{totalPages}</Text>
-                  <TouchableOpacity
-                    style={[styles.pageBtn, currentPage === totalPages && styles.pageBtnDisabled]}
-                    disabled={currentPage === totalPages}
-                    onPress={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={styles.pageBtnText}>›</Text>
-                  </TouchableOpacity>
+              <View style={styles.paginationActionsGroup}>
+                {/* Rows Per Page Segment */}
+                <View style={styles.pageSizeRow}>
+                  <Text style={styles.pageSizeLabel}>Rows:</Text>
+                  <View style={styles.pageSizeSegmentContainer}>
+                    {([10, 25, 50, 'all'] as const).map((size) => {
+                      const isActive = itemsPerPage === size;
+                      return (
+                        <TouchableOpacity
+                          key={`size-${size}`}
+                          style={[styles.pageSizePill, isActive && styles.pageSizePillActive]}
+                          onPress={() => setItemsPerPage(size)}
+                          activeOpacity={0.75}
+                        >
+                          <Text style={[styles.pageSizePillText, isActive && styles.pageSizePillTextActive]}>
+                            {size === 'all' ? 'All' : size}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
                 </View>
-              )}
+
+                {/* Page Navigation Controls */}
+                {!isAll && totalPages > 1 && (
+                  <View style={styles.pageControls}>
+                    <TouchableOpacity
+                      style={[styles.pageNavBtn, currentPage === 1 && styles.pageNavBtnDisabled]}
+                      disabled={currentPage === 1}
+                      onPress={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                      activeOpacity={0.7}
+                    >
+                      <ChevronLeft size={16} color={currentPage === 1 ? '#C4BCB3' : '#DE8626'} strokeWidth={2.5} />
+                    </TouchableOpacity>
+
+                    <View style={styles.pageIndicatorBadge}>
+                      <Text style={styles.pageIndicatorText}>
+                        <Text style={styles.pageIndicatorCurrent}>{currentPage}</Text>
+                        <Text style={styles.pageIndicatorDivider}> / </Text>
+                        <Text style={styles.pageIndicatorTotal}>{totalPages}</Text>
+                      </Text>
+                    </View>
+
+                    <TouchableOpacity
+                      style={[styles.pageNavBtn, currentPage === totalPages && styles.pageNavBtnDisabled]}
+                      disabled={currentPage === totalPages}
+                      onPress={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                      activeOpacity={0.7}
+                    >
+                      <ChevronRight size={16} color={currentPage === totalPages ? '#C4BCB3' : '#DE8626'} strokeWidth={2.5} />
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </View>
             </View>
           )}
         </View>
@@ -2446,9 +2485,12 @@ const styles = StyleSheet.create({
   },
 
   /* DISH CARD */
+  dishList: {
+    flex: 1,
+  },
   listContent: {
-    paddingBottom: 20,
-    gap: 8,
+    paddingBottom: 24,
+    gap: 10,
   },
   dishCard: {
     backgroundColor: '#FFFFFF',
@@ -2696,78 +2738,135 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
 
-  /* PAGINATION TOOLBAR */
+  /* MODERN PAGINATION TOOLBAR */
   paginationToolbar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    flexWrap: 'wrap',
     backgroundColor: '#FFFFFF',
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    marginTop: 2,
-    marginBottom: 6,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    marginTop: 4,
+    marginBottom: 4,
     borderWidth: 1,
-    borderColor: '#E7E1DA',
+    borderColor: '#E8E1D7',
+    shadowColor: '#3C2F00',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 5,
+    elevation: 2,
+    gap: 8,
+  },
+  paginationSummaryBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   paginationSummary: {
     color: '#7C6F62',
-    fontSize: 10,
+    fontSize: 11.5,
+    fontWeight: '500',
+  },
+  paginationHighlight: {
+    color: '#DE8626',
+    fontWeight: '800',
+  },
+  paginationActionsGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
   },
   pageSizeRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3,
+    gap: 5,
   },
   pageSizeLabel: {
     color: '#7C6F62',
-    fontSize: 10,
+    fontSize: 11,
+    fontWeight: '600',
   },
-  pageSizeBtn: {
-    paddingHorizontal: 5,
-    paddingVertical: 2,
-    borderRadius: 4,
-    backgroundColor: '#FAF7F2',
+  pageSizeSegmentContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F5EFE7',
+    borderRadius: 8,
+    padding: 2,
+    gap: 2,
   },
-  pageSizeBtnActive: {
-    backgroundColor: '#FFF0DE',
-    borderWidth: 1,
-    borderColor: '#DE8626',
+  pageSizePill: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    minWidth: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  pageSizeBtnText: {
+  pageSizePillActive: {
+    backgroundColor: '#DE8626',
+    shadowColor: '#DE8626',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.25,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  pageSizePillText: {
     color: '#7C6F62',
-    fontSize: 9,
+    fontSize: 10.5,
     fontWeight: '700',
   },
-  pageSizeBtnTextActive: {
-    color: '#D96B14',
+  pageSizePillTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '800',
   },
   pageControls: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
   },
-  pageBtn: {
-    width: 20,
-    height: 20,
-    borderRadius: 4,
+  pageNavBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
     backgroundColor: '#FAF7F2',
     borderWidth: 1,
-    borderColor: '#E7E1DA',
+    borderColor: '#E8E1D7',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  pageBtnDisabled: {
-    opacity: 0.3,
+  pageNavBtnDisabled: {
+    opacity: 0.45,
+    backgroundColor: '#F3EFE9',
+    borderColor: '#ECE6DE',
   },
-  pageBtnText: {
-    color: '#DE8626',
-    fontSize: 12,
-    fontWeight: 'bold',
+  pageIndicatorBadge: {
+    height: 32,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    backgroundColor: '#FAF7F2',
+    borderWidth: 1,
+    borderColor: '#E8E1D7',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  pageCountText: {
+  pageIndicatorText: {
+    fontSize: 11,
     color: '#7C6F62',
-    fontSize: 10,
+    fontWeight: '600',
+  },
+  pageIndicatorCurrent: {
+    color: '#DE8626',
+    fontWeight: '800',
+  },
+  pageIndicatorDivider: {
+    color: '#A89E92',
+    fontWeight: '500',
+  },
+  pageIndicatorTotal: {
+    color: '#1F2937',
+    fontWeight: '700',
   },
 
   /* LOADING & EMPTY STATES */

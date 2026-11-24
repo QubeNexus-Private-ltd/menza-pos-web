@@ -149,8 +149,7 @@ export const useAppVersionStore = create<AppVersionState>((set, get) => ({
     const { updateInfo } = get();
     const targetUrl =
       updateInfo?.storeUrl ||
-      APP_CONSTANTS.DEFAULT_STORE_URL ||
-      'https://play.google.com/store/apps/details?id=com.anonymous.MenzaAdmin';
+      APP_CONSTANTS.DEFAULT_STORE_URL;
 
     try {
       logger.info('SYSTEM', 'OPENING_STORE_URL', `Opening update URL: ${targetUrl}`);
@@ -159,8 +158,8 @@ export const useAppVersionStore = create<AppVersionState>((set, get) => ({
         await Linking.openURL(targetUrl);
         return true;
       } else {
-        // Fallback to generic browser search if custom scheme fails
-        await Linking.openURL('https://play.google.com/store/apps/details?id=com.anonymous.MenzaAdmin');
+        // Fallback to default store URL
+        await Linking.openURL(APP_CONSTANTS.DEFAULT_STORE_URL);
         return true;
       }
     } catch (err: any) {

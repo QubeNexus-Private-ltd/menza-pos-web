@@ -477,6 +477,8 @@ export const RestaurantQrModal: React.FC<RestaurantQrModalProps> = ({
             }
             .body-content {
               padding: 32px 24px;
+              position: relative;
+              z-index: 1;
             }
             .tagline-box {
               background: #FFF7ED;
@@ -543,7 +545,7 @@ export const RestaurantQrModal: React.FC<RestaurantQrModalProps> = ({
               <div class="order-url">${targetOrderingUrl}</div>
             </div>
             <div class="footer">
-              ⚡ Contactless Dining • Instant Kitchen Sync • Powered by Menza
+              Powered by Menza • Smart Dining. Seamless Ordering.
             </div>
           </div>
         </body>

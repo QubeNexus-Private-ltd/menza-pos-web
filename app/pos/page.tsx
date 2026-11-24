@@ -895,6 +895,28 @@ export default function PosPage() {
     });
   }, [categories, items]);
 
+  // Pre-computed O(1) quantity map & first cart item map for fast dish grid lookups
+  const { cartQtyMap, firstCartItemMap } = useMemo(() => {
+    const qtyMap: Record<number, number> = {};
+    const itemMap: Record<number, CartItem> = {};
+    for (const ci of cart) {
+      qtyMap[ci.itemId] = (qtyMap[ci.itemId] || 0) + ci.quantity;
+      if (!itemMap[ci.itemId]) {
+        itemMap[ci.itemId] = ci;
+      }
+    }
+    return { cartQtyMap: qtyMap, firstCartItemMap: itemMap };
+  }, [cart]);
+
+  // Pre-computed O(1) station map for instant kitchen station lookup
+  const stationMap = useMemo(() => {
+    const map: Record<number, (typeof stations)[0]> = {};
+    for (const s of stations) {
+      if (s.id) map[s.id] = s;
+    }
+    return map;
+  }, [stations]);
+
   // 6. Cart Management
   const addToCartQuick = (item: MenuItem) => {
     if (!isItemAvailable(item)) {
@@ -1124,6 +1146,19 @@ export default function PosPage() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [cart, activeTableOrder, payableGrandTotal]);
+
+  // 9.1 Prevent accidental tab closure when an active unbilled cart exists
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (cart.length > 0) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [cart.length]);
 
   // 9.5 Offline Checkout Execution Engine
   const processOfflineCheckout = async (
@@ -1945,7 +1980,7 @@ export default function PosPage() {
             cart.map((item) => (
               <div
                 key={item.cartKey}
-                className="group relative rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] p-2.5 sm:p-3 shadow-2xs hover:border-[#DE8626]/50 hover:shadow-xs transition-all space-y-2"
+                className="group relative rounded-2xl border border-[#E8E2D9] dark:border-[#26323E] bg-[#FFFFFF] dark:bg-[#161B22] p-2.5 sm:p-3 shadow-2xs hover:border-[#DE8626]/50 hover:shadow-xs transition-all space-y-2"
               >
                 {/* Upper Tier: Dish Name + Diet Indicator + Portions + Line Total */}
                 <div className="flex items-start justify-between gap-2">
@@ -1966,7 +2001,7 @@ export default function PosPage() {
                         {item.itemName}
                       </h4>
                       <div className="flex items-center gap-1.5 text-[10px] text-[#667085] dark:text-[#94A3B8] mt-0.5 flex-wrap">
-                        <span className="font-semibold text-[#DE8626]">₹{item.price.toFixed(2)}</span>
+                        <span className="font-semibold tabular-nums text-[#DE8626]">₹{item.price.toFixed(2)}</span>
                         {item.portionLabel && (
                           <>
                             <span>•</span>
@@ -2001,7 +2036,7 @@ export default function PosPage() {
 
                   {/* Line Total Price */}
                   <div className="text-right shrink-0">
-                    <span className="text-xs sm:text-sm font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                    <span className="text-xs sm:text-sm font-black tabular-nums text-[#1E2930] dark:text-[#F3F4F6]">
                       ₹{(item.price * item.quantity).toFixed(2)}
                     </span>
                   </div>
@@ -2032,7 +2067,7 @@ export default function PosPage() {
                           description: item.description,
                         })
                       }
-                      className="min-w-[28px] sm:min-w-[32px] h-5 sm:h-5.5 px-1.5 flex items-center justify-center rounded-md bg-white dark:bg-[#1B2127] text-xs font-black text-[#1E2930] dark:text-[#F3F4F6] shadow-2xs border border-[#DE8626]/25 hover:border-[#DE8626] transition-colors"
+                      className="min-w-[28px] sm:min-w-[32px] h-5 sm:h-5.5 px-1.5 flex items-center justify-center rounded-md bg-white dark:bg-[#1B2127] text-xs font-black tabular-nums text-[#1E2930] dark:text-[#F3F4F6] shadow-2xs border border-[#DE8626]/25 hover:border-[#DE8626] transition-colors"
                       title="Click to enter exact quantity via numpad"
                     >
                       {item.quantity}
@@ -2065,7 +2100,7 @@ export default function PosPage() {
         </div>
 
         {/* Bill Breakdown & Settlement Section */}
-        <div className="p-3 sm:p-4 bg-[#FFFFFF] dark:bg-[#1B2127] space-y-3">
+        <div className="p-3 sm:p-4 bg-[#FFFFFF] dark:bg-[#161B22] space-y-3">
           {/* GSTIN badge */}
           {hasGstNumber && Boolean(restaurantConfig?.gstNumber) && (
             <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-amber-500/10 border border-amber-500/20 text-[#DE8626] text-[10px] font-bold">
@@ -2086,17 +2121,17 @@ export default function PosPage() {
               <>
                 <div className="flex justify-between text-[#667085] dark:text-[#94A3B8]">
                   <span>Subtotal ({cartTotalItems} items)</span>
-                  <span className="font-semibold text-[#1E2930] dark:text-[#F3F4F6]">₹{subtotal.toFixed(2)}</span>
+                  <span className="font-semibold tabular-nums text-[#1E2930] dark:text-[#F3F4F6]">₹{subtotal.toFixed(2)}</span>
                 </div>
                 {hasGstNumber ? (
                   <>
                     <div className="flex justify-between text-[#667085] dark:text-[#94A3B8]">
                       <span>CGST ({cgstRate.toFixed(2)}%)</span>
-                      <span className="font-semibold text-[#1E2930] dark:text-[#F3F4F6]">+₹{cgstAmount.toFixed(2)}</span>
+                      <span className="font-semibold tabular-nums text-[#1E2930] dark:text-[#F3F4F6]">+₹{cgstAmount.toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between text-[#667085] dark:text-[#94A3B8]">
                       <span>SGST ({sgstRate.toFixed(2)}%)</span>
-                      <span className="font-semibold text-[#1E2930] dark:text-[#F3F4F6]">+₹{sgstAmount.toFixed(2)}</span>
+                      <span className="font-semibold tabular-nums text-[#1E2930] dark:text-[#F3F4F6]">+₹{sgstAmount.toFixed(2)}</span>
                     </div>
                   </>
                 ) : null}
@@ -2109,7 +2144,7 @@ export default function PosPage() {
                   <span className="text-[10px] text-[#667085] dark:text-[#94A3B8] font-normal block">(incl. of taxes)</span>
                 )}
               </div>
-              <span className="text-base sm:text-lg font-black text-[#DE8626]">₹{payableGrandTotal.toFixed(2)}</span>
+              <span className="text-base sm:text-lg font-black tabular-nums text-[#DE8626]">₹{payableGrandTotal.toFixed(2)}</span>
             </div>
           </div>
 
@@ -2211,7 +2246,7 @@ export default function PosPage() {
       </div>
 
       {/* 2. STICKY ACTION BUTTONS PINNED AT BOTTOM */}
-      <div className="shrink-0 p-3 sm:p-3.5 border-t border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] shadow-lg space-y-2">
+      <div className="shrink-0 p-3 sm:p-3.5 border-t border-[#E8E2D9] dark:border-[#26323E] bg-[#FFFFFF] dark:bg-[#161B22] shadow-lg space-y-2">
         {selectedOrderType === 1 && selectedTable ? (
           /* ==================================================== */
           /* DINE-IN TABLE ORDER ACTIONS                          */
@@ -2427,7 +2462,7 @@ export default function PosPage() {
     <AuthGuard>
       <AppShell>
         <FeatureGate feature="posBilling" title="POS Billing Terminal" planSuggestion="Starter or Dine-In Pro">
-        <div className="flex flex-1 h-full min-h-0 flex-col overflow-hidden bg-[#FAF7F2] dark:bg-[#111418]">
+        <div className="flex flex-1 h-full min-h-0 flex-col overflow-hidden bg-[#FAF8F5] dark:bg-[#0E1217]">
           {/* ======================================================== */}
           {/* 1. WARNING BANNERS (GRACE, EXHAUSTED WALLET, INACTIVE)   */}
           {/* ======================================================== */}
@@ -2566,9 +2601,9 @@ export default function PosPage() {
           {/* ======================================================== */}
           <div className="flex-1 flex flex-col lg:flex-row overflow-hidden pt-1.5">
             {/* LEFT SIDE: Order Types, Category Tabs, Search, Dishes */}
-            <div className="flex-1 flex flex-col overflow-hidden border-r border-[#E7E1DA] dark:border-[#2B3540]">
+            <div className="flex-1 flex flex-col overflow-hidden border-r border-[#E8E2D9] dark:border-[#26323E]">
               {/* Dynamic Order Types / Locked Dine-In Table Banner */}
-              <div className="px-3 sm:px-4 py-2 bg-[#FFFFFF] dark:bg-[#1B2127] border-b border-[#E7E1DA] dark:border-[#2B3540] space-y-2">
+              <div className="px-3 sm:px-4 py-2 bg-[#FFFFFF] dark:bg-[#161B22] border-b border-[#E8E2D9] dark:border-[#26323E] space-y-2">
                 {selectedTable ? (
                   <div className="flex items-center justify-between rounded-2xl border border-amber-500/40 bg-gradient-to-r from-amber-500/15 to-[#DE8626]/10 p-2.5 shadow-xs">
                     <div className="flex items-center gap-2.5 min-w-0">
@@ -2681,10 +2716,10 @@ export default function PosPage() {
                                   handleOpenTablePicker();
                                 }
                               }}
-                              className={`flex items-center gap-1.5 rounded-xl px-2.5 sm:px-3 py-1.5 text-xs font-bold transition-all ${
+                              className={`flex items-center gap-1.5 rounded-xl px-2.5 sm:px-3 py-1.5 text-xs font-bold transition-all pos-tap ${
                                 isSelected
-                                  ? 'bg-gradient-to-r from-amber-500 to-[#DE8626] text-white shadow-xs shadow-[#DE8626]/20'
-                                  : 'border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#667085] dark:text-[#94A3B8] hover:border-[#DE8626]'
+                                  ? 'bg-gradient-to-r from-amber-500 to-[#DE8626] text-white shadow-md shadow-[#DE8626]/25 font-bold'
+                                  : 'border border-[#E8E2D9] dark:border-[#26323E] bg-[#F5F1EB] dark:bg-[#11151B] text-[#64748B] dark:text-[#94A3B8] hover:border-[#DE8626] hover:text-[#DE8626]'
                               } ${!isAvailable ? 'opacity-60' : ''}`}
                             >
                               {renderIcon()}
@@ -2752,7 +2787,7 @@ export default function PosPage() {
                   </div>
 
                   {/* Veg / Non-Veg Toggle Chips */}
-                  <div className="flex items-center gap-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] p-1 text-xs shrink-0">
+                  <div className="flex items-center gap-1 rounded-xl border border-[#E8E2D9] dark:border-[#26323E] bg-[#F5F1EB] dark:bg-[#11151B] p-1 text-xs shrink-0">
                     <button
                       type="button"
                       onClick={() => setVegFilter('ALL')}
@@ -2808,14 +2843,14 @@ export default function PosPage() {
               </div>
 
               {/* Category Horizontal Scrolling Tabs */}
-              <div className="flex items-center gap-2 overflow-x-auto scrollbar-none border-b border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] px-3 sm:px-4 py-2 shrink-0">
+              <div className="flex items-center gap-2 overflow-x-auto scrollbar-none border-b border-[#E8E2D9] dark:border-[#26323E] bg-[#FFFFFF] dark:bg-[#161B22] px-3 sm:px-4 py-2 shrink-0">
                 <button
                   type="button"
                   onClick={() => setSelectedCategory(null)}
-                  className={`shrink-0 rounded-xl px-3 py-1.5 text-xs font-bold transition-all ${
+                  className={`shrink-0 rounded-xl px-3.5 py-1.5 text-xs font-bold transition-all pos-tap ${
                     selectedCategory === null
-                      ? 'bg-[#DE8626] text-white shadow-xs shadow-[#DE8626]/20'
-                      : 'border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#667085] dark:text-[#94A3B8] hover:border-[#DE8626]'
+                      ? 'bg-gradient-to-r from-amber-500 to-[#DE8626] text-white shadow-md shadow-[#DE8626]/25 font-bold'
+                      : 'border border-[#E8E2D9] dark:border-[#26323E] bg-[#F5F1EB] dark:bg-[#11151B] text-[#64748B] dark:text-[#94A3B8] hover:border-[#DE8626] hover:text-[#DE8626]'
                   }`}
                 >
                   All Dishes ({items.length})
@@ -2825,10 +2860,10 @@ export default function PosPage() {
                     key={cat.id}
                     type="button"
                     onClick={() => setSelectedCategory(cat.id)}
-                    className={`shrink-0 rounded-xl px-3 py-1.5 text-xs font-bold transition-all ${
+                    className={`shrink-0 rounded-xl px-3.5 py-1.5 text-xs font-bold transition-all pos-tap ${
                       selectedCategory === cat.id
-                        ? 'bg-[#DE8626] text-white shadow-xs shadow-[#DE8626]/20'
-                        : 'border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#667085] dark:text-[#94A3B8] hover:border-[#DE8626]'
+                        ? 'bg-gradient-to-r from-amber-500 to-[#DE8626] text-white shadow-md shadow-[#DE8626]/25 font-bold'
+                        : 'border border-[#E8E2D9] dark:border-[#26323E] bg-[#F5F1EB] dark:bg-[#11151B] text-[#64748B] dark:text-[#94A3B8] hover:border-[#DE8626] hover:text-[#DE8626]'
                     }`}
                   >
                     {cat.categoryName}
@@ -2849,17 +2884,16 @@ export default function PosPage() {
                     {filteredItems.map((dish) => {
                       const dishId = dish.id;
                       const isAvailable = isItemAvailable(dish);
-                      const inCartMatches = cart.filter((ci) => ci.itemId === dishId);
-                      const inCartQty = inCartMatches.reduce((s, ci) => s + ci.quantity, 0);
+                      const inCartQty = cartQtyMap[dishId] || 0;
 
                       const portionTag =
                         dish.portionDisplay ||
                         (dish.unitName ? `${dish.quantity && dish.quantity > 0 ? dish.quantity : 1} ${dish.unitName}` : '') ||
                         (dish.categoryName ? dish.categoryName : dish.isVeg ? 'Veg' : 'Non-Veg');
 
-                      // Station warning check
+                      // Station warning check (O(1) map lookup)
                       const stationId = dish.kitchenStationId;
-                      const stationObj = stationId ? stations.find((s) => s.id === stationId) : null;
+                      const stationObj = stationId ? stationMap[stationId] : null;
                       const isStationPaused = stationObj?.isPaused && (stationObj.remainingPauseMinutes || 0) > 0;
                       const isStationInactive = stationObj && !stationObj.isActive;
 
@@ -2870,10 +2904,10 @@ export default function PosPage() {
                             if (!isAvailable) return;
                             addToCartQuick(dish);
                           }}
-                          className={`group relative flex flex-col justify-between rounded-2xl border overflow-hidden shadow-xs transition-all cursor-pointer select-none ${
+                          className={`group relative flex flex-col justify-between rounded-2xl border overflow-hidden shadow-card transition-all duration-200 cursor-pointer select-none pos-tap ${
                             inCartQty > 0
-                              ? 'border-[#DE8626] bg-amber-500/5 ring-1 ring-[#DE8626]'
-                              : 'border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] hover:border-[#DE8626] hover:shadow-md'
+                              ? 'border-[#DE8626] bg-amber-500/[0.04] ring-2 ring-[#DE8626]/25 glow-amber shadow-card-hover'
+                              : 'border-[#E8E2D9] dark:border-[#26323E] bg-[#FFFFFF] dark:bg-[#161B22] hover:border-[#DE8626]/70 hover:shadow-card-hover hover:-translate-y-0.5'
                           } ${!isAvailable ? 'opacity-60 cursor-not-allowed' : ''}`}
                         >
                           {/* Dish Image Banner */}
@@ -2897,7 +2931,7 @@ export default function PosPage() {
 
                             {/* In-Cart Total Badge Overlay */}
                             {inCartQty > 0 && (
-                              <div className="absolute top-2 right-2 flex h-5 min-w-[20px] px-1 items-center justify-center rounded-full bg-[#DE8626] text-[10px] font-black text-white shadow-xs">
+                              <div className="absolute top-2 right-2 flex h-5 min-w-[20px] px-1 items-center justify-center rounded-full bg-[#DE8626] text-[10px] font-black tabular-nums text-white shadow-xs">
                                 {inCartQty}
                               </div>
                             )}
@@ -2940,8 +2974,8 @@ export default function PosPage() {
                             </div>
 
                             {/* Bottom Row: Price & Menza Stepper or + ADD button */}
-                            <div className="mt-2 flex items-center justify-between pt-2 border-t border-[#E7E1DA]/60 dark:border-[#2B3540]/60">
-                              <span className="text-xs sm:text-sm font-black text-[#1E2930] dark:text-[#F3F4F6]">
+                            <div className="mt-2.5 flex items-center justify-between pt-2 border-t border-[#E8E2D9]/60 dark:border-[#26323E]/60">
+                              <span className="text-xs sm:text-sm font-black tabular-nums text-[#1E2930] dark:text-[#F3F4F6]">
                                 ₹{dish.price}
                               </span>
 
@@ -2955,7 +2989,7 @@ export default function PosPage() {
                                     <button
                                       type="button"
                                       onClick={() => {
-                                        const firstCartItem = inCartMatches[0];
+                                        const firstCartItem = firstCartItemMap[dishId];
                                         if (firstCartItem) updateQuantity(firstCartItem.cartKey, -1);
                                       }}
                                       className="flex h-6 w-6 items-center justify-center rounded-lg bg-white dark:bg-[#1B2127] text-[#D96B14] hover:bg-amber-500 hover:text-white transition-colors"
@@ -2967,7 +3001,7 @@ export default function PosPage() {
                                     <button
                                       type="button"
                                       onClick={() => {
-                                        const firstCartItem = inCartMatches[0];
+                                        const firstCartItem = firstCartItemMap[dishId];
                                         if (firstCartItem) {
                                           setNumpadItem({
                                             cartKey: firstCartItem.cartKey,
@@ -3001,7 +3035,7 @@ export default function PosPage() {
                                         e.stopPropagation();
                                         addToCartQuick(dish);
                                       }}
-                                      className="flex items-center gap-1 rounded-xl bg-gradient-to-r from-amber-500/15 to-[#DE8626]/20 border border-[#DE8626] px-2.5 py-1 text-xs font-black text-[#DE8626] hover:bg-[#DE8626] hover:text-white transition-all shadow-xs"
+                                      className="flex items-center gap-1 rounded-xl bg-amber-500/10 border border-[#DE8626]/40 px-2.5 py-1 text-xs font-black text-[#DE8626] hover:bg-[#DE8626] hover:text-white transition-all shadow-2xs pos-tap"
                                     >
                                       <Plus className="h-3 w-3 stroke-[3]" />
                                       <span>ADD</span>
@@ -3015,7 +3049,7 @@ export default function PosPage() {
                                         setCustomizingItem(dish);
                                       }}
                                       title="Customize Portions & Notes"
-                                      className="flex h-6 w-6 sm:h-7 sm:w-7 items-center justify-center rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] text-[#667085] hover:text-[#DE8626] hover:border-[#DE8626] transition-colors"
+                                      className="flex h-6 w-6 sm:h-7 sm:w-7 items-center justify-center rounded-xl border border-[#E8E2D9] dark:border-[#26323E] text-[#64748B] hover:text-[#DE8626] hover:border-[#DE8626] hover:bg-amber-500/10 transition-colors pos-tap"
                                     >
                                       <SlidersHorizontal className="h-3 w-3" />
                                     </button>
@@ -3033,9 +3067,9 @@ export default function PosPage() {
             </div>
 
             {/* RIGHT SIDE: Pinned Desktop Checkout Drawer Panel (>= 1024px) */}
-            <div className="hidden lg:flex w-[320px] xl:w-[360px] 2xl:w-[400px] flex-col border-l border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] h-full overflow-hidden shrink-0">
+            <div className="hidden lg:flex w-[320px] xl:w-[360px] 2xl:w-[400px] flex-col border-l border-[#E8E2D9] dark:border-[#26323E] bg-[#FFFFFF] dark:bg-[#161B22] h-full overflow-hidden shrink-0">
               {/* Drawer Header */}
-              <div className="flex items-center justify-between border-b border-[#E7E1DA] dark:border-[#2B3540] px-3.5 py-2.5 sm:px-4 sm:py-3 bg-[#FAF7F2] dark:bg-[#151A20] shrink-0">
+              <div className="flex items-center justify-between border-b border-[#E8E2D9] dark:border-[#26323E] px-3.5 py-2.5 sm:px-4 sm:py-3 bg-[#FAF8F5] dark:bg-[#11151B] shrink-0">
                 <div className="flex items-center gap-2">
                   <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-500/15 text-[#DE8626] shrink-0">
                     <ShoppingBag className="h-4 w-4" />

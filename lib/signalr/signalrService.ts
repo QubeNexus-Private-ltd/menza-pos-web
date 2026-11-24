@@ -20,15 +20,46 @@ const menuItemAvailabilityListeners = new Set<(itemData: any) => void>();
 const waiterDutyStatusListeners = new Set<(dutyData: any) => void>();
 const reconnectedListeners = new Set<() => void>();
 
-// Browser tab visibility auto-reconnect
+// Robust Browser Tab & OS Wakeup Auto-Reconnect
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && currentConnectedRestId) {
-      if (!connection || connection.state === signalR.HubConnectionState.Disconnected) {
-        console.log('[SignalR] Tab visible again. Re-verifying connection...');
-        startPosSignalRConnection(currentConnectedRestId).catch(() => {});
-      }
+  let resumeTimer: NodeJS.Timeout | null = null;
+
+  const verifyAndRecoverConnection = () => {
+    if (!currentConnectedRestId) return;
+
+    // 1. If disconnected or missing, immediately reconnect
+    if (!connection || connection.state === signalR.HubConnectionState.Disconnected) {
+      console.log('[SignalR] Tab active and disconnected. Initiating immediate reconnect...');
+      startPosSignalRConnection(currentConnectedRestId).catch(() => {});
+      return;
     }
+
+    // 2. If stuck in Reconnecting or Connecting state after waking from OS sleep, force reset
+    if (connection.state !== signalR.HubConnectionState.Connected) {
+      console.log(`[SignalR] Stalled connection detected (${connection.state}) after resume. Forcing fresh connection...`);
+      connection
+        .stop()
+        .catch(() => {})
+        .finally(() => {
+          if (currentConnectedRestId) {
+            startPosSignalRConnection(currentConnectedRestId).catch(() => {});
+          }
+        });
+    }
+  };
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      if (resumeTimer) clearTimeout(resumeTimer);
+      // Wait a brief 300ms window for the browser network stack to re-bind
+      resumeTimer = setTimeout(verifyAndRecoverConnection, 300);
+    }
+  });
+
+  window.addEventListener('online', () => {
+    console.log('[SignalR] Browser back online event detected. Verifying connection...');
+    if (resumeTimer) clearTimeout(resumeTimer);
+    resumeTimer = setTimeout(verifyAndRecoverConnection, 500);
   });
 }
 

@@ -51,11 +51,33 @@ const possiblePaymentsDirs = [
 const monorepoPaymentsDir = possiblePaymentsDirs.find((d) => fs.existsSync(d)) || possiblePaymentsDirs[0];
 const localPaymentsDir = path.resolve(__dirname, '../payments');
 
+// Auto-clear stale production build artifacts when launching development mode
+// This prevents Next.js 15 'SegmentViewNode not found in React Client Manifest' crash
+const nextDir = path.resolve(__dirname, '../.next');
+const buildIdFile = path.join(nextDir, 'BUILD_ID');
+if (process.argv.includes('--dev') && fs.existsSync(buildIdFile)) {
+  console.log('[sync-shared] Clearing stale production .next cache before dev launch...');
+  try {
+    fs.rmSync(nextDir, { recursive: true, force: true });
+  } catch (err) {
+    console.warn('[sync-shared] Warning: Could not clear .next directory:', err.message);
+  }
+}
+
 if (fs.existsSync(monorepoSrcDir)) {
   console.log('[sync-shared] Syncing core business logic from ../src to ./shared...');
   copyFolderSync(monorepoSrcDir, localSharedDir);
   if (fs.existsSync(monorepoPaymentsDir)) {
     copyFolderSync(monorepoPaymentsDir, localPaymentsDir);
+  }
+  const possibleAppJsonFiles = [
+    path.resolve(__dirname, '../../Menza/app.json'),
+    path.resolve('F:/Menza/app.json'),
+    path.resolve(__dirname, '../../app.json'),
+  ];
+  const monorepoAppJson = possibleAppJsonFiles.find((p) => fs.existsSync(p));
+  if (monorepoAppJson) {
+    fs.copyFileSync(monorepoAppJson, path.resolve(__dirname, '../app.json'));
   }
   console.log('[sync-shared] Sync completed successfully.');
 } else {

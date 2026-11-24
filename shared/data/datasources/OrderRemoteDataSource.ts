@@ -31,157 +31,6 @@ export class OrderRemoteDataSource {
     };
   }
 
-  /** Heuristic station detection matching backend and KDS */
-  private detectStation(name: string, category?: string): string {
-    const s = `${name} ${category || ''}`.toLowerCase();
-    if (
-      s.includes('grill') ||
-      s.includes('tandoor') ||
-      s.includes('tikka') ||
-      s.includes('kebab') ||
-      s.includes('kabab') ||
-      s.includes('naan') ||
-      s.includes('roti') ||
-      s.includes('paratha') ||
-      s.includes('kulcha') ||
-      s.includes('bread') ||
-      s.includes('pizza') ||
-      s.includes('burger') ||
-      s.includes('sandwich') ||
-      s.includes('toast') ||
-      s.includes('bbq') ||
-      s.includes('barbeque') ||
-      s.includes('steak') ||
-      s.includes('sizzler') ||
-      s.includes('shawarma')
-    ) {
-      return 'GRILL';
-    }
-    if (
-      s.includes('curry') ||
-      s.includes('gravy') ||
-      s.includes('makhani') ||
-      s.includes('korma') ||
-      s.includes('masala') ||
-      s.includes('paneer') ||
-      s.includes('dal') ||
-      s.includes('daal') ||
-      s.includes('biryani') ||
-      s.includes('rice') ||
-      s.includes('pulao') ||
-      s.includes('jeera rice') ||
-      s.includes('kofta') ||
-      s.includes('handi') ||
-      s.includes('kadai') ||
-      s.includes('kadhai') ||
-      s.includes('butter chicken')
-    ) {
-      return 'CURRY';
-    }
-    if (
-      s.includes('chinese') ||
-      s.includes('wok') ||
-      s.includes('noodle') ||
-      s.includes('noodles') ||
-      s.includes('chowmein') ||
-      s.includes('manchurian') ||
-      s.includes('fried rice') ||
-      s.includes('schezwan') ||
-      s.includes('chilli') ||
-      s.includes('momos') ||
-      s.includes('dim sum') ||
-      s.includes('dimsum') ||
-      s.includes('soup') ||
-      s.includes('spring roll') ||
-      s.includes('hakka') ||
-      s.includes('ramen')
-    ) {
-      return 'CHINESE';
-    }
-    if (
-      s.includes('beverage') ||
-      s.includes('bar') ||
-      s.includes('drink') ||
-      s.includes('coffee') ||
-      s.includes('tea') ||
-      s.includes('chai') ||
-      s.includes('mojito') ||
-      s.includes('shake') ||
-      s.includes('smoothie') ||
-      s.includes('mocktail') ||
-      s.includes('cocktail') ||
-      s.includes('juice') ||
-      s.includes('soda') ||
-      s.includes('cold drink') ||
-      s.includes('lassi') ||
-      s.includes('water') ||
-      s.includes('beer') ||
-      s.includes('wine')
-    ) {
-      return 'BAR';
-    }
-    if (
-      s.includes('dessert') ||
-      s.includes('sweet') ||
-      s.includes('ice cream') ||
-      s.includes('icecream') ||
-      s.includes('cake') ||
-      s.includes('pastry') ||
-      s.includes('brownie') ||
-      s.includes('halwa') ||
-      s.includes('gulab jamun') ||
-      s.includes('jamun') ||
-      s.includes('rasgulla') ||
-      s.includes('kulfi') ||
-      s.includes('pudding') ||
-      s.includes('sundae') ||
-      s.includes('waffle')
-    ) {
-      return 'DESSERT';
-    }
-    if (
-      s.includes('starter') ||
-      s.includes('appetizer') ||
-      s.includes('snack') ||
-      s.includes('pakoda') ||
-      s.includes('pakora') ||
-      s.includes('samosa') ||
-      s.includes('cutlet') ||
-      s.includes('finger') ||
-      s.includes('fries') ||
-      s.includes('crispy') ||
-      s.includes('chaat') ||
-      s.includes('nachos') ||
-      s.includes('wings') ||
-      s.includes('papad') ||
-      s.includes('salad') ||
-      s.includes('roll')
-    ) {
-      return 'STARTERS';
-    }
-    return 'MAIN';
-  }
-
-  private resolveStationMeta(stationCode: string): { name: string; color: string; icon: string } {
-    switch (stationCode.toUpperCase()) {
-      case 'GRILL':
-        return { name: 'Grill & Tandoor', color: '#EF4444', icon: 'flame' };
-      case 'CURRY':
-        return { name: 'Main Curry & Gravy', color: '#F59E0B', icon: 'soup' };
-      case 'CHINESE':
-        return { name: 'Chinese & Wok', color: '#8B5CF6', icon: 'sparkles' };
-      case 'BAR':
-        return { name: 'Beverages & Bar', color: '#06B6D4', icon: 'coffee' };
-      case 'DESSERT':
-        return { name: 'Desserts & Bakery', color: '#EC4899', icon: 'cake' };
-      case 'STARTERS':
-        return { name: 'Starters & Snacks', color: '#10B981', icon: 'zap' };
-      case 'MAIN':
-      default:
-        return { name: 'Main Kitchen', color: '#DE8626', icon: 'utensils' };
-    }
-  }
-
   /** Helper to robustly extract order items from various backend payload structures */
   private parseOrderItems(rawList: any): OrderItem[] {
     const list = Array.isArray(rawList)
@@ -274,30 +123,16 @@ export class OrderRemoteDataSource {
       const resolvedUnitPrice = unitPrice > 0 ? unitPrice : (totalPrice > 0 && quantity > 0 ? Number((totalPrice / quantity).toFixed(2)) : 0);
       const resolvedTotalPrice = totalPrice > 0 ? totalPrice : Number((quantity * resolvedUnitPrice).toFixed(2));
 
-      // Station parsing and heuristic routing
+      // Station parsing: only use real assigned station from backend data
       const rawStationCode = it.stationCode ?? it.StationCode ?? it.station ?? it.Station;
       const rawStationName = it.stationName ?? it.StationName;
       const rawStationBadge = it.stationBadgeColor ?? it.StationBadgeColor;
       const rawStationIcon = it.stationIcon ?? it.StationIcon;
-      const categoryName = it.categoryName ?? it.CategoryName ?? it.category ?? it.Category ?? '';
 
-      const detected = this.detectStation(name, String(categoryName));
-      const isGeneric =
-        !rawStationCode ||
-        String(rawStationCode).toUpperCase() === 'MAIN' ||
-        String(rawStationName || '').toLowerCase() === 'main kitchen';
-
-      const stationCode =
-        isGeneric && detected !== 'MAIN'
-          ? detected
-          : rawStationCode
-          ? String(rawStationCode).toUpperCase()
-          : detected;
-
-      const defaultMeta = this.resolveStationMeta(stationCode);
-      const stationName = rawStationName && !isGeneric ? String(rawStationName).trim() : defaultMeta.name;
-      const stationBadgeColor = rawStationBadge && !isGeneric ? String(rawStationBadge) : defaultMeta.color;
-      const stationIcon = rawStationIcon && !isGeneric ? String(rawStationIcon) : defaultMeta.icon;
+      const stationCode = rawStationCode ? String(rawStationCode).toUpperCase().trim() : undefined;
+      const stationName = rawStationName ? String(rawStationName).trim() : undefined;
+      const stationBadgeColor = rawStationBadge ? String(rawStationBadge).trim() : undefined;
+      const stationIcon = rawStationIcon ? String(rawStationIcon).trim() : undefined;
 
       return {
         itemId: Number(it.itemId ?? it.ItemId ?? it.id ?? it.Id ?? 0),

@@ -917,14 +917,9 @@ export class WebPrinterService {
       }
 
       try {
-        const iframeId = '__menza_thermal_printer_frame__';
-        let iframe = document.getElementById(iframeId) as HTMLIFrameElement;
-
-        if (iframe && iframe.parentNode) {
-          iframe.parentNode.removeChild(iframe);
-        }
-
-        iframe = document.createElement('iframe');
+        // Unique ID per print invocation prevents concurrent/bifurcated print jobs from aborting each other
+        const iframeId = `__menza_thermal_printer_frame_${Date.now()}_${Math.random().toString(36).substring(2, 6)}__`;
+        const iframe = document.createElement('iframe');
         iframe.id = iframeId;
         // Keep non-zero dimensions with opacity 0 so Chromium computes layout correctly
         iframe.style.position = 'fixed';

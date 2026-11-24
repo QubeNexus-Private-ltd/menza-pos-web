@@ -55,6 +55,14 @@ interface DishCustomizationModalProps {
 
 const catalogDataSource = new CatalogRemoteDataSource();
 
+interface CustomizationOptionsCache {
+  variants: ItemVariant[];
+  modifierGroups: ItemModifierGroup[];
+}
+
+// In-memory cache to guarantee 0ms instant modal display on repeat customization
+const customizationCache = new Map<number, CustomizationOptionsCache>();
+
 export function DishCustomizationModal({
   isOpen,
   item,
@@ -83,6 +91,19 @@ export function DishCustomizationModal({
     }
 
     let isMounted = true;
+
+    // 1. Instant cache hit
+    const cached = customizationCache.get(item.id);
+    if (cached) {
+      setVariants(cached.variants);
+      if (cached.variants.length > 0) {
+        setSelectedVariant(cached.variants[0]);
+      }
+      setModifierGroups(cached.modifierGroups);
+      setLoadingOptions(false);
+      return;
+    }
+
     setLoadingOptions(true);
 
     Promise.allSettled([
@@ -91,8 +112,9 @@ export function DishCustomizationModal({
     ]).then(([varRes, modRes]) => {
       if (!isMounted) return;
 
+      let parsedVariants: ItemVariant[] = [];
       if (varRes.status === 'fulfilled' && Array.isArray(varRes.value)) {
-        const parsedVariants: ItemVariant[] = varRes.value.map((v: any) => ({
+        parsedVariants = varRes.value.map((v: any) => ({
           id: Number(v.id ?? v.Id ?? 0),
           variantName: String(v.variantName ?? v.VariantName ?? v.name ?? 'Standard'),
           additionalPrice: Number(v.additionalPrice ?? v.AdditionalPrice ?? v.priceDelta ?? 0),
@@ -104,8 +126,9 @@ export function DishCustomizationModal({
         }
       }
 
+      let parsedGroups: ItemModifierGroup[] = [];
       if (modRes.status === 'fulfilled' && Array.isArray(modRes.value)) {
-        const parsedGroups: ItemModifierGroup[] = modRes.value.map((g: any) => ({
+        parsedGroups = modRes.value.map((g: any) => ({
           id: Number(g.id ?? g.Id ?? 0),
           groupName: String(g.groupName ?? g.GroupName ?? g.name ?? 'Addons'),
           modifiers: Array.isArray(g.modifiers ?? g.Modifiers)
@@ -118,6 +141,12 @@ export function DishCustomizationModal({
         }));
         setModifierGroups(parsedGroups);
       }
+
+      // Store in memory cache for instant future lookups
+      customizationCache.set(item.id, {
+        variants: parsedVariants,
+        modifierGroups: parsedGroups,
+      });
 
       setLoadingOptions(false);
     });
@@ -178,10 +207,10 @@ export function DishCustomizationModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-      <div className="w-full max-w-lg rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] shadow-2xl flex flex-col max-h-[90vh] overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 glass-panel p-4">
+      <div className="w-full max-w-lg rounded-3xl border border-[#E8E2D9] dark:border-[#26323E] bg-white dark:bg-[#161B22] shadow-2xl flex flex-col max-h-[90vh] overflow-hidden animate-in fade-in zoom-in-95 duration-150">
         {/* Header */}
-        <div className="flex items-center justify-between p-5 border-b border-[#E7E1DA] dark:border-[#2B3540]">
+        <div className="flex items-center justify-between p-5 border-b border-[#E8E2D9] dark:border-[#26323E]">
           <div className="flex items-center gap-3 min-w-0 flex-1 pr-2">
             <div className="relative h-12 w-12 rounded-xl overflow-hidden shrink-0 border border-[#E7E1DA] dark:border-[#2B3540]">
               <DishImage
@@ -361,10 +390,10 @@ export function DishCustomizationModal({
         </div>
 
         {/* Footer */}
-        <div className="p-4 border-t border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] flex items-center justify-between gap-4">
+        <div className="p-4 border-t border-[#E8E2D9] dark:border-[#26323E] bg-[#FAF8F5] dark:bg-[#11151B] flex items-center justify-between gap-4">
           <div>
             <p className="text-[10px] text-[#667085] uppercase font-bold tracking-wider">Item Total</p>
-            <p className="text-xl font-extrabold text-[#DE8626]">
+            <p className="text-xl font-extrabold tabular-nums text-[#DE8626]">
               ₹{totalPrice}
             </p>
           </div>
@@ -380,7 +409,7 @@ export function DishCustomizationModal({
             <button
               type="button"
               onClick={handleApply}
-              className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-[#DE8626] text-white text-xs font-bold shadow-md shadow-[#DE8626]/20 hover:bg-[#C4721C] transition-colors"
+              className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-[#DE8626] text-white text-xs font-bold shadow-md shadow-[#DE8626]/20 hover:bg-[#C4721C] transition-colors pos-tap tabular-nums"
             >
               <Check className="h-4 w-4" />
               <span>Add to Order (₹{totalPrice})</span>

@@ -95,10 +95,10 @@ export function TablePickerModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-3 sm:p-4 animate-in fade-in duration-150">
-      <div className="w-full max-w-4xl rounded-3xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] shadow-2xl flex flex-col max-h-[90vh] overflow-hidden animate-in zoom-in-95 duration-150">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 glass-panel p-3 sm:p-4 animate-in fade-in duration-150">
+      <div className="w-full max-w-4xl rounded-3xl border border-[#E8E2D9] dark:border-[#26323E] bg-white dark:bg-[#161B22] shadow-2xl flex flex-col max-h-[90vh] overflow-hidden animate-in zoom-in-95 duration-150">
         {/* Header */}
-        <div className="p-4 sm:p-5 border-b border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20]">
+        <div className="p-4 sm:p-5 border-b border-[#E8E2D9] dark:border-[#26323E] bg-[#FAF8F5] dark:bg-[#11151B]">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-500 to-[#DE8626] text-white shadow-xs">
@@ -258,12 +258,12 @@ export function TablePickerModal({
                     key={t.id}
                     type="button"
                     onClick={() => onSelectTable(t)}
-                    className={`group relative text-left rounded-2xl p-3.5 sm:p-4 border transition-all duration-150 flex flex-col justify-between ${
+                    className={`group relative text-left rounded-2xl p-3.5 sm:p-4 border transition-all duration-150 flex flex-col justify-between pos-tap ${
                       isSelected
-                        ? 'ring-2 ring-[#DE8626] border-[#DE8626] bg-amber-500/10 shadow-md'
+                        ? 'ring-2 ring-[#DE8626] border-[#DE8626] bg-amber-500/10 shadow-card-hover glow-amber'
                         : occupied
-                        ? 'border-amber-500/40 bg-gradient-to-br from-amber-500/5 to-amber-500/15 hover:border-[#DE8626] hover:shadow-md'
-                        : 'border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] hover:border-emerald-500 hover:bg-emerald-500/5 hover:shadow-md'
+                        ? 'border-amber-500/40 bg-gradient-to-br from-amber-500/5 to-amber-500/15 hover:border-[#DE8626] hover:shadow-card-hover'
+                        : 'border-[#E8E2D9] dark:border-[#26323E] bg-white dark:bg-[#161B22] shadow-card hover:border-emerald-500 hover:bg-emerald-500/5 hover:shadow-card-hover'
                     }`}
                   >
                     {/* Top Row: Table Number & Status Pill */}

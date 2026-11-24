@@ -8,6 +8,7 @@ import {
 import { SubscriptionService } from '@/services/subscriptionService';
 import { useAuthStore } from '@shared/presentation/state/useAuthStore';
 import { WalletEvents } from '@shared/core/utils/walletEvents';
+import { SubscriptionEvents } from '@shared/core/utils/subscriptionEvents';
 
 interface SubscriptionStoreState {
   subscription: UserSubscriptionStatus | null;
@@ -456,3 +457,9 @@ export const useSubscriptionStore = create<SubscriptionStoreState>((set, get) =>
     });
   },
 }));
+
+if (typeof window !== 'undefined') {
+  SubscriptionEvents.subscribeExpired(() => {
+    useSubscriptionStore.getState().setExpired(true);
+  });
+}

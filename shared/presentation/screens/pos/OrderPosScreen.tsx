@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -40,7 +40,10 @@ import {
   Check,
   Bell,
   BellRing,
+  Flame,
 } from 'lucide-react-native';
+import { TablePickerModal } from '../../components/TablePickerModal';
+import { TableMaster } from '../../../domain/models/Table';
 import { Spacing } from '../../../core/theme/spacing';
 import { WalletBalanceWidget } from '../../components/WalletBalanceWidget';
 import { WalletEvents } from '../../../core/utils/walletEvents';
@@ -190,6 +193,37 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
       .catch(() => {});
   }, [activeRestId, processIncomingOrders]);
 
+  // Table Selection & Active Ongoing Order State
+  const [selectedTable, setSelectedTable] = useState<{
+    id: number;
+    tableNumber: string;
+    sectionName?: string;
+  } | null>(() => {
+    if (initialTableId || initialTableNumber) {
+      return {
+        id: initialTableId || 0,
+        tableNumber: initialTableNumber || '',
+        sectionName: initialSectionName,
+      };
+    }
+    return null;
+  });
+
+  const [tablePickerVisible, setTablePickerVisible] = useState(false);
+  const [activeTableOrder, setActiveTableOrder] = useState<OrderMaster | null>(null);
+  const [loadingActiveTable, setLoadingActiveTable] = useState(false);
+
+  useEffect(() => {
+    if (initialTableId || initialTableNumber) {
+      setSelectedTable({
+        id: initialTableId || 0,
+        tableNumber: initialTableNumber || '',
+        sectionName: initialSectionName,
+      });
+      setSelectedOrderType(1);
+    }
+  }, [initialTableId, initialTableNumber, initialSectionName]);
+
   // Dynamic active order types resolved from backend API
   const [orderTypes, setOrderTypes] = useState<ActiveOrderType[]>([
     { id: 4, code: 'COUNTER', typeName: 'Counter', configKey: 'IsCounterOrderingEnabled', isAllowedByPlan: isCounterOrderingAllowed, isEnabledByStore: true, isActive: isCounterOrderingAllowed, displayOrder: 1 },
@@ -198,14 +232,49 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
   ]);
 
   const [selectedOrderType, setSelectedOrderType] = useState<number>(
-    isTableLocked || initialTableNumber ? 1 : 4
+    isTableLocked || initialTableNumber || selectedTable ? 1 : 4
   );
 
-  const isTableAssigned = Boolean(isTableLocked || initialTableNumber || initialTableId);
+  const isTableAssigned = Boolean(selectedTable?.tableNumber || selectedTable?.id);
   const isDineInTableOrder = isTableAssigned;
   const [dineInPaymentFlow, setDineInPaymentFlow] = useState<'pay_later' | 'pay_now'>(
     isTableAssigned ? 'pay_later' : 'pay_now'
   );
+
+  const loadActiveTableOrder = useCallback(
+    async (tableId: number) => {
+      if (!activeRestId || !tableId) {
+        setActiveTableOrder(null);
+        return;
+      }
+      try {
+        setLoadingActiveTable(true);
+        const active = await orderRemoteDataSource.getActiveOrderByTable(tableId, activeRestId);
+        setActiveTableOrder(active);
+        if (active?.customerName) {
+          setCustomerName((prev) => prev || active.customerName || '');
+        }
+        if (active?.mobileNumber) {
+          setCustomerPhone((prev) => prev || active.mobileNumber || '');
+        }
+      } catch (err) {
+        console.warn('[OrderPosScreen] Failed to load active table order:', err);
+        setActiveTableOrder(null);
+      } finally {
+        setLoadingActiveTable(false);
+      }
+    },
+    [activeRestId]
+  );
+
+  useEffect(() => {
+    const tableId = selectedTable?.id;
+    if (selectedOrderType === 1 && tableId && tableId > 0) {
+      loadActiveTableOrder(tableId);
+    } else if (selectedOrderType !== 1) {
+      setActiveTableOrder(null);
+    }
+  }, [selectedOrderType, selectedTable?.id, loadActiveTableOrder]);
 
   useEffect(() => {
     if (isTableAssigned && isTableOrderingAllowed) {
@@ -607,14 +676,78 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
   // Grand Total: With GST -> subtotal + taxes; Without GST -> subtotal (incl. of all taxes)
   const grandTotal = hasGstNumber ? Number((subtotal + totalTaxAmount).toFixed(2)) : subtotal;
 
+  // Consolidated Dining Total (when table has an active running order)
+  const existingTableTotal = activeTableOrder ? Number(activeTableOrder.totalAmount || 0) : 0;
+  const consolidatedGrandTotal = Math.round((existingTableTotal + grandTotal) * 100) / 100;
+  const payableGrandTotal = activeTableOrder && cartItems.length === 0
+    ? existingTableTotal
+    : (activeTableOrder ? consolidatedGrandTotal : grandTotal);
+
   // Live calculation of cash tendered and change to return
   const posNumericTendered = parseFloat(posTenderedText) || 0;
-  const posChangeToReturn = Math.max(0, posNumericTendered - grandTotal);
+  const posChangeToReturn = Math.max(0, posNumericTendered - payableGrandTotal);
+
+  // Print Guest Check / Proforma Bill Slip for Table
+  const handlePrintGuestCheck = async () => {
+    if (!activeTableOrder) return;
+    try {
+      const effectiveSubtotal = activeTableOrder.subtotal && activeTableOrder.subtotal > 0
+        ? activeTableOrder.subtotal
+        : (activeTableOrder.items || []).reduce((acc, it) => acc + (it.unitPrice || 0) * (it.quantity || 1), 0);
+
+      const effectiveTableNumber = selectedTable?.tableNumber || activeTableOrder.tableName || '';
+
+      const proformaData: ReceiptData = {
+        orderId: activeTableOrder.id,
+        orderNumber: String(activeTableOrder.orderNumber || activeTableOrder.id),
+        pickupToken: String(activeTableOrder.pickupToken || activeTableOrder.id),
+        restaurantName: storeDisplayName,
+        logoUrl: rawLogoUrl || undefined,
+        address: restaurantConfig?.address || activeRestaurant?.address || '',
+        city: restaurantConfig?.city || activeRestaurant?.city || '',
+        state: restaurantConfig?.state || activeRestaurant?.state || '',
+        contactPhone: restaurantConfig?.contactNumber || (activeRestaurant as any)?.contactNumber || activeRestaurant?.ownerMobile || '',
+        gstNumber: hasGstNumber ? (restaurantConfig?.gstNumber || '') : undefined,
+        customerName: activeTableOrder.customerName || 'Dine-In Guest',
+        customerPhone: activeTableOrder.mobileNumber || undefined,
+        orderType: 'DINE_IN',
+        tableName: effectiveTableNumber ? `Table ${effectiveTableNumber}` : activeTableOrder.tableName,
+        sectionName: selectedTable?.sectionName || (activeTableOrder as any)?.sectionName,
+        items: (activeTableOrder.items || []).map((c: any) => ({
+          itemName: c.itemName || 'Dish',
+          quantity: c.quantity || 1,
+          unitPrice: c.unitPrice || c.amount || 0,
+          totalPrice: c.totalPrice || c.totalAmount || (c.quantity * c.unitPrice) || 0,
+        })),
+        subtotal: effectiveSubtotal,
+        discountAmount: activeTableOrder.discountAmount || 0,
+        cgstPercentage: hasGstNumber ? (cgstRate || 2.5) : undefined,
+        cgstAmount: hasGstNumber ? (activeTableOrder.cgst || 0) : undefined,
+        sgstPercentage: hasGstNumber ? (sgstRate || 2.5) : undefined,
+        sgstAmount: hasGstNumber ? (activeTableOrder.sgst || 0) : undefined,
+        taxAmount: hasGstNumber ? ((activeTableOrder.cgst || 0) + (activeTableOrder.sgst || 0)) : 0,
+        grandTotal: activeTableOrder.totalAmount || existingTableTotal,
+        paymentMode: 'PROFORMA / BILL SLIP',
+        date: new Date().toLocaleString('en-IN'),
+        isProforma: true,
+        footerMessage: 'This is a guest check, not a tax invoice.',
+      };
+
+      if (connectedDevice) {
+        await printReceipt(proformaData);
+        showAlert('Bill Slip Printed 🖨️', 'Proforma guest check sent to receipt printer.', 'success');
+      } else {
+        showAlert('Printer Not Connected', 'Please connect a Bluetooth printer to print guest check slip.', 'warning');
+      }
+    } catch (err: any) {
+      showAlert('Print Error', err?.message || 'Failed to print guest check.', 'danger');
+    }
+  };
 
   const handleCheckout = async (
     mode: (typeof PosCheckoutModes)[keyof typeof PosCheckoutModes]
   ) => {
-    if (cartItems.length === 0) {
+    if (cartItems.length === 0 && !activeTableOrder) {
       showAlert('Cart is Empty', 'Please add items to cart before placing an order.', 'warning');
       return;
     }
@@ -679,6 +812,96 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
         setIsSettling(true);
       }
 
+      // Check if settling existing table order directly with no new cart items
+      if (cartItems.length === 0 && activeTableOrder && mode === PosCheckoutModes.PAY_AND_SETTLE) {
+        const effectivePaymentMode = selectedPaymentMode;
+        const effectiveTableNumber = selectedTable?.tableNumber || activeTableOrder.tableName || '';
+        const effectiveTableId = selectedTable?.id || activeTableOrder.tableId;
+        const settleTendered = selectedPaymentMode === 'CASH' && posNumericTendered > 0 ? posNumericTendered : undefined;
+        const settleChange = selectedPaymentMode === 'CASH' && posChangeToReturn > 0 ? posChangeToReturn : undefined;
+
+        await orderRemoteDataSource.settleOrder(activeTableOrder.id, {
+          orderId: activeTableOrder.id,
+          paymentMode: effectivePaymentMode,
+          discountAmount: activeTableOrder.discountAmount || 0,
+          tenderedAmount: settleTendered,
+          changeAmount: settleChange,
+          billingMode: BillingModes.PRE_PAID,
+          orderStatus: 'Settled',
+        });
+        WalletEvents.emit();
+
+        if (effectiveTableId) {
+          orderRemoteDataSource.settleTable(effectiveTableId).catch((err) =>
+            console.warn('Settle table session warning:', err)
+          );
+        }
+
+        const receiptData: ReceiptData = {
+          orderId: activeTableOrder.id,
+          orderNumber: String(activeTableOrder.orderNumber || activeTableOrder.id),
+          pickupToken: String(activeTableOrder.pickupToken || activeTableOrder.id),
+          restaurantName: restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant',
+          logoUrl: rawLogoUrl || undefined,
+          address: restaurantConfig?.address || activeRestaurant?.address || '',
+          city: restaurantConfig?.city || activeRestaurant?.city || '',
+          state: restaurantConfig?.state || activeRestaurant?.state || '',
+          contactPhone: restaurantConfig?.contactNumber || (activeRestaurant as any)?.contactNumber || activeRestaurant?.ownerMobile || '',
+          gstNumber: hasGstNumber ? (restaurantConfig?.gstNumber || '') : undefined,
+          customerName: activeTableOrder.customerName || 'Dine-In Guest',
+          customerPhone: activeTableOrder.mobileNumber || undefined,
+          orderType: 'DINE_IN',
+          tableName: effectiveTableNumber ? `Table ${effectiveTableNumber}` : activeTableOrder.tableName,
+          sectionName: selectedTable?.sectionName || (activeTableOrder as any)?.sectionName,
+          items: (activeTableOrder.items || []).map((c: any) => ({
+            itemName: c.itemName || 'Dish',
+            quantity: c.quantity || 1,
+            unitPrice: c.unitPrice || c.amount || 0,
+            totalPrice: c.totalPrice || c.totalAmount || (c.quantity * c.unitPrice) || 0,
+          })),
+          subtotal: activeTableOrder.subtotal || existingTableTotal,
+          discountAmount: activeTableOrder.discountAmount || 0,
+          cgstPercentage: hasGstNumber ? (cgstRate || 2.5) : undefined,
+          cgstAmount: hasGstNumber ? (activeTableOrder.cgst || 0) : undefined,
+          sgstPercentage: hasGstNumber ? (sgstRate || 2.5) : undefined,
+          sgstAmount: hasGstNumber ? (activeTableOrder.sgst || 0) : undefined,
+          taxAmount: hasGstNumber ? ((activeTableOrder.cgst || 0) + (activeTableOrder.sgst || 0)) : 0,
+          grandTotal: payableGrandTotal,
+          paymentMode: effectivePaymentMode,
+          tenderedAmount: settleTendered,
+          changeAmount: settleChange,
+          date: new Date().toLocaleString('en-IN'),
+          upiId: (restaurantConfig?.bankerUpiId || (restaurantConfig as any)?.upiId || (activeRestaurant as any)?.bankerUpiId || (activeRestaurant as any)?.upiId || '').trim(),
+          upiPayeeName: restaurantConfig?.bankerAccountHolderName || restaurantConfig?.restaurantName || activeRestaurant?.restaurantName || 'Menza Restaurant',
+          showUpiQr: restaurantConfig?.printUpiQrOnReceipts !== false && (activeRestaurant as any)?.printUpiQrOnReceipts !== false,
+          footerMessage: 'Thank you! Please visit again.',
+        };
+
+        if (connectedDevice && autoPrintReceipt) {
+          try {
+            await printReceipt(receiptData);
+          } catch (pErr) {
+            console.warn('Auto print receipt warning:', pErr);
+          }
+        }
+
+        showAlert(
+          'Table Settled & Cleared! 💵',
+          `Table ${effectiveTableNumber} (Order #${activeTableOrder.orderNumber || activeTableOrder.id}) settled via ${effectivePaymentMode}.\nAmount: ₹${payableGrandTotal.toFixed(2)}.`,
+          'success',
+          'OK',
+          undefined,
+          () => {
+            clearCart();
+            setActiveTableOrder(null);
+            setSelectedTable(null);
+            if (onClearTableLock) onClearTableLock();
+            setCartDrawerVisible(false);
+          }
+        );
+        return;
+      }
+
       const itemsPayload = cartItems.map((item) => ({
         itemId: item.itemId,
         itemName: item.itemName,
@@ -693,9 +916,11 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
       const orderTendered = (!isPostPaid && selectedPaymentMode === 'CASH' && posNumericTendered > 0) ? posNumericTendered : undefined;
       const orderChange = (!isPostPaid && selectedPaymentMode === 'CASH' && posChangeToReturn > 0) ? posChangeToReturn : undefined;
 
-      const isTableOrder = Boolean(isTableLocked || initialTableNumber || initialTableId);
-      const effectiveTableSource = initialTableNumber
-        ? `Table ${initialTableNumber}${initialSectionName ? ` (${initialSectionName})` : ''}`
+      const isTableOrder = Boolean(selectedTable?.tableNumber || selectedTable?.id);
+      const effectiveTableNumber = selectedTable?.tableNumber || '';
+      const effectiveTableId = selectedTable?.id || undefined;
+      const effectiveTableSource = effectiveTableNumber
+        ? `Table ${effectiveTableNumber}${selectedTable?.sectionName ? ` (${selectedTable.sectionName})` : ''}`
         : PosOrderSources.POS_ADMIN;
 
       let orderId = 0;
@@ -708,9 +933,9 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
         restaurantId: activeRestId,
         name: effectiveCustomerName,
         mobileNumber: cleanPhone || undefined,
-        tableId: isTableOrder ? initialTableId : undefined,
-        tableNumber: isTableOrder ? initialTableNumber : undefined,
-        sectionName: isTableOrder ? initialSectionName : undefined,
+        tableId: isTableOrder ? effectiveTableId : undefined,
+        tableNumber: isTableOrder ? effectiveTableNumber : undefined,
+        sectionName: isTableOrder ? selectedTable?.sectionName : undefined,
         orderTypeId: isTableOrder ? 1 : selectedOrderType,
         orderStatus: 'Confirmed',
         paymentStatus: isPostPaid ? 'Pending' : 'Paid',
@@ -787,13 +1012,13 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
           (selectedOrderType === 2 ? 'Takeaway' : selectedOrderType === 3 ? 'Delivery' : selectedOrderType === 4 ? 'Counter' : 'Dine-in');
 
       const effectiveTableName = isTableOrder
-        ? `Table ${initialTableNumber}`
+        ? `Table ${effectiveTableNumber}`
         : fetchedOrder?.tableName ||
           (selectedOrderType === 4 ? 'Counter' : selectedOrderType === 2 ? 'Takeaway Counter' : selectedOrderType === 3 ? 'Delivery' : 'Dine-in');
 
-      const effectiveSectionName = isTableOrder ? (initialSectionName || undefined) : undefined;
+      const effectiveSectionName = isTableOrder ? (selectedTable?.sectionName || undefined) : undefined;
       const effectiveReceiptSource = isTableOrder
-        ? `Table ${initialTableNumber}${initialSectionName ? ` (${initialSectionName})` : ''}`
+        ? `Table ${effectiveTableNumber}${selectedTable?.sectionName ? ` (${selectedTable.sectionName})` : ''}`
         : fetchedOrder?.source || effectiveTableName;
 
       const effectiveAddress = (() => {
@@ -914,10 +1139,14 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
         const offlineNote = isOfflineOrder ? `\n\n📦 Stored in tablet offline outbox (Token: ${pickupToken}). Auto-syncs when online.` : '';
 
         showAlert(
-          isOfflineOrder ? 'Offline KOT Saved 🍳' : `Sent to Kitchen${kdsNote} (Pay Later) 🍳`,
+          isOfflineOrder
+            ? 'Offline KOT Saved 🍳'
+            : (activeTableOrder ? 'Add-on KOT Sent to Kitchen 🍳' : `Sent to Kitchen${kdsNote} (Pay Later) 🍳`),
           isOfflineOrder
             ? `Offline Order ${pickupToken} created for ${effectiveCustomerName}.\nStatus: Active Unsettled Order.${offlineNote}${printStatusNote}`
-            : `Order #${orderId || ''}${pickupToken ? ` (Token #${pickupToken})` : ''} placed for ${effectiveCustomerName}.\nStatus: Active Unsettled Order.${smsNote}${printStatusNote}`,
+            : `Order #${orderId || ''}${pickupToken ? ` (Token #${pickupToken})` : ''} placed for ${effectiveCustomerName}.\nStatus: Active Unsettled Order.${
+                activeTableOrder ? '\nDishes appended to running table tab.' : ''
+              }${smsNote}${printStatusNote}`,
           'success',
           'OK',
           undefined,
@@ -927,6 +1156,9 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
             setCustomerPhone('');
             setMenuSearchQuery('');
             setCartDrawerVisible(false);
+            if (effectiveTableId) {
+              loadActiveTableOrder(effectiveTableId);
+            }
           }
         );
       } else {
@@ -943,6 +1175,12 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
               orderStatus: 'Settled',
             });
             WalletEvents.emit();
+
+            if (effectiveTableId) {
+              orderRemoteDataSource.settleTable(effectiveTableId).catch((err) =>
+                console.warn('Settle table session warning:', err)
+              );
+            }
           } catch (settleErr: any) {
             console.warn('Settle order call warning:', settleErr?.message);
           }
@@ -951,9 +1189,9 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
         if (connectedDevice) {
           try {
             let finalReceiptData = { ...receiptData };
-            if (!isOfflineOrder && isTableOrder && initialTableId) {
+            if (!isOfflineOrder && isTableOrder && effectiveTableId) {
               try {
-                const tableActive = await orderRemoteDataSource.getActiveOrderByTable(initialTableId, activeRestId);
+                const tableActive = await orderRemoteDataSource.getActiveOrderByTable(effectiveTableId, activeRestId);
                 if (tableActive && tableActive.items && tableActive.items.length > 0) {
                   finalReceiptData.items = tableActive.items.map((it) => ({
                     itemName: it.itemName || 'Dish',
@@ -1011,6 +1249,11 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
             setCustomerPhone('');
             setMenuSearchQuery('');
             setCartDrawerVisible(false);
+            if (effectiveTableId) {
+              setActiveTableOrder(null);
+              setSelectedTable(null);
+              if (onClearTableLock) onClearTableLock();
+            }
           }
         );
       }
@@ -1333,103 +1576,147 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
           </TouchableOpacity>
         )}
 
-        {/* 1. DYNAMIC ORDER TYPE SELECTOR / LOCKED DINE-IN TABLE BANNER */}
-        {isTableLocked || initialTableNumber ? (
+        {/* 1. DYNAMIC ORDER TYPE SELECTOR / DINE-IN TABLE BANNER */}
+        {selectedTable ? (
           <View style={styles.lockedTableBanner}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
               <View style={styles.lockedTableIconBox}>
                 <Utensils size={17} color="#FFFFFF" strokeWidth={2.5} />
               </View>
               <View style={{ flex: 1 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                   <Text style={styles.lockedTableTitle}>DINE-IN ORDER</Text>
                   <View style={styles.lockedTablePill}>
-                    <Text style={styles.lockedTablePillText}>Table {initialTableNumber}</Text>
+                    <Text style={styles.lockedTablePillText}>Table {selectedTable.tableNumber}</Text>
                   </View>
+                  {activeTableOrder && (
+                    <View style={styles.lockedTableRunningTabPill}>
+                      <Text style={styles.lockedTableRunningTabPillText}>
+                        Tab: ₹{existingTableTotal.toFixed(0)}
+                      </Text>
+                    </View>
+                  )}
                 </View>
                 <Text style={styles.lockedTableSub} numberOfLines={1}>
-                  Section: <Text style={{ fontWeight: '700', color: '#1F2937' }}>{initialSectionName || 'Main Hall'}</Text> • Printed on Bill & KOT
+                  Section: <Text style={{ fontWeight: '700', color: '#1F2937' }}>{selectedTable.sectionName || 'Main Hall'}</Text>
+                  {activeTableOrder ? ` • Order #${activeTableOrder.orderNumber || activeTableOrder.id} (${activeTableOrder.items?.length || 0} items)` : ' • Ready for Order'}
                 </Text>
               </View>
             </View>
-            {onClearTableLock && (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
               <TouchableOpacity
-                onPress={onClearTableLock}
-                style={styles.unlockTableBtn}
+                onPress={() => setTablePickerVisible(true)}
+                style={styles.switchTableBtn}
                 activeOpacity={0.7}
               >
-                <Text style={styles.unlockTableBtnText}>Change</Text>
+                <Text style={styles.switchTableBtnText}>Switch</Text>
               </TouchableOpacity>
-            )}
+              {onClearTableLock && (
+                <TouchableOpacity
+                  onPress={() => {
+                    setSelectedTable(null);
+                    setActiveTableOrder(null);
+                    onClearTableLock();
+                  }}
+                  style={styles.unlockTableBtn}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.unlockTableBtnText}>Clear</Text>
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
         ) : (
-          <View style={styles.orderTypeRow}>
-            {orderTypes
-              .filter((ot) => ot.code !== 'DINE_IN' || isTableOrderingAllowed)
-              .map((ot) => {
-                const isSelected = selectedOrderType === ot.id;
-                const isAllowed = ot.isAllowedByPlan;
-                const isStoreEnabled = ot.isEnabledByStore;
-                const isAvailable = ot.isActive;
+          <View>
+            <View style={styles.orderTypeRow}>
+              {orderTypes
+                .filter((ot) => ot.code !== 'DINE_IN' || isTableOrderingAllowed)
+                .map((ot) => {
+                  const isSelected = selectedOrderType === ot.id;
+                  const isAllowed = ot.isAllowedByPlan;
+                  const isStoreEnabled = ot.isEnabledByStore;
+                  const isAvailable = ot.isActive;
 
-                const renderIcon = () => {
-                  const iconColor = isSelected ? '#FFFFFF' : '#DE8626';
-                  switch (ot.code) {
-                    case 'COUNTER':
-                      return <Store size={16} color={iconColor} strokeWidth={2.2} />;
-                    case 'DINE_IN':
-                      return <Utensils size={16} color={iconColor} strokeWidth={2.2} />;
-                    case 'TAKEAWAY':
-                      return <ShoppingBag size={16} color={iconColor} strokeWidth={2.2} />;
-                    case 'DELIVERY':
-                      return <Truck size={16} color={iconColor} strokeWidth={2.2} />;
-                    default:
-                      return <Store size={16} color={iconColor} strokeWidth={2.2} />;
-                  }
-                };
+                  const renderIcon = () => {
+                    const iconColor = isSelected ? '#FFFFFF' : '#DE8626';
+                    switch (ot.code) {
+                      case 'COUNTER':
+                        return <Store size={16} color={iconColor} strokeWidth={2.2} />;
+                      case 'DINE_IN':
+                        return <Utensils size={16} color={iconColor} strokeWidth={2.2} />;
+                      case 'TAKEAWAY':
+                        return <ShoppingBag size={16} color={iconColor} strokeWidth={2.2} />;
+                      case 'DELIVERY':
+                        return <Truck size={16} color={iconColor} strokeWidth={2.2} />;
+                      default:
+                        return <Store size={16} color={iconColor} strokeWidth={2.2} />;
+                    }
+                  };
 
-                return (
-                  <TouchableOpacity
-                    key={`order-type-${ot.id}`}
-                    style={[
-                      styles.orderTypePill,
-                      isSelected && styles.orderTypePillActive,
-                      !isAvailable && styles.orderTypePillDisabled,
-                    ]}
-                    onPress={() => {
-                      if (!isAllowed) {
-                        showAlert(
-                          'Feature Locked 🔒',
-                          `${ot.typeName} ordering is not included in your active subscription plan. Please upgrade to unlock this channel.`,
-                          'warning'
-                        );
-                        return;
-                      }
-                      if (!isStoreEnabled) {
-                        showAlert(
-                          'Channel Disabled ⚙️',
-                          `${ot.typeName} ordering is currently disabled in your Store Settings. Enable it under Order Configuration.`,
-                          'warning'
-                        );
-                        return;
-                      }
-                      setSelectedOrderType(ot.id);
-                    }}
-                    activeOpacity={0.8}
-                  >
-                    {renderIcon()}
-                    <Text
+                  return (
+                    <TouchableOpacity
+                      key={`order-type-${ot.id}`}
                       style={[
-                        styles.orderTypePillText,
-                        isSelected && styles.orderTypePillTextActive,
+                        styles.orderTypePill,
+                        isSelected && styles.orderTypePillActive,
+                        !isAvailable && styles.orderTypePillDisabled,
                       ]}
+                      onPress={() => {
+                        if (!isAllowed) {
+                          showAlert(
+                            'Feature Locked 🔒',
+                            `${ot.typeName} ordering is not included in your active subscription plan. Please upgrade to unlock this channel.`,
+                            'warning'
+                          );
+                          return;
+                        }
+                        if (!isStoreEnabled) {
+                          showAlert(
+                            'Channel Disabled ⚙️',
+                            `${ot.typeName} ordering is currently disabled in your Store Settings. Enable it under Order Configuration.`,
+                            'warning'
+                          );
+                          return;
+                        }
+                        setSelectedOrderType(ot.id);
+                        if (ot.code === 'DINE_IN') {
+                          setTablePickerVisible(true);
+                        }
+                      }}
+                      activeOpacity={0.8}
                     >
-                      {ot.typeName}
-                    </Text>
-                    {!isAllowed && <Lock size={10} color="#DC2626" />}
-                  </TouchableOpacity>
-                );
-              })}
+                      {renderIcon()}
+                      <Text
+                        style={[
+                          styles.orderTypePillText,
+                          isSelected && styles.orderTypePillTextActive,
+                        ]}
+                      >
+                        {ot.typeName}
+                      </Text>
+                      {!isAllowed && <Lock size={10} color="#DC2626" />}
+                    </TouchableOpacity>
+                  );
+                })}
+            </View>
+
+            {selectedOrderType === 1 && !selectedTable && (
+              <View style={styles.tableSelectPromptBanner}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.tableSelectPromptTitle}>No Table Selected</Text>
+                  <Text style={styles.tableSelectPromptSub}>
+                    Choose a table to stage add-ons or seat guests
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.tableSelectPromptBtn}
+                  onPress={() => setTablePickerVisible(true)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.tableSelectPromptBtnText}>Choose Table 🍽️</Text>
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
         )}
 
@@ -1823,7 +2110,7 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
             <View style={styles.cartOrderTypeSection}>
               <View style={styles.cartOrderTypeHeaderRow}>
                 <Text style={styles.cartOrderTypeSectionLabel}>DELIVERY / ORDER TYPE</Text>
-                {isTableLocked || initialTableNumber ? (
+                {selectedTable ? (
                   <Text style={styles.cartActiveOrderTypeHint}>
                     Locked: Dine-In Table Order
                   </Text>
@@ -1838,12 +2125,21 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
                   })()
                 )}
               </View>
-              {isTableLocked || initialTableNumber ? (
-                <View style={styles.cartLockedTableBadge}>
-                  <Utensils size={14} color="#D96B14" strokeWidth={2.5} />
-                  <Text style={styles.cartLockedTableText}>
-                    Table {initialTableNumber} ({initialSectionName || 'Main Hall'}) • Dine-in
-                  </Text>
+              {selectedTable ? (
+                <View style={[styles.cartLockedTableBadge, { justifyContent: 'space-between', alignItems: 'center' }]}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+                    <Utensils size={14} color="#D96B14" strokeWidth={2.5} />
+                    <Text style={styles.cartLockedTableText} numberOfLines={1}>
+                      Table {selectedTable.tableNumber} ({selectedTable.sectionName || 'Main Hall'}) • Dine-in
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => setTablePickerVisible(true)}
+                    style={styles.switchTableBtn}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.switchTableBtnText}>Switch</Text>
+                  </TouchableOpacity>
                 </View>
               ) : (
                 <View style={styles.cartOrderTypeSelectorRow}>
@@ -1893,6 +2189,9 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
                             return;
                           }
                           setSelectedOrderType(ot.id);
+                          if (ot.code === 'DINE_IN') {
+                            setTablePickerVisible(true);
+                          }
                         }}
                         activeOpacity={0.8}
                       >
@@ -1946,8 +2245,71 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
                 </View>
               </View>
 
+              {/* Active Table Running Tab (Previous Rounds) */}
+              {activeTableOrder && (
+                <View style={styles.runningTabContainer}>
+                  <View style={styles.runningTabHeader}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Flame size={14} color="#D96B14" />
+                      <Text style={styles.runningTabTitle}>
+                        RUNNING ORDER #{activeTableOrder.orderNumber || activeTableOrder.id}
+                      </Text>
+                    </View>
+                    <View style={styles.runningTabBadge}>
+                      <Text style={styles.runningTabBadgeText}>
+                        {activeTableOrder.status || 'Active'}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={styles.runningTabItemsList}>
+                    {(activeTableOrder.items || []).map((it, idx) => (
+                      <View key={`active-item-${idx}`} style={styles.runningTabItemRow}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.runningTabItemName}>{it.itemName}</Text>
+                          <Text style={styles.runningTabItemPrice}>
+                            ₹{it.unitPrice} × {it.quantity}
+                          </Text>
+                        </View>
+                        <Text style={styles.runningTabItemTotal}>
+                          ₹{((it.totalPrice) || (it.unitPrice * it.quantity)).toFixed(2)}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                  <View style={styles.runningTabTotalRow}>
+                    <Text style={styles.runningTabTotalLabel}>Current Bill Total:</Text>
+                    <Text style={styles.runningTabTotalVal}>₹{existingTableTotal.toFixed(2)}</Text>
+                  </View>
+                </View>
+              )}
+
+              {/* Add-on Prompt when cart is empty for active table */}
+              {activeTableOrder && cartItems.length === 0 && (
+                <View style={styles.addOnPromptBox}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Plus size={16} color="#D96B14" strokeWidth={2.5} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.addOnPromptTitle}>Ready for Add-On Dishes</Text>
+                      <Text style={styles.addOnPromptSub}>
+                        Tap any dish on the menu to send an Add-on KOT to the kitchen, or settle this table below.
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              )}
+
               {/* Cart Items List */}
               <View style={styles.cartItemsListContainer}>
+                {cartItems.length > 0 && (
+                  <View style={styles.cartSectionDividerHeader}>
+                    <Text style={styles.cartSectionDividerTitle}>
+                      {activeTableOrder ? `NEW ADD-ON DISHES (${cartTotalItems})` : `ITEMS IN ORDER (${cartTotalItems})`}
+                    </Text>
+                    {activeTableOrder && (
+                      <Text style={styles.cartSectionDividerHint}>Multi-Round KOT</Text>
+                    )}
+                  </View>
+                )}
                 {cartItems.map((item) => (
                   <View key={`drawer-cart-item-${item.itemId}`} style={styles.cartDrawerItemRow}>
                     <View style={styles.cartDrawerItemLeft}>
@@ -2038,12 +2400,23 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
                   </View>
                 )}
 
-                <View style={styles.summaryRow}>
-                  <Text style={styles.summaryLabel}>Subtotal (Item Total)</Text>
-                  <Text style={styles.summaryValue}>₹{subtotal.toFixed(2)}</Text>
-                </View>
+                {activeTableOrder && (
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>Running Table Order</Text>
+                    <Text style={styles.summaryValue}>₹{existingTableTotal.toFixed(2)}</Text>
+                  </View>
+                )}
 
-                {hasGstNumber ? (
+                {cartItems.length > 0 && (
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>
+                      {activeTableOrder ? 'New Add-ons Subtotal' : 'Subtotal (Item Total)'}
+                    </Text>
+                    <Text style={styles.summaryValue}>₹{subtotal.toFixed(2)}</Text>
+                  </View>
+                )}
+
+                {hasGstNumber && cartItems.length > 0 ? (
                   <>
                     <View style={styles.gstSummaryRow}>
                       <Text style={styles.gstSummaryLabel}>CGST ({cgstRate.toFixed(2)}%)</Text>
@@ -2060,12 +2433,14 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
 
                 <View style={styles.totalRow}>
                   <View>
-                    <Text style={styles.totalLabel}>Grand Total</Text>
+                    <Text style={styles.totalLabel}>
+                      {activeTableOrder ? 'Consolidated Grand Total' : 'Grand Total'}
+                    </Text>
                     {!hasGstNumber && (
                       <Text style={styles.inclusiveTaxesLabel}>(incl. of all taxes)</Text>
                     )}
                   </View>
-                  <Text style={styles.totalValue}>₹{grandTotal.toFixed(2)}</Text>
+                  <Text style={styles.totalValue}>₹{payableGrandTotal.toFixed(2)}</Text>
                 </View>
               </View>
 
@@ -2132,7 +2507,7 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
                           <View
                             style={[
                               styles.cartChangeBadge,
-                              posNumericTendered >= grandTotal
+                              posNumericTendered >= payableGrandTotal
                                 ? styles.cartChangeBadgeSuccess
                                 : styles.cartChangeBadgeShort,
                             ]}
@@ -2140,14 +2515,14 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
                             <Text
                               style={[
                                 styles.cartChangeBadgeText,
-                                posNumericTendered >= grandTotal
+                                posNumericTendered >= payableGrandTotal
                                   ? styles.cartChangeBadgeTextSuccess
                                   : styles.cartChangeBadgeTextShort,
                               ]}
                             >
-                              {posNumericTendered >= grandTotal
+                              {posNumericTendered >= payableGrandTotal
                                 ? `Change: ₹${posChangeToReturn.toFixed(2)}`
-                                : `Short by: ₹${(grandTotal - posNumericTendered).toFixed(2)}`}
+                                : `Short by: ₹${(payableGrandTotal - posNumericTendered).toFixed(2)}`}
                             </Text>
                           </View>
                         )}
@@ -2157,7 +2532,7 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
                           <Text style={styles.cartCashRupeePrefix}>₹</Text>
                           <TextInput
                             style={styles.cartCashInput}
-                            placeholder={grandTotal.toFixed(0)}
+                            placeholder={payableGrandTotal.toFixed(0)}
                             placeholderTextColor="#A8A29E"
                             keyboardType="numeric"
                             value={posTenderedText}
@@ -2167,16 +2542,16 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
                         <View style={styles.cartCashPillsRow}>
                           <TouchableOpacity
                             style={styles.cartCashPill}
-                            onPress={() => setPosTenderedText(grandTotal.toFixed(0))}
+                            onPress={() => setPosTenderedText(payableGrandTotal.toFixed(0))}
                           >
                             <Text style={styles.cartCashPillText}>Exact</Text>
                           </TouchableOpacity>
                           {[
-                            Math.ceil((grandTotal + 1) / 50) * 50,
-                            Math.ceil((grandTotal + 1) / 100) * 100,
+                            Math.ceil((payableGrandTotal + 1) / 50) * 50,
+                            Math.ceil((payableGrandTotal + 1) / 100) * 100,
                             500,
                           ]
-                            .filter((val, idx, arr) => val > grandTotal && arr.indexOf(val) === idx)
+                            .filter((val, idx, arr) => val > payableGrandTotal && arr.indexOf(val) === idx)
                             .slice(0, 2)
                             .map((val) => (
                               <TouchableOpacity
@@ -2207,7 +2582,97 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
 
             {/* Pinned Sticky Action Buttons at Bottom of Drawer */}
             <View style={styles.cartDrawerActionsRow}>
-              {isDineInTableOrder && dineInPaymentFlow === 'pay_later' ? (
+              {activeTableOrder && cartItems.length === 0 ? (
+                /* Scenario A: Running Table Tab with no new add-ons -> Guest Check & Settle */
+                <View style={{ flexDirection: 'row', gap: 8, width: '100%' }}>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    style={styles.guestCheckBtn}
+                    onPress={handlePrintGuestCheck}
+                  >
+                    <Printer size={15} color="#DE8626" />
+                    <Text style={styles.guestCheckBtnText}>Print Bill Slip</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    activeOpacity={0.88}
+                    style={[styles.paySettleBtn, { flex: 1.3 }, (loading || isKotLoading || isSettling) && { opacity: 0.88 }]}
+                    onPress={() => handleCheckout(PosCheckoutModes.PAY_AND_SETTLE)}
+                    disabled={loading || isKotLoading || isSettling}
+                  >
+                    <LinearGradient
+                      colors={['#17845A', '#13714C', '#0E5E3E']}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 0 }}
+                      style={styles.paySettleBtnGradient}
+                    >
+                      {isSettling ? (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                          <ActivityIndicator size="small" color="#FFFFFF" />
+                          <Text style={styles.paySettleBtnText}>Settling...</Text>
+                        </View>
+                      ) : (
+                        <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                          <Text style={styles.paySettleBtnText}>
+                            Settle Bill ₹{payableGrandTotal.toFixed(2)}
+                          </Text>
+                          <Text style={styles.paySettleBtnSubText}>Free Table • {selectedPaymentMode}</Text>
+                        </View>
+                      )}
+                    </LinearGradient>
+                  </TouchableOpacity>
+                </View>
+              ) : activeTableOrder && cartItems.length > 0 ? (
+                /* Scenario B: Running Table Tab with staged add-ons -> Send Add-on KOT or Settle All */
+                <View style={{ flexDirection: 'row', gap: 8, width: '100%' }}>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    style={[styles.sendKotBtn, { flex: 1 }, (loading || isKotLoading || isSettling) && { opacity: 0.75 }]}
+                    onPress={() => handleCheckout(PosCheckoutModes.KOT_PAY_LATER)}
+                    disabled={loading || isKotLoading || isSettling}
+                  >
+                    {isKotLoading ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <ActivityIndicator size="small" color="#D96B14" />
+                        <Text style={styles.sendKotBtnText}>Sending...</Text>
+                      </View>
+                    ) : (
+                      <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                        <Text style={styles.sendKotBtnText}>Send Add-on KOT 🍳</Text>
+                        <Text style={styles.sendKotBtnSubText}>Append to Tab</Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    activeOpacity={0.88}
+                    style={[styles.paySettleBtn, { flex: 1.2 }, (loading || isKotLoading || isSettling) && { opacity: 0.88 }]}
+                    onPress={() => handleCheckout(PosCheckoutModes.PAY_AND_SETTLE)}
+                    disabled={loading || isKotLoading || isSettling}
+                  >
+                    <LinearGradient
+                      colors={['#17845A', '#13714C', '#0E5E3E']}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 0 }}
+                      style={styles.paySettleBtnGradient}
+                    >
+                      {isSettling ? (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                          <ActivityIndicator size="small" color="#FFFFFF" />
+                          <Text style={styles.paySettleBtnText}>Settling...</Text>
+                        </View>
+                      ) : (
+                        <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                          <Text style={styles.paySettleBtnText}>
+                            Settle All ₹{payableGrandTotal.toFixed(2)}
+                          </Text>
+                          <Text style={styles.paySettleBtnSubText}>Pay & Settle All</Text>
+                        </View>
+                      )}
+                    </LinearGradient>
+                  </TouchableOpacity>
+                </View>
+              ) : isDineInTableOrder && dineInPaymentFlow === 'pay_later' ? (
                 /* Primary Dine-In Action: Full-width Send to KOT */
                 <TouchableOpacity
                   activeOpacity={0.88}
@@ -2232,7 +2697,7 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
                         <View style={{ alignItems: 'flex-start' }}>
                           <Text style={styles.sendKotBtnPrimaryText}>Send to Kitchen (KOT) 🍳</Text>
                           <Text style={styles.sendKotBtnPrimarySubText}>
-                            {initialTableNumber ? `Table ${initialTableNumber} • ` : ''}Pay Later at Table Checkout
+                            {selectedTable?.tableNumber ? `Table ${selectedTable.tableNumber} • ` : ''}Pay Later at Table Checkout
                           </Text>
                         </View>
                       </View>
@@ -2288,7 +2753,7 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
                           <IndianRupee size={16} color="#FFFFFF" strokeWidth={2.5} />
                           <View>
                             <Text style={styles.paySettleBtnText}>
-                              Pay & Settle ₹{grandTotal.toFixed(2)}
+                              Pay & Settle ₹{payableGrandTotal.toFixed(2)}
                             </Text>
                             <Text style={styles.paySettleBtnSubText}>Instant Settle • {selectedPaymentMode}</Text>
                           </View>
@@ -2307,6 +2772,24 @@ export const OrderPosScreen: React.FC<OrderPosScreenProps> = ({
       <GildedAlertModal
         {...alertConfig}
         onClose={() => setAlertConfig((prev) => ({ ...prev, visible: false }))}
+      />
+
+      {/* TABLE PICKER MODAL */}
+      <TablePickerModal
+        visible={tablePickerVisible}
+        onClose={() => setTablePickerVisible(false)}
+        restaurantId={activeRestId}
+        currentSelectedTableId={selectedTable?.id}
+        onSelectTable={(tbl) => {
+          setSelectedTable({
+            id: tbl.id,
+            tableNumber: tbl.tableNumber,
+            sectionName: tbl.sectionName,
+          });
+          setSelectedOrderType(1);
+          setDineInPaymentFlow('pay_later');
+          setTablePickerVisible(false);
+        }}
       />
 
       {/* BLUETOOTH PRINTER MODAL */}
@@ -4038,6 +4521,200 @@ const styles = StyleSheet.create({
     color: '#D1FAE5',
     fontSize: 9.5,
     fontWeight: '600',
+  },
+  guestCheckBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#FFF8EB',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderWidth: 1.5,
+    borderColor: '#FDE68A',
+  },
+  guestCheckBtnText: {
+    color: '#D96B14',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  runningTabContainer: {
+    backgroundColor: '#FFFDF9',
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 10,
+    borderWidth: 1.5,
+    borderColor: '#FDE68A',
+  },
+  runningTabHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+    paddingBottom: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#FEF3C7',
+  },
+  runningTabTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#B45309',
+    letterSpacing: 0.3,
+  },
+  runningTabBadge: {
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  runningTabBadgeText: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    color: '#B45309',
+    textTransform: 'uppercase',
+  },
+  runningTabItemsList: {
+    gap: 6,
+  },
+  runningTabItemRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  runningTabItemName: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#1F2937',
+  },
+  runningTabItemPrice: {
+    fontSize: 10,
+    color: '#6B7280',
+    marginTop: 1,
+  },
+  runningTabItemTotal: {
+    fontSize: 11.5,
+    fontWeight: '800',
+    color: '#1F2937',
+  },
+  runningTabTotalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 8,
+    paddingTop: 6,
+    borderTopWidth: 1,
+    borderTopColor: '#FEF3C7',
+  },
+  runningTabTotalLabel: {
+    fontSize: 10.5,
+    fontWeight: '700',
+    color: '#78716C',
+  },
+  runningTabTotalVal: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: '#D96B14',
+  },
+  addOnPromptBox: {
+    backgroundColor: '#FFF8EB',
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  addOnPromptTitle: {
+    fontSize: 11.5,
+    fontWeight: '800',
+    color: '#B45309',
+  },
+  addOnPromptSub: {
+    fontSize: 10.5,
+    color: '#92400E',
+    marginTop: 2,
+    lineHeight: 14,
+  },
+  cartSectionDividerHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+    marginTop: 4,
+  },
+  cartSectionDividerTitle: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#78716C',
+    letterSpacing: 0.4,
+  },
+  cartSectionDividerHint: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#D96B14',
+    backgroundColor: '#FFF0DE',
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 4,
+    textTransform: 'uppercase',
+  },
+  tableSelectPromptBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFF8EB',
+    borderWidth: 1.5,
+    borderColor: '#FDE68A',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 10,
+  },
+  tableSelectPromptTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#B45309',
+  },
+  tableSelectPromptSub: {
+    fontSize: 10.5,
+    color: '#78716C',
+    marginTop: 1,
+  },
+  tableSelectPromptBtn: {
+    backgroundColor: '#DE8626',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  tableSelectPromptBtnText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  switchTableBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: '#FFF0DE',
+    borderWidth: 1,
+    borderColor: 'rgba(222, 134, 38, 0.3)',
+  },
+  switchTableBtnText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#D96B14',
+  },
+  lockedTableRunningTabPill: {
+    backgroundColor: '#FFF0DE',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  lockedTableRunningTabPillText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#D96B14',
   },
 
   /* 8. QUICK NUMERIC QUANTITY KEYPAD MODAL */

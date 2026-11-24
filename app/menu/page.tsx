@@ -1508,56 +1508,68 @@ function MenuCatalogContent() {
             </div>
           )}
 
-          {/* Compact Pagination Toolbar (Identical to Menza) */}
+          {/* Modern Pagination Toolbar */}
           {totalItems > 0 && (
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-3 shadow-xs text-xs">
-              <span className="text-[#667085] dark:text-[#94A3B8]">
-                Showing <strong className="text-[#DE8626]">{totalItems}</strong> dishes
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 rounded-2xl border border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#1B2127] p-3.5 shadow-xs text-xs">
+              <span className="text-[#667085] dark:text-[#94A3B8] font-medium">
+                Showing{' '}
+                <strong className="text-[#DE8626] font-bold">
+                  {isAll ? totalItems : `${startIndex + 1}–${endIndex}`}
+                </strong>{' '}
+                of <strong className="text-[#1E2930] dark:text-[#F3F4F6] font-bold">{totalItems}</strong> dishes
               </span>
 
-              {/* Rows Per Page Selector */}
-              <div className="flex items-center gap-1.5">
-                <span className="text-[#667085] dark:text-[#94A3B8] font-medium">Rows:</span>
-                {([10, 25, 50, 'all'] as const).map((size) => (
-                  <button
-                    key={`ps-${size}`}
-                    type="button"
-                    onClick={() => setItemsPerPage(size)}
-                    className={`rounded-lg px-2.5 py-1 font-bold transition-all ${
-                      itemsPerPage === size
-                        ? 'bg-[#DE8626] text-white shadow-xs'
-                        : 'border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#667085] hover:border-[#DE8626]'
-                    }`}
-                  >
-                    {size === 'all' ? 'All' : size}
-                  </button>
-                ))}
-              </div>
-
-              {/* Page Controls */}
-              {!isAll && totalPages > 1 && (
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    disabled={currentPage === 1}
-                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                    className="rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] p-1.5 text-[#667085] disabled:opacity-40 hover:border-[#DE8626]"
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                  </button>
-                  <span className="px-2 font-bold text-[#1E2930] dark:text-[#F3F4F6]">
-                    {currentPage} / {totalPages}
-                  </span>
-                  <button
-                    type="button"
-                    disabled={currentPage === totalPages}
-                    onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                    className="rounded-lg border border-[#E7E1DA] dark:border-[#2B3540] p-1.5 text-[#667085] disabled:opacity-40 hover:border-[#DE8626]"
-                  >
-                    <ChevronRight className="h-4 w-4" />
-                  </button>
+              <div className="flex items-center gap-3 flex-wrap">
+                {/* Rows Per Page Selector */}
+                <div className="flex items-center gap-2">
+                  <span className="text-[#667085] dark:text-[#94A3B8] font-medium text-xs">Rows:</span>
+                  <div className="flex items-center bg-[#F5EFE7] dark:bg-[#151A20] p-1 rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] gap-1">
+                    {([10, 25, 50, 'all'] as const).map((size) => (
+                      <button
+                        key={`ps-${size}`}
+                        type="button"
+                        onClick={() => setItemsPerPage(size)}
+                        className={`rounded-lg px-2.5 py-1 text-xs font-bold transition-all ${
+                          itemsPerPage === size
+                            ? 'bg-[#DE8626] text-white shadow-xs'
+                            : 'text-[#667085] dark:text-[#94A3B8] hover:text-[#DE8626] dark:hover:text-[#DE8626]'
+                        }`}
+                      >
+                        {size === 'all' ? 'All' : size}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              )}
+
+                {/* Page Controls */}
+                {!isAll && totalPages > 1 && (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      disabled={currentPage === 1}
+                      onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                      className="h-8 w-8 inline-flex items-center justify-center rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#667085] hover:border-[#DE8626] hover:text-[#DE8626] disabled:opacity-40 disabled:hover:border-[#E7E1DA] disabled:hover:text-[#667085] transition-colors"
+                      title="Previous page"
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                    </button>
+                    <div className="h-8 px-3 inline-flex items-center justify-center rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-xs font-semibold">
+                      <span className="text-[#DE8626] font-bold">{currentPage}</span>
+                      <span className="text-[#667085] dark:text-[#94A3B8] mx-1 font-normal">/</span>
+                      <span className="text-[#1E2930] dark:text-[#F3F4F6] font-bold">{totalPages}</span>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={currentPage === totalPages}
+                      onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                      className="h-8 w-8 inline-flex items-center justify-center rounded-xl border border-[#E7E1DA] dark:border-[#2B3540] bg-[#FAF7F2] dark:bg-[#151A20] text-[#667085] hover:border-[#DE8626] hover:text-[#DE8626] disabled:opacity-40 disabled:hover:border-[#E7E1DA] disabled:hover:text-[#667085] transition-colors"
+                      title="Next page"
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>

@@ -177,30 +177,57 @@ export function TableQrModal({
         {/* Printable Standee / Sticker Preview */}
         <div
           id="printable-table-qr"
-          className="rounded-2xl border-2 border-dashed border-[#DE8626]/40 bg-[#FAF7F2] dark:bg-[#151A20] p-5 text-center space-y-2.5"
+          className="rounded-2xl border-2 border-[#CBD5E1] dark:border-[#334155] bg-white dark:bg-[#161D26] p-5 text-center shadow-md space-y-3"
         >
-          <div>
-            <span className="text-[10px] font-extrabold uppercase tracking-widest text-[#DE8626]">
+          <div className="space-y-1">
+            <span className="text-[10px] font-black uppercase tracking-wider text-[#92400E] dark:text-[#FDE68A] bg-[#FEF3C7] dark:bg-[#78350F]/40 px-3 py-0.5 rounded-full border border-[#F59E0B]">
               {restaurantName}
             </span>
-            <h4 className="text-xl font-extrabold text-[#1E2930] dark:text-[#F3F4F6]">
+            <h4 className="text-xl sm:text-2xl font-black text-[#0B1320] dark:text-[#FFFFFF] mt-1 tracking-tight">
               TABLE #{tableNumber}
             </h4>
           </div>
 
-          <div className="flex justify-center p-2 bg-white rounded-xl shadow-inner mx-auto w-fit">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={qrImageSrc}
-              alt={`Table ${tableNumber} QR`}
-              className={`h-40 w-40 object-contain ${loading ? 'opacity-40 animate-pulse' : ''}`}
-            />
+          <div className="relative mx-auto w-fit p-3 bg-white rounded-2xl shadow-xs border-2 border-[#CBD5E1]">
+            <div className="relative flex items-center justify-center">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={qrImageSrc}
+                alt={`Table ${tableNumber} QR`}
+                className={`h-40 w-40 object-contain ${loading ? 'opacity-40 animate-pulse' : ''}`}
+              />
+              {/* Small, perfectly fitted circular Panda emblem with protective halo ring */}
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center h-9 w-9 rounded-full bg-white border-2 border-[#DE8626] shadow-sm p-1 pointer-events-none ring-4 ring-white">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src="/brand/panda_chef_clean.png"
+                  alt="Panda"
+                  className="h-full w-full object-contain"
+                />
+              </div>
+            </div>
           </div>
 
-          <div>
-            <p className="text-xs font-bold text-[#1E2930] dark:text-[#F3F4F6]">Scan to View Menu & Order</p>
-            <p className="text-[10px] text-[#667085] mt-0.5">
+          <div className="space-y-0.5">
+            <p className="text-xs font-extrabold text-[#0B1320] dark:text-[#FFFFFF]">Scan to View Menu & Order</p>
+            <p className="text-[11px] font-medium text-[#475569] dark:text-[#CBD5E1]">
               {mode === 'rolling' ? 'Valid until bill settlement' : 'Contactless Digital Dining'}
+            </p>
+          </div>
+
+          {/* Footer - Mention Powered by Menza */}
+          <div className="pt-2 border-t border-[#CBD5E1] dark:border-[#334155] flex flex-col items-center justify-center gap-0.5">
+            <div className="flex items-center gap-1.5 text-xs text-[#475569] dark:text-[#CBD5E1]">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="/brand/menza_logo_clean.png"
+                alt="Menza"
+                className="h-3.5 w-3.5 object-contain"
+              />
+              <span>Powered by <strong className="font-black text-[#DE8626]">Menza</strong></span>
+            </div>
+            <p className="text-[10px] font-bold text-[#334155] dark:text-[#CBD5E1]">
+              Smart Dining. Seamless Ordering.
             </p>
           </div>
         </div>

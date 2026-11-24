@@ -19,6 +19,14 @@ const nextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
+  compiler: {
+    removeConsole:
+      process.env.NODE_ENV === 'production'
+        ? {
+            exclude: ['error', 'warn'],
+          }
+        : false,
+  },
   logging: {
     fetches: {
       fullUrl: true,
@@ -53,6 +61,7 @@ const nextConfig = {
       'lucide-react-native': 'lucide-react',
       '@shared': sharedPath,
       'payments': path.resolve(__dirname, 'payments'),
+      '../../../app.json': path.resolve(__dirname, 'app.json'),
     };
     return config;
   },

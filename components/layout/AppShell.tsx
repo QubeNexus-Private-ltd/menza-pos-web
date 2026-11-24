@@ -327,10 +327,42 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       }
     };
 
+    let isMounted = true;
+    let refreshTimer: NodeJS.Timeout | null = null;
+
+    // Fast debounced refresh for frequent live order and payment events
+    const refreshSalesAndWallet = async () => {
+      if (!isMounted) return;
+      try {
+        const [rev, wal] = await Promise.allSettled([
+          orderDs.getTodayRevenue(currentRestId),
+          walletDs.getWallet(currentRestId),
+        ]);
+        if (!isMounted) return;
+        if (rev.status === 'fulfilled' && rev.value) {
+          setTodaySales({
+            revenue: Number(rev.value.todayRevenue || 0),
+            orderCount: Number(rev.value.todayOrdersCount || 0),
+          });
+        }
+        if (wal.status === 'fulfilled' && wal.value) {
+          setWalletBalance(Number(wal.value.balance || 0));
+        }
+      } catch (err) {
+        console.warn('Failed to refresh sales/wallet', err);
+      }
+    };
+
+    const debouncedRefresh = () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        refreshSalesAndWallet();
+      }, 2500);
+    };
+
     loadData();
 
     // Start SignalR
-    let isMounted = true;
     startPosSignalRConnection(currentRestId)
       .then(() => {
         if (isMounted) setIsLiveConnected(true);
@@ -341,17 +373,17 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
 
     const unsubCreated = onPosOrderCreated((order) => {
       handleOrderStatusChanged({ ...order, _signalType: 'CREATED' });
-      loadData();
+      debouncedRefresh();
     });
 
     const unsubStatus = onPosOrderStatusChanged((event) => {
       handleOrderStatusChanged({ ...event, _signalType: 'STATUS_CHANGED' });
-      loadData();
+      debouncedRefresh();
     });
 
     const unsubSettled = onPosOrderSettled((order) => {
       handleOrderStatusChanged({ ...order, _signalType: 'SETTLED' });
-      loadData();
+      debouncedRefresh();
     });
 
     const unsubOp = onStoreOperatingStatusChanged((status) => {
@@ -367,23 +399,24 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
     });
 
     const unsubWallet = onWalletBalanceChanged((_data) => {
-      loadData();
+      debouncedRefresh();
     });
 
     const unsubPayment = onPaymentVerified((_data) => {
-      loadData();
+      debouncedRefresh();
     });
 
     const unsubWalletEvents = WalletEvents.subscribe(() => {
-      loadData();
+      debouncedRefresh();
     });
 
     const unsubReconnected = onSignalRReconnected(() => {
-      loadData();
+      refreshSalesAndWallet();
     });
 
     return () => {
       isMounted = false;
+      if (refreshTimer) clearTimeout(refreshTimer);
       unsubCreated();
       unsubStatus();
       unsubSettled();
@@ -456,7 +489,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#FAF7F2] dark:bg-[#111418] text-[#1E2930] dark:text-[#F3F4F6]">
+    <div className="flex h-screen w-screen overflow-hidden bg-[#FAF8F5] dark:bg-[#0E1217] text-[#162028] dark:text-[#F8FAFC]">
       {/* 1. Mobile Sidebar Backdrop */}
       {sidebarOpen && (
         <div
@@ -467,12 +500,13 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
 
       {/* 2. Desktop & Tablet Sidebar */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF] dark:bg-[#1B2127] transition-transform duration-200 ease-in-out lg:static lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-[#E8E2D9] dark:border-[#26323E] bg-[#FFFFFF] dark:bg-[#161B22] transition-transform duration-200 ease-in-out lg:static lg:translate-x-0 ${
+
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
         {/* Brand Header */}
-        <div className="flex h-16 items-center justify-between px-5 border-b border-[#E7E1DA] dark:border-[#2B3540]">
+        <div className="flex h-16 items-center justify-between px-5 border-b border-[#E8E2D9] dark:border-[#26323E]">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[#DE8626] to-[#B7791F] text-white shadow-md shadow-[#DE8626]/20">
               <span className="font-extrabold text-lg tracking-wider">M</span>
@@ -492,7 +526,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
 
         {/* Current Active Outlet Summary Card */}
         {!isSuperAdmin && !isSalesPerson && activeRestaurant && (
-          <div className="px-4 py-3 border-b border-[#E7E1DA]/60 dark:border-[#2B3540]/60 bg-[#FAF7F2]/60 dark:bg-[#151A20]/60">
+          <div className="px-4 py-3 border-b border-[#E8E2D9]/60 dark:border-[#26323E]/60 bg-[#FAF8F5]/80 dark:bg-[#11151B]/80">
             <div className="flex items-center justify-between mb-1">
               <span className="text-[11px] font-medium text-[#667085] dark:text-[#94A3B8]">Active Outlet</span>
               <span className="flex items-center gap-1 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
@@ -590,7 +624,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       {/* 3. Main Workspace Area */}
       <div className="flex flex-1 flex-col overflow-hidden">
         {/* Top Streamlined Unified Header (Identical to Menza POS Terminal) */}
-        <header className="sticky top-0 z-30 flex h-16 w-full items-center justify-between border-b border-[#E7E1DA] dark:border-[#2B3540] bg-white dark:bg-[#181E24] px-3 sm:px-4 lg:px-5 transition-colors shadow-[0_1px_3px_rgba(0,0,0,0.03)] shrink-0 gap-2 sm:gap-4">
+        <header className="sticky top-0 z-30 flex h-16 w-full items-center justify-between border-b border-[#E8E2D9]/80 dark:border-[#26323E]/80 bg-white/90 dark:bg-[#161B22]/90 glass-topbar px-3 sm:px-4 lg:px-5 transition-colors shadow-xs shrink-0 gap-2 sm:gap-4">
           {/* LEFT: Mobile Toggle + Outlet Logo + Outlet Name & Dropdown + Status Pill & Subtitle */}
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             {/* Mobile Sidebar Hamburger Trigger */}
@@ -1362,7 +1396,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
         </main>
 
         {/* 4. Mobile Bottom Navigation Bar (< 1024px) */}
-        <nav className="fixed bottom-0 inset-x-0 z-40 flex h-16 items-center justify-around border-t border-[#E7E1DA] dark:border-[#2B3540] bg-[#FFFFFF]/95 dark:bg-[#1B2127]/95 backdrop-blur-md px-2 lg:hidden shadow-lg">
+        <nav className="fixed bottom-0 inset-x-0 z-40 flex h-16 items-center justify-around border-t border-[#E8E2D9] dark:border-[#26323E] bg-[#FFFFFF]/95 dark:bg-[#161B22]/95 backdrop-blur-md px-2 lg:hidden shadow-lg">
           {mobileNavItems.map((item) => {
             const isActive = pathname === item.href;
             const Icon = item.icon;

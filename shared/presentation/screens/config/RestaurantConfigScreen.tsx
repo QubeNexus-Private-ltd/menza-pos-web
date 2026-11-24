@@ -1017,7 +1017,7 @@ export const RestaurantConfigScreen: React.FC<RestaurantConfigScreenProps> = ({ 
   const handleDeleteStation = (st: any) => {
     showAlert(
       'Delete Kitchen Station?',
-      `Are you sure you want to remove "${st.stationName}" (${st.stationCode})? Dishes assigned to it will fallback to Main Kitchen.`,
+      `Are you sure you want to remove "${st.stationName}" (${st.stationCode})?`,
       'danger',
       async () => {
         try {

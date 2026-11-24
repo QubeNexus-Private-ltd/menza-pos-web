@@ -274,7 +274,8 @@ export default function KitchenKdsPage() {
       const unsub4 = onPosOrderSettled(() => loadData());
       const unsub5 = onSignalRReconnected(() => loadData());
 
-      const interval = setInterval(loadData, 20000);
+      // 60-second safety heartbeat in case background WebSocket paused on tablet
+      const interval = setInterval(loadData, 60000);
       return () => {
         clearInterval(interval);
         unsub1();

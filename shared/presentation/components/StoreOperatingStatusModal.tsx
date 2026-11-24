@@ -240,7 +240,7 @@ export const StoreOperatingStatusModal: React.FC<StoreOperatingStatusModalProps>
   const handleDeleteStation = (st: any) => {
     Alert.alert(
       'Delete Kitchen Station?',
-      `Are you sure you want to remove "${st.stationName}" (${st.stationCode})? Dishes assigned to it will fallback to Main Kitchen.`,
+      `Are you sure you want to remove "${st.stationName}" (${st.stationCode})?`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -1623,7 +1623,7 @@ export const StoreOperatingStatusModal: React.FC<StoreOperatingStatusModalProps>
                     <Text style={styles.modalSwitchDesc}>
                       {stationIsActive
                         ? 'Active: Order items route to this station display and printer.'
-                        : 'Deactivated: Dishes will temporarily route to Main Kitchen.'}
+                        : 'Deactivated: This station is offline and will not receive orders.'}
                     </Text>
                   </View>
                   <Switch

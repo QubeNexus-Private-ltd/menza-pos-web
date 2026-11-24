@@ -96,6 +96,33 @@ body {
     line-height: 1.2;
   }
 
+  /* Standee QR Print Rules (Storefront & Table) */
+  body:has(#printable-store-qr) *,
+  body:has(#printable-table-qr) * {
+    visibility: hidden;
+  }
+  body:has(#printable-store-qr) #printable-store-qr,
+  body:has(#printable-store-qr) #printable-store-qr *,
+  body:has(#printable-table-qr) #printable-table-qr,
+  body:has(#printable-table-qr) #printable-table-qr * {
+    visibility: visible;
+  }
+  body:has(#printable-store-qr) #printable-store-qr,
+  body:has(#printable-table-qr) #printable-table-qr {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 120mm !important;
+    max-width: 120mm !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    border: 3px solid #DE8626 !important;
+    background: #FFFFFF !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
   header, nav, aside, button, .no-print {
     display: none !important;
   }

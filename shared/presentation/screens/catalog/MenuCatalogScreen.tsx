@@ -1569,7 +1569,7 @@ export const MenuCatalogScreen: React.FC<MenuCatalogScreenProps> = ({ onClose })
                     activeOpacity={0.8}
                   >
                     <Text style={[styles.stationSelectChipText, !catStationId && styles.stationSelectChipTextActive]}>
-                      Default (Main Kitchen)
+                      None / Unassigned
                     </Text>
                   </TouchableOpacity>
                   {stations.map((st) => (

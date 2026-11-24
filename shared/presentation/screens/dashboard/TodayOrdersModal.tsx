@@ -817,10 +817,10 @@ export const TodayOrdersModal: React.FC<TodayOrdersModalProps> = ({
       const map = new Map<string, { name: string; color: string }>();
       (item.items || []).forEach((it) => {
         if (it.stationName || it.stationCode) {
-          const code = (it.stationCode || 'MAIN').toUpperCase();
-          const name = it.stationName || code;
+          const code = (it.stationCode || it.stationName || '').toUpperCase();
+          const name = it.stationName || it.stationCode || code;
           const color = it.stationBadgeColor || '#DE8626';
-          if (!map.has(code)) map.set(code, { name, color });
+          if (code && !map.has(code)) map.set(code, { name, color });
         }
       });
       return Array.from(map.values());
